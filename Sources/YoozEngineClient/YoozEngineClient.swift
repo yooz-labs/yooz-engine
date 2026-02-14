@@ -11,7 +11,7 @@ import AppKit
 /// try await client.connect()
 /// let health = try await client.health()
 /// ```
-public final class YoozEngineClient: @unchecked Sendable {
+public final class YoozEngineClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
     private let engineBundleID = "live.yooz.engine"
@@ -20,7 +20,10 @@ public final class YoozEngineClient: @unchecked Sendable {
         host: String = "127.0.0.1",
         port: Int = 19920
     ) {
-        self.baseURL = URL(string: "http://\(host):\(port)")!
+        guard let url = URL(string: "http://\(host):\(port)") else {
+            preconditionFailure("YoozEngineClient: invalid host '\(host)' or port \(port)")
+        }
+        self.baseURL = url
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -30,23 +33,34 @@ public final class YoozEngineClient: @unchecked Sendable {
 
     /// Check if the engine is reachable and launch it if not.
     public func connect() async throws {
-        if await isReachable() { return }
+        try Task.checkCancellation()
+        if try await isReachable() { return }
 
-        try launchEngine()
+        try await launchEngine()
 
         // Wait for engine to become ready (up to 15 seconds)
         for _ in 0..<30 {
+            try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(500))
-            if await isReachable() { return }
+            if try await isReachable() { return }
         }
 
         throw YoozEngineError.engineNotReachable
     }
 
     /// Check if the engine is currently reachable.
-    public func isReachable() async -> Bool {
+    /// Throws CancellationError if the task is cancelled.
+    /// Returns true if reachable, false if connection refused.
+    public func isReachable() async throws -> Bool {
         do {
             let _ = try await health()
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch is URLError {
+            return false
+        } catch is DecodingError {
+            // Server is up but returned unexpected format (version mismatch)
             return true
         } catch {
             return false
@@ -58,6 +72,23 @@ public final class YoozEngineClient: @unchecked Sendable {
         let data = try await get("/v1/health")
         return try JSONDecoder().decode(HealthStatus.self, from: data)
     }
+
+    // MARK: - Service clients
+
+    /// STT (speech-to-text) service client.
+    public var stt: STTClient { STTClient(engine: self) }
+
+    /// LLM generation service client.
+    public var llm: LLMClient { LLMClient(engine: self) }
+
+    /// Touch-up (text cleanup) service client.
+    public var touchUp: TouchUpClient { TouchUpClient(engine: self) }
+
+    /// Grammar check service client.
+    public var grammar: GrammarClient { GrammarClient(engine: self) }
+
+    /// VAD (voice activity detection) service client.
+    public var vad: VADClient { VADClient(engine: self) }
 
     // MARK: - HTTP helpers
 
@@ -88,26 +119,9 @@ public final class YoozEngineClient: @unchecked Sendable {
         }
     }
 
-    // MARK: - Service clients
-
-    /// STT (speech-to-text) service client.
-    public var stt: STTClient { STTClient(engine: self) }
-
-    /// LLM generation service client.
-    public var llm: LLMClient { LLMClient(engine: self) }
-
-    /// Touch-up (text cleanup) service client.
-    public var touchUp: TouchUpClient { TouchUpClient(engine: self) }
-
-    /// Grammar check service client.
-    public var grammar: GrammarClient { GrammarClient(engine: self) }
-
-    /// VAD (voice activity detection) service client.
-    public var vad: VADClient { VADClient(engine: self) }
-
     // MARK: - Engine lifecycle
 
-    private func launchEngine() throws {
+    private func launchEngine() async throws {
         #if canImport(AppKit)
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
@@ -118,13 +132,13 @@ public final class YoozEngineClient: @unchecked Sendable {
             throw YoozEngineError.engineNotInstalled
         }
 
-        NSWorkspace.shared.openApplication(
-            at: engineURL,
-            configuration: config
-        ) { _, error in
-            if let error {
-                print("[YoozEngineClient] Failed to launch engine: \(error)")
-            }
+        do {
+            _ = try await NSWorkspace.shared.openApplication(
+                at: engineURL,
+                configuration: config
+            )
+        } catch {
+            throw YoozEngineError.engineLaunchFailed(error.localizedDescription)
         }
         #else
         throw YoozEngineError.engineNotInstalled

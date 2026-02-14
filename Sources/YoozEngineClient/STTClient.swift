@@ -2,8 +2,8 @@ import Foundation
 
 /// Client for the STT API endpoints.
 ///
-/// Supports both batch transcription (REST) and streaming (WebSocket).
-public final class STTClient: @unchecked Sendable {
+/// Supports both batch transcription (REST) and streaming (WebSocket, future).
+public struct STTClient: Sendable {
     private let engine: YoozEngineClient
 
     init(engine: YoozEngineClient) {

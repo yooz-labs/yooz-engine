@@ -1,14 +1,14 @@
 import Foundation
+import Logging
 
 /// Centralized model lifecycle management.
 ///
 /// Handles lazy loading, keeping models warm, and memory management
 /// for all AI modules (STT, LLM, VAD, TTS).
-@MainActor
-final class ModelManager: ObservableObject {
+actor ModelManager {
     static let shared = ModelManager()
 
-    @Published var loadedModels: [String: ModelState] = [:]
+    private let logger = Logger(label: "live.yooz.engine.models")
 
     enum ModelState {
         case notLoaded
@@ -17,8 +17,10 @@ final class ModelManager: ObservableObject {
         case error(String)
     }
 
-    func ensureModelsDirectory() {
-        try? FileManager.default.createDirectory(
+    private(set) var loadedModels: [String: ModelState] = [:]
+
+    func ensureModelsDirectory() throws {
+        try FileManager.default.createDirectory(
             at: EngineConfig.modelsDirectory,
             withIntermediateDirectories: true
         )

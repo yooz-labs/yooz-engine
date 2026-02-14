@@ -6,18 +6,22 @@ enum EngineConfig {
     static let version: String = "0.1.0"
 
     static let modelsDirectory: URL = {
-        let appSupport = FileManager.default.urls(
+        guard let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
-        ).first!
+        ).first else {
+            fatalError("EngineConfig: Application Support directory not found")
+        }
         return appSupport.appendingPathComponent("YoozEngine/Models")
     }()
 
     static let cacheDirectory: URL = {
-        let caches = FileManager.default.urls(
+        guard let caches = FileManager.default.urls(
             for: .cachesDirectory,
             in: .userDomainMask
-        ).first!
+        ).first else {
+            fatalError("EngineConfig: Caches directory not found")
+        }
         return caches.appendingPathComponent("live.yooz.engine")
     }()
 }

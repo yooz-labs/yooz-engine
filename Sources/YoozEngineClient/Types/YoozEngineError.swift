@@ -1,8 +1,9 @@
 import Foundation
 
-public enum YoozEngineError: LocalizedError {
+public enum YoozEngineError: LocalizedError, Sendable {
     case engineNotInstalled
     case engineNotReachable
+    case engineLaunchFailed(String)
     case invalidResponse
     case httpError(statusCode: Int)
     case decodingError(String)
@@ -14,6 +15,8 @@ public enum YoozEngineError: LocalizedError {
             return "Yooz Engine is not installed. Please install it from yooz.live"
         case .engineNotReachable:
             return "Yooz Engine is not reachable. Please ensure it is running."
+        case .engineLaunchFailed(let reason):
+            return "Failed to launch Yooz Engine: \(reason)"
         case .invalidResponse:
             return "Invalid response from Yooz Engine"
         case .httpError(let code):

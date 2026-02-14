@@ -9,8 +9,15 @@ struct EngineMenuView: View {
                 Circle()
                     .fill(server.isRunning ? .green : .red)
                     .frame(width: 8, height: 8)
-                Text(server.isRunning ? "Running on port \(EngineConfig.port)" : "Stopped")
+                Text(statusText)
                     .font(.caption)
+            }
+
+            if let error = server.lastError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
             }
         }
         .padding(.horizontal, 8)
@@ -21,10 +28,20 @@ struct EngineMenuView: View {
             Button("Stop Server") {
                 Task { await server.stop() }
             }
-        } else {
+        } else if server.state == .stopped {
             Button("Start Server") {
-                Task { try? await server.start() }
+                Task {
+                    do {
+                        try await server.start()
+                    } catch {
+                        server.logger.error("Failed to start: \(error)")
+                    }
+                }
             }
+        } else {
+            Text(server.state == .starting ? "Starting..." : "Stopping...")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
 
         Divider()
@@ -38,5 +55,14 @@ struct EngineMenuView: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: .command)
+    }
+
+    private var statusText: String {
+        switch server.state {
+        case .running: return "Running on port \(EngineConfig.port)"
+        case .starting: return "Starting..."
+        case .stopping: return "Stopping..."
+        case .stopped: return "Stopped"
+        }
     }
 }
