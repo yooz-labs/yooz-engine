@@ -161,6 +161,47 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertTrue(finalResult.isFinal)
     }
 
+    // MARK: - Contract Tests
+
+    func testBatchSTTRequestEncodingWithEnumValues() throws {
+        // Use enum raw values to catch drift between enum and string literals
+        let request = BatchSTTRequest(
+            samples: [0.1],
+            language: STTLanguage.arabic.rawValue,
+            mode: AudioMode.whispered.rawValue
+        )
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["language"] as? String, "ar")
+        XCTAssertEqual(json["mode"] as? String, "whispered")
+    }
+
+    func testSTTStreamConfigEncoding() throws {
+        let config = STTStreamConfig(type: "config", language: "en", mode: "normal")
+        let data = try JSONEncoder().encode(config)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["type"] as? String, "config")
+        XCTAssertEqual(json["language"] as? String, "en")
+        XCTAssertEqual(json["mode"] as? String, "normal")
+    }
+
+    func testSTTLoadRequestEncoding() throws {
+        let request = STTLoadRequest(language: "ar")
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(STTLoadRequest.self, from: data)
+        XCTAssertEqual(decoded.language, "ar")
+    }
+
+    func testSTTLanguagesResponseDecoding() throws {
+        let json = """
+        {"languages": [{"code":"en","name":"English","implemented":true,"family":"parakeet-tdt"}]}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(STTLanguagesResponse.self, from: data)
+        XCTAssertEqual(response.languages.count, 1)
+        XCTAssertEqual(response.languages.first?.code, "en")
+    }
+
     // MARK: - Audio Byte Serialization Round-Trip
 
     func testAudioSamplesByteRoundTrip() throws {
