@@ -85,6 +85,9 @@ final class APIServer: ObservableObject {
         // Stop the STT engine to free GPU memory
         YoozSTTEngine.shared.stop()
 
+        // Unload LLM models to free GPU memory
+        await TouchUpEngine.shared.unload()
+
         serverTask?.cancel()
         _ = await serverTask?.result
         serverTask = nil
@@ -140,13 +143,15 @@ final class APIServer: ObservableObject {
 
         // Health
         router.get("/v1/health") { _, _ in
-            HealthResponse(
+            let llmLoaded = await TouchUpEngine.shared.isLightModelLoaded
+            let touchupReady = await TouchUpEngine.shared.isPreloaded
+            return HealthResponse(
                 status: "ok",
                 version: EngineConfig.version,
                 modules: EngineModules(
                     stt: sttEngine.isRunning,
-                    llm: false,
-                    touchup: false,
+                    llm: llmLoaded,
+                    touchup: touchupReady,
                     grammar: false,
                     vad: false,
                     tts: false
@@ -165,7 +170,106 @@ final class APIServer: ObservableObject {
                     sizeBytes: nil
                 ))
             }
+            let llmInfo = await TouchUpEngine.shared.getModelInfo()
+            models.append(ModelInfo(
+                name: llmInfo.light.type.rawValue,
+                module: "llm",
+                loaded: llmInfo.light.isLoaded,
+                sizeBytes: llmInfo.light.type.estimatedSize
+            ))
+            models.append(ModelInfo(
+                name: llmInfo.quality.type.rawValue,
+                module: "llm",
+                loaded: llmInfo.quality.isLoaded,
+                sizeBytes: llmInfo.quality.type.estimatedSize
+            ))
             return ModelsResponse(models: models)
+        }
+
+        // LLM: Generate
+        router.post("/v1/llm/generate") { [self] request, context in
+            let body: LLMGenerateServerRequest
+            do {
+                body = try await request.decode(as: LLMGenerateServerRequest.self, context: context)
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            // Resolve model type from name (default to light)
+            let modelType: LLMModelType
+            if let modelName = body.model {
+                guard let resolved = LLMModelType(rawValue: modelName) else {
+                    return errorResponse(
+                        status: .badRequest,
+                        message: "Unknown model: \(modelName). Available: \(LLMModelType.allCases.map(\.rawValue).joined(separator: ", "))",
+                        code: "invalid_model"
+                    )
+                }
+                modelType = resolved
+            } else {
+                modelType = .yoozLightV1
+            }
+
+            let startTime = CFAbsoluteTimeGetCurrent()
+            do {
+                let result = try await TouchUpEngine.shared.generate(
+                    prompt: body.prompt,
+                    systemPrompt: "",
+                    modelType: modelType
+                )
+                let timeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+                return try jsonResponse(LLMGenerateServerResponse(
+                    text: result,
+                    model: modelType.rawValue,
+                    tokensGenerated: nil,
+                    processingTimeMs: timeMs
+                ))
+            } catch {
+                return errorResponse(
+                    status: .internalServerError,
+                    message: error.localizedDescription,
+                    code: "generation_failed"
+                )
+            }
+        }
+
+        // TouchUp: Process text
+        router.post("/v1/touchup") { [self] request, context in
+            let body: TouchUpServerRequest
+            do {
+                body = try await request.decode(as: TouchUpServerRequest.self, context: context)
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            if body.mode == .off {
+                // Off mode: regex-only processing (no LLM)
+                let result = await TouchUpEngine.shared.processRegexOnly(text: body.text)
+                return try jsonResponse(TouchUpServerResponse(
+                    result: result.text,
+                    mode: .off,
+                    processingTimeMs: Int(result.latencyMs)
+                ))
+            }
+
+            let result = await TouchUpEngine.shared.process(
+                text: body.text,
+                mode: body.mode
+            )
+
+            return try jsonResponse(TouchUpServerResponse(
+                result: result.text,
+                mode: body.mode,
+                processingTimeMs: Int(result.latencyMs)
+            ))
         }
 
         // STT: Available languages

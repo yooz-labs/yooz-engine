@@ -91,3 +91,41 @@ struct WSSTTReady: Encodable {
     let type: String  // "ready"
     let language: String
 }
+
+// MARK: - LLM Types
+
+/// Server-side touch-up mode (mirrors client's TouchUpMode)
+enum ServerTouchUpMode: String, Codable, Sendable {
+    case off
+    case light
+    case standard
+    case full
+}
+
+struct LLMGenerateServerRequest: Decodable {
+    let prompt: String
+    let model: String?
+    let maxTokens: Int?
+    let temperature: Double?
+}
+
+struct LLMGenerateServerResponse: ResponseCodable {
+    let text: String
+    let model: String
+    let tokensGenerated: Int?
+    let processingTimeMs: Int?
+}
+
+// MARK: - TouchUp Types
+
+struct TouchUpServerRequest: Decodable {
+    let text: String
+    let mode: ServerTouchUpMode
+    let language: String?
+}
+
+struct TouchUpServerResponse: ResponseCodable {
+    let result: String
+    let mode: ServerTouchUpMode
+    let processingTimeMs: Int?
+}

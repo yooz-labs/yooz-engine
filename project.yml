@@ -21,6 +21,9 @@ packages:
   mlx-swift:
     url: https://github.com/ml-explore/mlx-swift
     from: "0.21.2"
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    from: "2.30.3"
 
 targets:
   YoozEngine:
@@ -50,11 +53,10 @@ targets:
         product: MLXNN
       - package: mlx-swift
         product: MLXRandom
-      # Phase 3: LLM + TouchUp
-      # - package: mlx-swift-lm
-      #   product: MLXLLM
-      # - package: mlx-swift-lm
-      #   product: MLXLMCommon
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
       # Phase 4: Rust grammar
       # - framework: YoozTextCleanup.xcframework
       #   embed: false
