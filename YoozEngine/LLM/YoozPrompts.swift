@@ -18,11 +18,11 @@ enum YoozPrompts {
     static let resultInstruction = "Always respond with {\"result\": \"\(resultPlaceholder)\"}."
 
     // MARK: - Light Model Prompts (Qwen2.5-0.5B)
-    // 0.5B model: Pattern matcher. Tested prompts that work reliably.
+    // 0.5B model: Pattern matcher. Prompts use few-shot examples.
     // Fillers removed by rules BEFORE LLM. Numbers converted by post-LLM rules.
 
-    /// Light model Standard mode - contractions and capitalization (tested)
-    /// Rules handle: fillers, numbers (as fallback), basic grammar
+    /// Light model Standard mode - contractions and capitalization.
+    /// Rules handle: fillers, numbers (as fallback), basic grammar.
     static let lightStandard = """
         Fix contractions. Return JSON only.
 
@@ -40,8 +40,8 @@ enum YoozPrompts {
         \(resultInstruction)
         """
 
-    /// Light model Full mode - duplicates and fragments (tested, all pass)
-    /// Self-corrections too complex for 0.5B; use Quality model for that
+    /// Light model Full mode - duplicates and fragments.
+    /// Self-corrections too complex for 0.5B; use Quality model for that.
     static let lightFull = """
         Remove duplicate words. Clean trailing fragments. Return JSON only.
 
@@ -62,7 +62,8 @@ enum YoozPrompts {
 
     // MARK: - Quality Model Prompts (Qwen3-1.7B)
     // 1.7B model: Better at context understanding. Fillers/numbers handled by rules.
-    // NOTE: /no_think disables Qwen3's reasoning mode for faster, direct JSON output
+    // /no_think is a Qwen3-specific prefix that disables chain-of-thought reasoning,
+    // producing direct JSON output instead of "thinking" blocks before the answer.
 
     /// Quality model Standard mode - enhanced proofreading
     /// Focus: grammar, punctuation, clarity. Fillers/numbers handled by rules.
@@ -91,7 +92,7 @@ enum YoozPrompts {
 
     /// Quality model Full mode - comprehensive cleanup
     /// Focus: self-corrections (the key 1.7B capability). Duplicates/fragments handled by rules.
-    /// Tested: "X no Y" patterns work reliably for numbers, days, simple words
+    /// "X no Y" patterns for numbers, days, simple words.
     static let qualityFull = """
         /no_think
         Handle self-corrections and clean fragments in voice transcription. Return JSON only.

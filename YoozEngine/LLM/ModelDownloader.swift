@@ -9,7 +9,8 @@ import os.log
 private let logger = Logger(subsystem: "live.yooz.engine", category: "ModelDownloader")
 
 /// Downloads LLM models from GitHub Container Registry (GHCR).
-/// Models are stored as OCI artifacts at ghcr.io/yooz-labs/yooz-engine/
+/// Models are stored as OCI artifacts at ghcr.io/yooz-labs/yooz-engine/.
+/// Falls back to GitHub Releases (tar.gz) if the OCI download fails.
 actor ModelDownloader {
 
     // MARK: - Configuration
@@ -73,7 +74,11 @@ actor ModelDownloader {
 
         try extractArchive(archiveURL, to: modelDir)
 
-        try? fileManager.removeItem(at: archiveURL)
+        do {
+            try fileManager.removeItem(at: archiveURL)
+        } catch {
+            logger.warning("Failed to clean up archive at \(archiveURL.path): \(error.localizedDescription)")
+        }
 
         logger.info("Model \(modelType.rawValue) ready at \(modelDir.path)")
         return modelDir
@@ -189,48 +194,21 @@ actor ModelDownloader {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let (asyncBytes, response) = try await session.bytes(for: request)
+        progressHandler(0.0)
+        let (downloadedURL, response) = try await session.download(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             logger.error("Download failed with status \(statusCode)")
-            throw DownloadError.downloadFailed
+            throw DownloadError.httpError(statusCode)
         }
 
-        let totalSize = httpResponse.expectedContentLength > 0
-            ? httpResponse.expectedContentLength
-            : expectedSize
-
-        try? fileManager.removeItem(at: tempFile)
-        fileManager.createFile(atPath: tempFile.path, contents: nil)
-        let outputHandle = try FileHandle(forWritingTo: tempFile)
-
-        var bytesReceived: Int64 = 0
-        var lastReportedProgress: Int = 0
-        var buffer = Data()
-        let bufferSize = 65536
-
-        for try await byte in asyncBytes {
-            buffer.append(byte)
-            bytesReceived += 1
-
-            if buffer.count >= bufferSize {
-                try outputHandle.write(contentsOf: buffer)
-                buffer.removeAll(keepingCapacity: true)
-
-                let currentProgress = Int((Double(bytesReceived) / Double(totalSize)) * 100)
-                if currentProgress >= lastReportedProgress + 5 {
-                    lastReportedProgress = currentProgress
-                    progressHandler(Double(bytesReceived) / Double(totalSize))
-                }
-            }
+        // Move the system temp file to our cache location
+        if fileManager.fileExists(atPath: tempFile.path) {
+            try fileManager.removeItem(at: tempFile)
         }
-
-        if !buffer.isEmpty {
-            try outputHandle.write(contentsOf: buffer)
-        }
-        try outputHandle.close()
+        try fileManager.moveItem(at: downloadedURL, to: tempFile)
 
         progressHandler(1.0)
         return tempFile
@@ -247,11 +225,16 @@ actor ModelDownloader {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
         process.arguments = ["-xzf", archiveURL.path, "-C", destination.path, "--strip-components=1"]
 
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+
         try process.run()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            throw DownloadError.extractionFailed
+            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let stderr = String(data: stderrData, encoding: .utf8) ?? "unknown error"
+            throw DownloadError.extractionFailed("tar exit code \(process.terminationStatus): \(stderr)")
         }
     }
 
@@ -287,8 +270,7 @@ enum DownloadError: Error, LocalizedError, Sendable {
     case invalidResponse
     case httpError(Int)
     case noLayersInManifest
-    case downloadFailed
-    case extractionFailed
+    case extractionFailed(String)
     case authFailed
 
     var errorDescription: String? {
@@ -299,10 +281,8 @@ enum DownloadError: Error, LocalizedError, Sendable {
             return "HTTP error: \(code)"
         case .noLayersInManifest:
             return "No layers found in manifest"
-        case .downloadFailed:
-            return "Download failed"
-        case .extractionFailed:
-            return "Failed to extract model archive"
+        case .extractionFailed(let reason):
+            return "Failed to extract model archive: \(reason)"
         case .authFailed:
             return "Failed to authenticate with GHCR"
         }

@@ -181,10 +181,12 @@ actor TouchUpEngine {
         }
 
         // If we have replacements, ensure quality model is loaded
+        var qualityLoadError: String?
         if !replacements.isEmpty {
             do {
                 try await loadQualityModel()
             } catch {
+                qualityLoadError = error.localizedDescription
                 logger.error("Failed to load quality model: \(error.localizedDescription)")
             }
         }
@@ -202,6 +204,35 @@ actor TouchUpEngine {
 
         // Route to appropriate processing
         if replacements.isEmpty || !qualityAvailable {
+            var result = await TouchUpProcessor.process(
+                text: text,
+                replacements: [],
+                lightModel: light,
+                qualityModel: light,
+                proofreadPrompt: proofreadPrompt
+            )
+            // If quality was needed but failed to load, report degraded service
+            if !replacements.isEmpty, let loadError = qualityLoadError {
+                result = TouchUpProcessor.ProcessResult(
+                    text: result.text,
+                    keepDecisions: result.keepDecisions,
+                    modelUsed: result.modelUsed,
+                    latencyMs: result.latencyMs,
+                    fallbackReason: "Quality model unavailable: \(loadError)"
+                )
+            }
+            return result
+        } else if let quality = qualityModel {
+            return await TouchUpProcessor.process(
+                text: text,
+                replacements: replacementStructs,
+                lightModel: light,
+                qualityModel: quality,
+                proofreadPrompt: proofreadPrompt
+            )
+        } else {
+            // Should not reach here since qualityAvailable was true,
+            // but fall back to light model to be safe
             return await TouchUpProcessor.process(
                 text: text,
                 replacements: [],
@@ -209,19 +240,11 @@ actor TouchUpEngine {
                 qualityModel: light,
                 proofreadPrompt: proofreadPrompt
             )
-        } else {
-            return await TouchUpProcessor.process(
-                text: text,
-                replacements: replacementStructs,
-                lightModel: light,
-                qualityModel: qualityModel!,
-                proofreadPrompt: proofreadPrompt
-            )
         }
     }
 
     /// Process text with regex only (no LLM).
-    func processRegexOnly(
+    nonisolated func processRegexOnly(
         text: String,
         replacements: [(original: String, replacement: String)] = []
     ) -> TouchUpProcessor.ProcessResult {

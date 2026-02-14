@@ -11,18 +11,26 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpPro
 /// Smart routing processor for AI touch-up of transcriptions.
 ///
 /// Uses two-model routing strategy:
-/// - No replacements: Qwen2.5-0.5B only (~600ms for 200 words)
-/// - Has replacements: Qwen3-1.7B validates + proofreads (~900ms)
+/// - No replacements: Qwen2.5-0.5B proofreads only (fast path)
+/// - Has replacements: Qwen3-1.7B validates replacements + proofreads
 ///
 /// Pipeline:
 /// ```
 /// Whisper -> Fuzzy Dict -> Regex Voice Cmds -> Router -> Model(s) -> Output
 /// ```
-struct TouchUpProcessor {
+enum TouchUpProcessor {
     // MARK: - Types
 
+    /// Which model was used for processing.
+    enum ModelUsed: String, Sendable {
+        case light = "yooz-light-v1"
+        case quality = "yooz-quality-v1"
+        case regexOnly = "regex-only"
+        case fallbackRegex = "fallback-regex"
+    }
+
     /// A proposed fuzzy/dictionary replacement to validate.
-    struct Replacement {
+    struct Replacement: Sendable {
         let original: String
         let replacement: String
 
@@ -33,11 +41,12 @@ struct TouchUpProcessor {
     }
 
     /// Result of smart processing.
-    struct ProcessResult {
+    struct ProcessResult: Sendable {
         let text: String
         let keepDecisions: [Bool]
-        let modelUsed: String
+        let modelUsed: ModelUsed
         let latencyMs: Double
+        let fallbackReason: String?
     }
 
     // MARK: - Voice Commands (Regex-based)
@@ -187,8 +196,9 @@ struct TouchUpProcessor {
                 return ProcessResult(
                     text: resultText,
                     keepDecisions: [],
-                    modelUsed: "yooz-light-v1",
-                    latencyMs: latencyMs
+                    modelUsed: .light,
+                    latencyMs: latencyMs,
+                    fallbackReason: nil
                 )
             } catch {
                 logger.error("Light model failed: \(error.localizedDescription)")
@@ -196,8 +206,9 @@ struct TouchUpProcessor {
                 return ProcessResult(
                     text: processedText,
                     keepDecisions: [],
-                    modelUsed: "fallback-regex",
-                    latencyMs: latencyMs
+                    modelUsed: .fallbackRegex,
+                    latencyMs: latencyMs,
+                    fallbackReason: "Light model failed: \(error.localizedDescription)"
                 )
             }
         } else {
@@ -240,8 +251,9 @@ struct TouchUpProcessor {
                 return ProcessResult(
                     text: finalText,
                     keepDecisions: keepDecisions,
-                    modelUsed: "yooz-quality-v1",
-                    latencyMs: latencyMs
+                    modelUsed: .quality,
+                    latencyMs: latencyMs,
+                    fallbackReason: nil
                 )
             } catch {
                 logger.error("Quality model failed: \(error.localizedDescription)")
@@ -250,8 +262,9 @@ struct TouchUpProcessor {
                 return ProcessResult(
                     text: processedText,
                     keepDecisions: replacements.map { _ in true },
-                    modelUsed: "fallback-regex",
-                    latencyMs: latencyMs
+                    modelUsed: .fallbackRegex,
+                    latencyMs: latencyMs,
+                    fallbackReason: "Quality model failed: \(error.localizedDescription)"
                 )
             }
         }
@@ -274,8 +287,9 @@ struct TouchUpProcessor {
         return ProcessResult(
             text: processedText,
             keepDecisions: replacements.map { _ in true },
-            modelUsed: "regex-only",
-            latencyMs: latencyMs
+            modelUsed: .regexOnly,
+            latencyMs: latencyMs,
+            fallbackReason: nil
         )
     }
 }

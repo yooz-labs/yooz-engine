@@ -256,7 +256,9 @@ final class APIServer: ObservableObject {
                 return try jsonResponse(TouchUpServerResponse(
                     result: result.text,
                     mode: .off,
-                    processingTimeMs: Int(result.latencyMs)
+                    processingTimeMs: Int(result.latencyMs),
+                    modelUsed: result.modelUsed.rawValue,
+                    warnings: nil
                 ))
             }
 
@@ -265,10 +267,17 @@ final class APIServer: ObservableObject {
                 mode: body.mode
             )
 
+            var warnings: [String]? = nil
+            if let reason = result.fallbackReason {
+                warnings = [reason]
+            }
+
             return try jsonResponse(TouchUpServerResponse(
                 result: result.text,
                 mode: body.mode,
-                processingTimeMs: Int(result.latencyMs)
+                processingTimeMs: Int(result.latencyMs),
+                modelUsed: result.modelUsed.rawValue,
+                warnings: warnings
             ))
         }
 
@@ -404,7 +413,7 @@ final class APIServer: ObservableObject {
             sttLogger.info("STT WebSocket client connected")
 
             // Use message-level API to handle fragmented frames automatically
-            // Max message size: 10MB (enough for ~5 min of 16kHz Float32 audio)
+            // Max message size: 10MB (enough for ~2.7 min of 16kHz Float32 audio)
             for try await message in inbound.messages(maxSize: 10 * 1024 * 1024) {
                 switch message {
                 case .text(let text):

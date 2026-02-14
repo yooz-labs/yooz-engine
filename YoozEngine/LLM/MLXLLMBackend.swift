@@ -21,7 +21,15 @@ actor MLXLLMBackend: LLMBackend {
     let identifier: String
     let modelType: LLMModelType
 
-    private(set) var isLoaded = false
+    /// Whether a model is loaded and ready for generation.
+    /// Derived from the presence of a loaded model container.
+    var isLoaded: Bool {
+        #if canImport(MLXLMCommon)
+        return modelContainer != nil
+        #else
+        return false
+        #endif
+    }
 
     /// Download progress (0.0 to 1.0) for non-embedded models
     private(set) var downloadProgress: Double = 0
@@ -72,8 +80,9 @@ actor MLXLLMBackend: LLMBackend {
             let configuration = ModelConfiguration(directory: modelDirectory)
             modelContainer = try await loadModelContainer(configuration: configuration)
 
-            isLoaded = true
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
+        } catch let error as LLMError {
+            throw error
         } catch {
             logger.error("Failed to load model: \(error.localizedDescription)")
             throw LLMError.loadFailed(error.localizedDescription)
@@ -88,7 +97,6 @@ actor MLXLLMBackend: LLMBackend {
         #if canImport(MLXLMCommon)
         modelContainer = nil
         #endif
-        isLoaded = false
         downloadProgress = 0
         logger.info("Model \(self.modelType.rawValue) unloaded")
     }
@@ -106,6 +114,8 @@ actor MLXLLMBackend: LLMBackend {
         do {
             logger.debug("Creating chat session...")
 
+            // Rough token estimate: ~3 chars per token + 50 for JSON overhead.
+            // Floor at 100 to avoid truncating short inputs.
             let estimatedTokens = max(100, (prompt.count / 3) + 50)
 
             let session = ChatSession(
@@ -126,6 +136,8 @@ actor MLXLLMBackend: LLMBackend {
 
             let cleaned = postProcessResponse(response, originalInput: prompt)
             return cleaned
+        } catch let error as LLMError {
+            throw error
         } catch {
             logger.error("Generation failed: \(error.localizedDescription)")
             throw LLMError.generationFailed(error.localizedDescription)

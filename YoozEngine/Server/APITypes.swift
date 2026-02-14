@@ -105,8 +105,6 @@ enum ServerTouchUpMode: String, Codable, Sendable {
 struct LLMGenerateServerRequest: Decodable {
     let prompt: String
     let model: String?
-    let maxTokens: Int?
-    let temperature: Double?
 }
 
 struct LLMGenerateServerResponse: ResponseCodable {
@@ -128,4 +126,6 @@ struct TouchUpServerResponse: ResponseCodable {
     let result: String
     let mode: ServerTouchUpMode
     let processingTimeMs: Int?
+    let modelUsed: String?
+    let warnings: [String]?
 }

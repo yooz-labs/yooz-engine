@@ -66,7 +66,6 @@ enum LLMError: Error, LocalizedError, Sendable {
     case generationFailed(String)
     case notAvailable(String)
     case downloadFailed(String)
-    case parsingFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -80,8 +79,6 @@ enum LLMError: Error, LocalizedError, Sendable {
             return "Model not available: \(reason)"
         case .downloadFailed(let reason):
             return "Download failed: \(reason)"
-        case .parsingFailed(let reason):
-            return "Failed to parse response: \(reason)"
         }
     }
 }

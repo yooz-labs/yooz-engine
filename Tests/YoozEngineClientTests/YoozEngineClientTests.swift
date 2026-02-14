@@ -207,16 +207,12 @@ final class YoozEngineClientTests: XCTestCase {
     func testLLMGenerateRequestEncoding() throws {
         let request = LLMGenerateRequest(
             prompt: "hello",
-            model: "yooz-light-v1",
-            maxTokens: 100,
-            temperature: 0.5
+            model: "yooz-light-v1"
         )
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
         XCTAssertEqual(decoded.prompt, "hello")
         XCTAssertEqual(decoded.model, "yooz-light-v1")
-        XCTAssertEqual(decoded.maxTokens, 100)
-        XCTAssertEqual(decoded.temperature, 0.5)
     }
 
     func testLLMGenerateRequestMinimal() throws {
@@ -225,8 +221,6 @@ final class YoozEngineClientTests: XCTestCase {
         let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
         XCTAssertEqual(decoded.prompt, "test")
         XCTAssertNil(decoded.model)
-        XCTAssertNil(decoded.maxTokens)
-        XCTAssertNil(decoded.temperature)
     }
 
     func testLLMGenerateResponseDecoding() throws {
@@ -279,6 +273,8 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(response.result, "Hello, world.")
         XCTAssertEqual(response.mode, .standard)
         XCTAssertEqual(response.processingTimeMs, 85)
+        XCTAssertNil(response.modelUsed)
+        XCTAssertNil(response.warnings)
     }
 
     func testTouchUpRequestWithLanguage() throws {

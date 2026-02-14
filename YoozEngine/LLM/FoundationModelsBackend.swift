@@ -34,7 +34,12 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "Foundation
 
 /// Apple Foundation Models backend using the built-in 3B on-device model.
 /// Requires macOS 26+ with Apple Intelligence enabled.
-/// Standalone actor; not integrated into the TouchUpEngine pipeline yet.
+///
+/// Does not conform to `LLMBackend` because it lacks a fixed `modelType`
+/// (Apple Intelligence is a system-provided model) and uses structured
+/// generation (`@Generable`) instead of free-form text parsing.
+/// Will be integrated into the TouchUpEngine pipeline as a third backend
+/// once macOS 26 adoption is sufficient.
 actor FoundationModelsBackend {
 
     // MARK: - Properties
@@ -137,7 +142,10 @@ actor FoundationModelsBackend {
 
     nonisolated func isAvailable() -> Bool {
         #if canImport(FoundationModels)
-        return true
+        if #available(macOS 26.0, *) {
+            return true
+        }
+        return false
         #else
         return false
         #endif
@@ -261,9 +269,6 @@ actor FoundationModelsBackend {
 
     private func sanitizeOutput(_ text: String) -> String {
         var result = text
-        result = result.replacingOccurrences(of: "\u{00BD}", with: "'")  // ½
-        result = result.replacingOccurrences(of: "\u{00BC}", with: "'")  // ¼
-        result = result.replacingOccurrences(of: "\u{00BE}", with: "'")  // ¾
         result = result.replacingOccurrences(of: "\u{2018}", with: "'")  // Left single quote
         result = result.replacingOccurrences(of: "\u{2019}", with: "'")  // Right single quote
         result = result.replacingOccurrences(of: "\u{201C}", with: "\"") // Left double quote
