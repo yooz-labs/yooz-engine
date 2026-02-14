@@ -1,0 +1,71 @@
+name: YoozEngine
+options:
+  bundleIdPrefix: live.yooz
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+packages:
+  hummingbird:
+    url: https://github.com/hummingbird-project/hummingbird
+    from: "2.5.0"
+  hummingbird-websocket:
+    url: https://github.com/hummingbird-project/hummingbird-websocket
+    from: "2.2.0"
+  # MLX dependencies will be added in Phase 2 when STT module is migrated
+  # mlx-swift:
+  #   url: https://github.com/ml-explore/mlx-swift
+  #   from: "0.21.2"
+  # mlx-swift-lm:
+  #   url: https://github.com/ml-explore/mlx-swift-lm
+  #   from: "2.30.3"
+
+targets:
+  YoozEngine:
+    type: application
+    platform: macOS
+    sources:
+      - YoozEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine
+        PRODUCT_NAME: Yooz Engine
+        INFOPLIST_FILE: YoozEngine/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        ENABLE_HARDENED_RUNTIME: true
+        LSUIElement: true
+    dependencies:
+      - package: hummingbird
+        product: Hummingbird
+      - package: hummingbird-websocket
+        product: HummingbirdWebSocket
+      # MLX + Rust dependencies added in later phases
+      # - package: mlx-swift
+      #   product: MLX
+      # - package: mlx-swift
+      #   product: MLXNN
+      # - package: mlx-swift
+      #   product: MLXRandom
+      # - package: mlx-swift-lm
+      #   product: MLXLLM
+      # - package: mlx-swift-lm
+      #   product: MLXLMCommon
+      # - framework: YoozTextCleanup.xcframework
+      #   embed: false
+
+  YoozEngineTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/YoozEngineTests
+    dependencies:
+      - target: YoozEngine
