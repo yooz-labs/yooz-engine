@@ -94,6 +94,44 @@ final class APIServer: ObservableObject {
         logger.info("Yooz Engine stopped")
     }
 
+    // MARK: - Helpers
+
+    private nonisolated func errorResponse(
+        status: HTTPResponse.Status,
+        message: String,
+        code: String
+    ) -> Response {
+        let body = (try? JSONEncoder().encode(ErrorResponse(error: message, code: code))) ?? Data()
+        return Response(
+            status: status,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: ByteBuffer(data: body))
+        )
+    }
+
+    private nonisolated func jsonResponse<T: Encodable>(
+        _ value: T,
+        status: HTTPResponse.Status = .ok
+    ) throws -> Response {
+        let data = try JSONEncoder().encode(value)
+        return Response(
+            status: status,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: ByteBuffer(data: data))
+        )
+    }
+
+    private nonisolated func parseLanguage(_ code: String?) throws -> STTLanguage {
+        let languageCode = code ?? "en"
+        guard let language = STTLanguage.fromCode(languageCode) else {
+            throw STTRequestError.invalidLanguage(languageCode)
+        }
+        guard language.isImplemented else {
+            throw STTRequestError.notImplemented(language.displayName)
+        }
+        return language
+    }
+
     // MARK: - HTTP Router
 
     private func buildRouter() -> Router<BasicRequestContext> {
@@ -144,65 +182,57 @@ final class APIServer: ObservableObject {
 
         // STT: Status
         router.get("/v1/stt/status") { _, _ in
-            STTStatusResponse(
-                loaded: sttEngine.isRunning,
-                language: sttEngine.isRunning ? sttEngine.currentLanguage.rawValue : nil,
+            let running = sttEngine.isRunning
+            return STTStatusResponse(
+                loaded: running,
+                language: running ? sttEngine.currentLanguage.rawValue : nil,
                 streaming: sttEngine.isStreaming
             )
         }
 
         // STT: Load model
-        router.post("/v1/stt/load") { request, context in
+        router.post("/v1/stt/load") { [self] request, context in
             let body = try await request.decode(as: STTLoadRequest.self, context: context)
-            let languageCode = body.language ?? "en"
 
-            guard let language = STTLanguage.fromCode(languageCode) else {
-                return Response(
+            let language: STTLanguage
+            do {
+                language = try parseLanguage(body.language)
+            } catch let error as STTRequestError {
+                return errorResponse(
                     status: .badRequest,
-                    headers: [.contentType: "application/json"],
-                    body: .init(byteBuffer: ByteBuffer(string: "{\"error\":\"Unknown language: \(languageCode)\",\"code\":\"invalid_language\"}"))
-                )
-            }
-
-            guard language.isImplemented else {
-                return Response(
-                    status: .badRequest,
-                    headers: [.contentType: "application/json"],
-                    body: .init(byteBuffer: ByteBuffer(string: "{\"error\":\"Language not implemented: \(language.displayName)\",\"code\":\"not_implemented\"}"))
+                    message: error.message,
+                    code: error.code
                 )
             }
 
             do {
                 try await sttEngine.start(language: language)
-                let responseData = try JSONEncoder().encode(STTStatusResponse(
+                return try jsonResponse(STTStatusResponse(
                     loaded: true,
                     language: language.rawValue,
                     streaming: false
                 ))
-                return Response(
-                    status: .ok,
-                    headers: [.contentType: "application/json"],
-                    body: .init(byteBuffer: ByteBuffer(data: responseData))
-                )
             } catch {
-                return Response(
+                return errorResponse(
                     status: .internalServerError,
-                    headers: [.contentType: "application/json"],
-                    body: .init(byteBuffer: ByteBuffer(string: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"load_failed\"}"))
+                    message: error.localizedDescription,
+                    code: "load_failed"
                 )
             }
         }
 
         // STT: Batch transcribe
-        router.post("/v1/stt/batch") { request, context in
+        router.post("/v1/stt/batch") { [self] request, context in
             let body = try await request.decode(as: BatchSTTRequest.self, context: context)
 
-            let languageCode = body.language ?? "en"
-            guard let language = STTLanguage.fromCode(languageCode) else {
-                return Response(
+            let language: STTLanguage
+            do {
+                language = try parseLanguage(body.language)
+            } catch let error as STTRequestError {
+                return errorResponse(
                     status: .badRequest,
-                    headers: [.contentType: "application/json"],
-                    body: .init(byteBuffer: ByteBuffer(string: "{\"error\":\"Unknown language: \(languageCode)\",\"code\":\"invalid_language\"}"))
+                    message: error.message,
+                    code: error.code
                 )
             }
 
@@ -210,27 +240,22 @@ final class APIServer: ObservableObject {
             do {
                 try await sttEngine.start(language: language)
             } catch {
-                return Response(
+                return errorResponse(
                     status: .internalServerError,
-                    headers: [.contentType: "application/json"],
-                    body: .init(byteBuffer: ByteBuffer(string: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"model_load_failed\"}"))
+                    message: error.localizedDescription,
+                    code: "model_load_failed"
                 )
             }
 
-            let mode: AudioMode = (body.mode == "whispered") ? .whispered : .normal
+            let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
             let result = await sttEngine.batchTranscribe(samples: body.samples, mode: mode)
 
-            let responseData = try JSONEncoder().encode(BatchSTTResponse(
+            return try jsonResponse(BatchSTTResponse(
                 text: result.text,
                 finalized: result.finalized,
                 draft: result.draft,
                 language: language.rawValue
             ))
-            return Response(
-                status: .ok,
-                headers: [.contentType: "application/json"],
-                body: .init(byteBuffer: ByteBuffer(data: responseData))
-            )
         }
 
         return router
@@ -247,6 +272,31 @@ final class APIServer: ObservableObject {
             var transcriber: StreamingTranscriber?
             let encoder = JSONEncoder()
 
+            // Encode a WSSTTResult to JSON and send via WebSocket
+            func sendResult(_ result: WSSTTResult) async {
+                do {
+                    let json = try encoder.encode(result)
+                    guard let jsonStr = String(data: json, encoding: .utf8) else {
+                        sttLogger.error("Failed to convert encoded result to UTF-8 string")
+                        return
+                    }
+                    try await outbound.write(.text(jsonStr))
+                } catch {
+                    sttLogger.error("Failed to send STT result: \(error)")
+                }
+            }
+
+            // Send a JSON-encoded error message to the client
+            func sendError(_ message: String) async {
+                do {
+                    let json = try encoder.encode(WSSTTError(type: "error", message: message))
+                    guard let jsonStr = String(data: json, encoding: .utf8) else { return }
+                    try await outbound.write(.text(jsonStr))
+                } catch {
+                    sttLogger.error("Failed to send error message: \(error)")
+                }
+            }
+
             sttLogger.info("STT WebSocket client connected")
 
             // Use message-level API to handle fragmented frames automatically
@@ -255,30 +305,49 @@ final class APIServer: ObservableObject {
                 switch message {
                 case .text(let text):
                     // Config message: {"type":"config","language":"en","mode":"normal"}
-                    guard let data = text.data(using: .utf8),
-                          let config = try? JSONDecoder().decode(WSSTTConfig.self, from: data) else {
-                        sttLogger.warning("Invalid text message received")
+                    let config: WSSTTConfig
+                    do {
+                        guard let data = text.data(using: .utf8) else {
+                            sttLogger.warning("Received non-UTF8 text message")
+                            continue
+                        }
+                        config = try JSONDecoder().decode(WSSTTConfig.self, from: data)
+                    } catch {
+                        sttLogger.warning("Invalid text message: \(error)")
+                        await sendError("Invalid message format")
                         continue
                     }
 
                     if config.type == "config" {
                         let languageCode = config.language ?? "en"
                         guard let language = STTLanguage.fromCode(languageCode) else {
-                            try await outbound.write(.text("{\"type\":\"error\",\"message\":\"Unknown language: \(languageCode)\"}"))
+                            await sendError("Unknown language: \(languageCode)")
+                            continue
+                        }
+
+                        guard language.isImplemented else {
+                            await sendError("Language not implemented: \(language.displayName)")
                             continue
                         }
 
                         do {
                             try await sttEngine.start(language: language)
                         } catch {
-                            try await outbound.write(.text("{\"type\":\"error\",\"message\":\"\(error.localizedDescription)\"}"))
+                            await sendError("Failed to load model: \(error.localizedDescription)")
                             continue
                         }
 
-                        let mode: AudioMode = (config.mode == "whispered") ? .whispered : .normal
+                        let mode = AudioMode(rawValue: config.mode ?? "normal") ?? .normal
                         transcriber = sttEngine.createBatchTranscriber(mode: mode)
 
-                        try await outbound.write(.text("{\"type\":\"ready\",\"language\":\"\(languageCode)\"}"))
+                        do {
+                            let ready = try encoder.encode(WSSTTReady(type: "ready", language: languageCode))
+                            if let readyStr = String(data: ready, encoding: .utf8) {
+                                try await outbound.write(.text(readyStr))
+                            }
+                        } catch {
+                            sttLogger.error("Failed to send ready message: \(error)")
+                        }
                         sttLogger.info("STT stream configured: language=\(languageCode), mode=\(mode.rawValue)")
                     }
 
@@ -293,39 +362,36 @@ final class APIServer: ObservableObject {
                     let sampleCount = byteCount / MemoryLayout<Float>.size
                     guard sampleCount > 0 else { continue }
 
+                    // Safe copy into aligned Float array via raw byte copy
                     let samples: [Float] = buffer.withUnsafeReadableBytes { ptr in
-                        let floatPtr = ptr.baseAddress!.assumingMemoryBound(to: Float.self)
-                        return Array(UnsafeBufferPointer(start: floatPtr, count: sampleCount))
+                        [Float](unsafeUninitializedCapacity: sampleCount) { dest, initializedCount in
+                            _ = UnsafeMutableRawBufferPointer(dest).copyBytes(
+                                from: UnsafeRawBufferPointer(ptr).prefix(sampleCount * MemoryLayout<Float>.size)
+                            )
+                            initializedCount = sampleCount
+                        }
                     }
 
                     let result = transcriber.addAudio(samples: samples)
 
-                    let wsResult = WSSTTResult(
+                    await sendResult(WSSTTResult(
                         type: "partial",
                         text: result.text,
                         finalized: result.finalized,
                         draft: result.draft
-                    )
-                    if let json = try? encoder.encode(wsResult),
-                       let jsonStr = String(data: json, encoding: .utf8) {
-                        try await outbound.write(.text(jsonStr))
-                    }
+                    ))
                 }
             }
 
             // Client disconnected; finalize if a transcriber is active
             if let transcriber = transcriber {
                 let finalResult = transcriber.finalize()
-                let wsResult = WSSTTResult(
+                await sendResult(WSSTTResult(
                     type: "final",
                     text: finalResult.text,
                     finalized: finalResult.finalized,
                     draft: finalResult.draft
-                )
-                if let json = try? encoder.encode(wsResult),
-                   let jsonStr = String(data: json, encoding: .utf8) {
-                    try await outbound.write(.text(jsonStr))
-                }
+                ))
             }
 
             sttLogger.info("STT WebSocket client disconnected")
@@ -345,6 +411,25 @@ enum ServerStartError: LocalizedError {
             return "Failed to bind server: \(reason)"
         case .healthCheckFailed:
             return "Server started but health check failed"
+        }
+    }
+}
+
+enum STTRequestError: Error {
+    case invalidLanguage(String)
+    case notImplemented(String)
+
+    var message: String {
+        switch self {
+        case .invalidLanguage(let code): return "Unknown language: \(code)"
+        case .notImplemented(let name): return "Language not implemented: \(name)"
+        }
+    }
+
+    var code: String {
+        switch self {
+        case .invalidLanguage: return "invalid_language"
+        case .notImplemented: return "not_implemented"
         }
     }
 }

@@ -47,7 +47,7 @@ final class YoozEngineClientTests: XCTestCase {
     // MARK: - STT Types
 
     func testSTTLanguageAllCases() {
-        XCTAssertTrue(STTLanguage.allCases.count >= 17)
+        XCTAssertEqual(STTLanguage.allCases.count, 17)
         XCTAssertEqual(STTLanguage.english.rawValue, "en")
         XCTAssertEqual(STTLanguage.arabic.rawValue, "ar")
         XCTAssertEqual(STTLanguage.persian.rawValue, "fa")
@@ -70,6 +70,17 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(result.language, "en")
     }
 
+    func testTranscriptionResultDecodingNullLanguage() throws {
+        // Language omitted from JSON (optional field)
+        let json = """
+        {"text": "hello", "finalized": "hello", "draft": ""}
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(result.text, "hello")
+        XCTAssertNil(result.language)
+    }
+
     func testSTTStatusDecoding() throws {
         let json = """
         {
@@ -83,6 +94,17 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertTrue(status.loaded)
         XCTAssertEqual(status.language, "en")
         XCTAssertFalse(status.streaming)
+    }
+
+    func testSTTStatusDecodingNullLanguage() throws {
+        // When no model is loaded, language is null
+        let json = """
+        {"loaded": false, "language": null, "streaming": false}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(STTStatus.self, from: data)
+        XCTAssertFalse(status.loaded)
+        XCTAssertNil(status.language)
     }
 
     func testSTTLanguageInfoDecoding() throws {
@@ -137,5 +159,33 @@ final class YoozEngineClientTests: XCTestCase {
         let finalData = finalJson.data(using: .utf8)!
         let finalResult = try JSONDecoder().decode(StreamingSTTResult.self, from: finalData)
         XCTAssertTrue(finalResult.isFinal)
+    }
+
+    // MARK: - Audio Byte Serialization Round-Trip
+
+    func testAudioSamplesByteRoundTrip() throws {
+        // Verify the Float32 byte serialization contract used by
+        // STTStream.sendAudio and the server's WebSocket binary handler
+        let originalSamples: [Float] = [0.0, 1.0, -1.0, 0.5, -0.5, Float.leastNormalMagnitude]
+
+        // Client-side: [Float] -> Data (matches STTStream.sendAudio)
+        let data = originalSamples.withUnsafeBufferPointer { ptr in
+            Data(buffer: ptr)
+        }
+
+        XCTAssertEqual(data.count, originalSamples.count * MemoryLayout<Float>.size)
+
+        // Server-side: Data -> [Float] (matches APIServer WebSocket handler)
+        let sampleCount = data.count / MemoryLayout<Float>.size
+        let decoded: [Float] = data.withUnsafeBytes { ptr in
+            [Float](unsafeUninitializedCapacity: sampleCount) { dest, initializedCount in
+                _ = UnsafeMutableRawBufferPointer(dest).copyBytes(
+                    from: UnsafeRawBufferPointer(ptr).prefix(sampleCount * MemoryLayout<Float>.size)
+                )
+                initializedCount = sampleCount
+            }
+        }
+
+        XCTAssertEqual(decoded, originalSamples)
     }
 }

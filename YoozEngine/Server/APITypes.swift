@@ -81,3 +81,13 @@ struct WSSTTResult: Encodable {
     let finalized: String
     let draft: String
 }
+
+struct WSSTTError: Encodable {
+    let type: String  // "error"
+    let message: String
+}
+
+struct WSSTTReady: Encodable {
+    let type: String  // "ready"
+    let language: String
+}

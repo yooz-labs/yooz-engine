@@ -57,7 +57,7 @@ public struct STTClient: Sendable {
     /// ```swift
     /// let stream = try await client.stt.startStream(language: .english)
     /// try await stream.sendAudio(samples)
-    /// for try await result in stream.results {
+    /// if let result = try await stream.receive() {
     ///     print(result.text)
     /// }
     /// ```
@@ -79,34 +79,36 @@ public struct STTClient: Sendable {
         let wsTask = session.webSocketTask(with: url)
         wsTask.resume()
 
-        // Send config
-        let config = STTStreamConfig(
-            type: "config",
-            language: language.rawValue,
-            mode: mode.rawValue
-        )
-        let configData = try JSONEncoder().encode(config)
-        let configStr = String(data: configData, encoding: .utf8)!
-        try await wsTask.send(.string(configStr))
+        do {
+            // Send config
+            let config = STTStreamConfig(
+                type: "config",
+                language: language.rawValue,
+                mode: mode.rawValue
+            )
+            let configData = try JSONEncoder().encode(config)
+            let configStr = String(data: configData, encoding: .utf8)!
+            try await wsTask.send(.string(configStr))
 
-        // Wait for ready response
-        let readyMsg = try await wsTask.receive()
-        switch readyMsg {
-        case .string(let text):
-            if let data = text.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let type = json["type"] as? String {
-                if type == "error" {
-                    let message = json["message"] as? String ?? "Unknown error"
-                    wsTask.cancel(with: .normalClosure, reason: nil)
-                    throw YoozEngineError.webSocketError(message)
+            // Wait for ready response
+            let readyMsg = try await wsTask.receive()
+            switch readyMsg {
+            case .string(let text):
+                if let data = text.data(using: .utf8) {
+                    let response = try JSONDecoder().decode(WSReadyResponse.self, from: data)
+                    if response.type == "error" {
+                        throw YoozEngineError.webSocketError(response.message ?? "Unknown error")
+                    }
                 }
-                // type == "ready" → proceed
+            case .data:
+                break
+            @unknown default:
+                break
             }
-        case .data:
-            break
-        @unknown default:
-            break
+        } catch {
+            wsTask.cancel(with: .normalClosure, reason: nil)
+            session.invalidateAndCancel()
+            throw error
         }
 
         return STTStream(task: wsTask, session: session)
@@ -135,6 +137,11 @@ struct STTLanguagesResponse: Codable {
     let languages: [STTLanguageInfo]
 }
 
+struct WSReadyResponse: Decodable {
+    let type: String
+    let message: String?
+}
+
 public struct STTLanguageInfo: Codable, Sendable {
     public let code: String
     public let name: String
@@ -160,7 +167,7 @@ public enum AudioMode: String, Codable, Sendable {
 /// Send audio samples via `sendAudio(_:)` and receive
 /// partial/final results via `receive()`.
 @available(macOS 14.0, iOS 17.0, *)
-public final class STTStream: Sendable {
+public final class STTStream: @unchecked Sendable {
     private let task: URLSessionWebSocketTask
     private let session: URLSession
 
@@ -184,22 +191,33 @@ public final class STTStream: Sendable {
 
     /// Receive the next transcription result from the engine.
     ///
-    /// Returns nil when the connection is closed.
+    /// Returns nil when the connection is closed gracefully.
+    /// Throws on decoding errors or unexpected network failures.
     public func receive() async throws -> StreamingSTTResult? {
+        let message: URLSessionWebSocketTask.Message
         do {
-            let message = try await task.receive()
-            switch message {
-            case .string(let text):
-                guard let data = text.data(using: .utf8) else { return nil }
-                return try JSONDecoder().decode(StreamingSTTResult.self, from: data)
-            case .data(let data):
-                return try JSONDecoder().decode(StreamingSTTResult.self, from: data)
-            @unknown default:
-                return nil
-            }
-        } catch {
-            // WebSocket closed
+            message = try await task.receive()
+        } catch is CancellationError {
             return nil
+        } catch let urlError as URLError
+            where urlError.code == .cancelled || urlError.code == .networkConnectionLost {
+            return nil
+        } catch let nsError as NSError
+            where nsError.domain == NSPOSIXErrorDomain && nsError.code == 57 {
+            // POSIX error 57: socket is not connected (graceful close)
+            return nil
+        }
+
+        switch message {
+        case .string(let text):
+            guard let data = text.data(using: .utf8) else {
+                throw YoozEngineError.decodingError("Received non-UTF8 text from WebSocket")
+            }
+            return try JSONDecoder().decode(StreamingSTTResult.self, from: data)
+        case .data(let data):
+            return try JSONDecoder().decode(StreamingSTTResult.self, from: data)
+        @unknown default:
+            throw YoozEngineError.invalidResponse
         }
     }
 
