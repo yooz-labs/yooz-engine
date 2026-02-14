@@ -43,4 +43,99 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(decoded.text, "hello world")
         XCTAssertEqual(decoded.mode, .standard)
     }
+
+    // MARK: - STT Types
+
+    func testSTTLanguageAllCases() {
+        XCTAssertTrue(STTLanguage.allCases.count >= 17)
+        XCTAssertEqual(STTLanguage.english.rawValue, "en")
+        XCTAssertEqual(STTLanguage.arabic.rawValue, "ar")
+        XCTAssertEqual(STTLanguage.persian.rawValue, "fa")
+    }
+
+    func testTranscriptionResultDecoding() throws {
+        let json = """
+        {
+            "text": "hello world",
+            "finalized": "hello",
+            "draft": "world",
+            "language": "en"
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(result.text, "hello world")
+        XCTAssertEqual(result.finalized, "hello")
+        XCTAssertEqual(result.draft, "world")
+        XCTAssertEqual(result.language, "en")
+    }
+
+    func testSTTStatusDecoding() throws {
+        let json = """
+        {
+            "loaded": true,
+            "language": "en",
+            "streaming": false
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(STTStatus.self, from: data)
+        XCTAssertTrue(status.loaded)
+        XCTAssertEqual(status.language, "en")
+        XCTAssertFalse(status.streaming)
+    }
+
+    func testSTTLanguageInfoDecoding() throws {
+        let json = """
+        {
+            "code": "en",
+            "name": "English",
+            "implemented": true,
+            "family": "parakeet-tdt"
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let info = try JSONDecoder().decode(STTLanguageInfo.self, from: data)
+        XCTAssertEqual(info.code, "en")
+        XCTAssertEqual(info.name, "English")
+        XCTAssertTrue(info.implemented)
+        XCTAssertEqual(info.family, "parakeet-tdt")
+    }
+
+    func testBatchSTTRequestEncoding() throws {
+        let request = BatchSTTRequest(samples: [0.1, 0.2, 0.3], language: "en", mode: "normal")
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(BatchSTTRequest.self, from: data)
+        XCTAssertEqual(decoded.samples, [0.1, 0.2, 0.3])
+        XCTAssertEqual(decoded.language, "en")
+        XCTAssertEqual(decoded.mode, "normal")
+    }
+
+    func testAudioModeEnum() {
+        XCTAssertEqual(AudioMode.normal.rawValue, "normal")
+        XCTAssertEqual(AudioMode.whispered.rawValue, "whispered")
+    }
+
+    func testStreamingSTTResultDecoding() throws {
+        let json = """
+        {
+            "type": "partial",
+            "text": "hello",
+            "finalized": "hel",
+            "draft": "lo"
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(StreamingSTTResult.self, from: data)
+        XCTAssertEqual(result.type, "partial")
+        XCTAssertEqual(result.text, "hello")
+        XCTAssertFalse(result.isFinal)
+
+        let finalJson = """
+        {"type":"final","text":"hello world","finalized":"hello world","draft":""}
+        """
+        let finalData = finalJson.data(using: .utf8)!
+        let finalResult = try JSONDecoder().decode(StreamingSTTResult.self, from: finalData)
+        XCTAssertTrue(finalResult.isFinal)
+    }
 }

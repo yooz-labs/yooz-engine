@@ -3,7 +3,7 @@ import Foundation
 enum EngineConfig {
     static let port: Int = 19920
     static let host: String = "127.0.0.1"
-    static let version: String = "0.1.0"
+    static let version: String = "0.2.0"
 
     static let modelsDirectory: URL = {
         guard let appSupport = FileManager.default.urls(
