@@ -30,3 +30,64 @@ struct ErrorResponse: ResponseCodable {
     let error: String
     let code: String
 }
+
+// MARK: - STT Types
+
+struct BatchSTTRequest: Decodable {
+    let samples: [Float]
+    let language: String?
+    let mode: String?
+}
+
+struct BatchSTTResponse: ResponseCodable {
+    let text: String
+    let finalized: String
+    let draft: String
+    let language: String
+}
+
+struct STTLanguagesResponse: ResponseCodable {
+    let languages: [STTLanguageInfo]
+}
+
+struct STTLanguageInfo: Codable {
+    let code: String
+    let name: String
+    let implemented: Bool
+    let family: String
+}
+
+struct STTLoadRequest: Decodable {
+    let language: String?
+}
+
+struct STTStatusResponse: ResponseCodable {
+    let loaded: Bool
+    let language: String?
+    let streaming: Bool
+}
+
+// MARK: - WebSocket STT Messages
+
+struct WSSTTConfig: Decodable {
+    let type: String  // "config"
+    let language: String?
+    let mode: String?
+}
+
+struct WSSTTResult: Encodable {
+    let type: String  // "partial" or "final"
+    let text: String
+    let finalized: String
+    let draft: String
+}
+
+struct WSSTTError: Encodable {
+    let type: String  // "error"
+    let message: String
+}
+
+struct WSSTTReady: Encodable {
+    let type: String  // "ready"
+    let language: String
+}

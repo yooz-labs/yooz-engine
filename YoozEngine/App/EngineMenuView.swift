@@ -22,6 +22,28 @@ struct EngineMenuView: View {
         }
         .padding(.horizontal, 8)
 
+        if server.isRunning {
+            let sttEngine = YoozSTTEngine.shared
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Modules")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(sttEngine.isRunning ? .green : .gray)
+                        .frame(width: 6, height: 6)
+                    Text("STT")
+                        .font(.caption)
+                    if sttEngine.isRunning {
+                        Text("(\(sttEngine.currentLanguage.displayName))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+
         Divider()
 
         if server.isRunning {

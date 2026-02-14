@@ -18,13 +18,9 @@ packages:
   hummingbird-websocket:
     url: https://github.com/hummingbird-project/hummingbird-websocket
     from: "2.2.0"
-  # MLX dependencies will be added in Phase 2 when STT module is migrated
-  # mlx-swift:
-  #   url: https://github.com/ml-explore/mlx-swift
-  #   from: "0.21.2"
-  # mlx-swift-lm:
-  #   url: https://github.com/ml-explore/mlx-swift-lm
-  #   from: "2.30.3"
+  mlx-swift:
+    url: https://github.com/ml-explore/mlx-swift
+    from: "0.21.2"
 
 targets:
   YoozEngine:
@@ -48,17 +44,18 @@ targets:
         product: Hummingbird
       - package: hummingbird-websocket
         product: HummingbirdWebSocket
-      # MLX + Rust dependencies added in later phases
-      # - package: mlx-swift
-      #   product: MLX
-      # - package: mlx-swift
-      #   product: MLXNN
-      # - package: mlx-swift
-      #   product: MLXRandom
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift
+        product: MLXNN
+      - package: mlx-swift
+        product: MLXRandom
+      # Phase 3: LLM + TouchUp
       # - package: mlx-swift-lm
       #   product: MLXLLM
       # - package: mlx-swift-lm
       #   product: MLXLMCommon
+      # Phase 4: Rust grammar
       # - framework: YoozTextCleanup.xcframework
       #   embed: false
 

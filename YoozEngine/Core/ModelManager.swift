@@ -10,7 +10,7 @@ actor ModelManager {
 
     private let logger = Logger(label: "live.yooz.engine.models")
 
-    enum ModelState {
+    enum ModelState: Equatable {
         case notLoaded
         case loading
         case ready
