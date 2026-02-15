@@ -88,7 +88,7 @@ final class APIServer: ObservableObject {
         // Unload LLM models to free GPU memory
         await TouchUpEngine.shared.unload()
 
-        // Reset VAD state
+        // Reset VAD hidden/cell state to free memory
         do {
             try await VADEngine.shared.reset()
         } catch {

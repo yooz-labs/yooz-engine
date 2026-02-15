@@ -127,7 +127,8 @@ actor VADEngine {
             }
         }
 
-        // Close any open segment
+        // Close any open segment; use threshold as probability since
+        // the last per-frame value is unavailable after loop exit
         if inSpeech, let start = speechStart {
             let endMs = frameCount * windowSize * 1000 / sampleRate
             segments.append(VADSegmentResult(

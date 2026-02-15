@@ -8,10 +8,11 @@ import os.log
 
 private let logger = Logger(subsystem: "live.yooz.engine", category: "GrammarEngine")
 
-/// Rust-based rule engine for grammar correction.
+/// Rust-based rule engine for grammar correction (English only).
 ///
 /// Wraps the YoozTextCleanup Rust FFI via UniFFI bindings. Uses NLTagger
-/// for POS tagging, then applies 1,560+ rules in <1ms.
+/// for POS tagging, then applies Rust-side grammar rules. Query ``ruleCount``
+/// for the current number of rules.
 actor GrammarEngine {
 
     // MARK: - Singleton
@@ -25,14 +26,14 @@ actor GrammarEngine {
     /// Grammar module is always available (no model loading needed).
     nonisolated var isAvailable: Bool { true }
 
-    /// Number of rules for the given language (defaults to English).
+    /// Number of grammar rules available (English only).
     var ruleCount: Int {
         Int(getRuleCount(language: .english))
     }
 
     // MARK: - Grammar Checking
 
-    /// Check and correct grammar in text.
+    /// Check and correct grammar in text (English only).
     ///
     /// - Parameters:
     ///   - text: Input text to check.

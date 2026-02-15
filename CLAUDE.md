@@ -13,7 +13,8 @@ Yooz Engine is a macOS menu bar app that runs a local API server. All Yooz apps 
 ```
 YoozEngine.app (menu bar service)
 ├── Local API Server (localhost:19920)
-│   ├── REST: /v1/health, /v1/touchup, /v1/llm/generate, /v1/grammar/check, /v1/vad/detect
+│   ├── REST: /v1/health, /v1/models, /v1/touchup, /v1/llm/generate, /v1/grammar/check, /v1/vad/detect
+│   ├── REST: /v1/stt/languages, /v1/stt/status, /v1/stt/load, /v1/stt/batch
 │   ├── WebSocket: /v1/stt/stream
 │   └── Future: /v1/tts/synthesize
 ├── STT Module (Parakeet TDT, FastConformer)
