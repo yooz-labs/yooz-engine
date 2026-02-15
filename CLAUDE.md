@@ -3,7 +3,7 @@
 ## Project Overview
 
 **Product:** Standalone macOS service providing local AI capabilities to all Yooz apps
-**Version:** 0.3.0 | **Status:** Phase 3 - LLM + TouchUp
+**Version:** 0.4.0 | **Status:** Phase 4 - Grammar + VAD
 **Tech Stack:** Swift 5.9+ | SwiftUI | Hummingbird (HTTP/WebSocket) | MLX-Swift
 
 ## Architecture
@@ -90,8 +90,8 @@ Fixed port: **19920** (localhost only)
 | STT | yooz-stt-engine | [x] Done |
 | LLM | yooz-stt-engine/TouchUp/LLM | [x] Done |
 | TouchUp | yooz-whisper/TouchUp | [x] Done |
-| Grammar | yooz-stt-engine/text-cleanup | Pending |
-| VAD | yooz-whisper/Audio | Pending |
+| Grammar | yooz-stt-engine/text-cleanup | [x] Done |
+| VAD | yooz-whisper/Audio | [x] Done |
 | TTS | Future | Not started |
 
 ---

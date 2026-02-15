@@ -129,3 +129,31 @@ struct TouchUpServerResponse: ResponseCodable {
     let modelUsed: String?
     let warnings: [String]?
 }
+
+// MARK: - Grammar Types
+
+struct GrammarCheckServerRequest: Decodable {
+    let text: String
+    let categories: [String]?
+}
+
+struct GrammarCheckServerResponse: ResponseCodable {
+    let result: String
+    let correctionsApplied: Int
+}
+
+// MARK: - VAD Types
+
+struct VADDetectServerRequest: Decodable {
+    let samples: [Float]
+}
+
+struct VADDetectServerResponse: ResponseCodable {
+    let segments: [VADSegment]
+}
+
+struct VADSegment: Codable {
+    let startMs: Int
+    let endMs: Int
+    let probability: Float
+}

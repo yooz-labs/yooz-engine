@@ -88,6 +88,9 @@ final class APIServer: ObservableObject {
         // Unload LLM models to free GPU memory
         await TouchUpEngine.shared.unload()
 
+        // Reset VAD state
+        await VADEngine.shared.reset()
+
         serverTask?.cancel()
         _ = await serverTask?.result
         serverTask = nil
@@ -145,6 +148,7 @@ final class APIServer: ObservableObject {
         router.get("/v1/health") { _, _ in
             let llmLoaded = await TouchUpEngine.shared.isLightModelLoaded
             let touchupReady = await TouchUpEngine.shared.isPreloaded
+            let vadLoaded = await VADEngine.shared.isLoaded
             return HealthResponse(
                 status: "ok",
                 version: EngineConfig.version,
@@ -152,8 +156,8 @@ final class APIServer: ObservableObject {
                     stt: sttEngine.isRunning,
                     llm: llmLoaded,
                     touchup: touchupReady,
-                    grammar: false,
-                    vad: false,
+                    grammar: GrammarEngine.shared.isAvailable,
+                    vad: vadLoaded,
                     tts: false
                 )
             )
@@ -279,6 +283,59 @@ final class APIServer: ObservableObject {
                 modelUsed: result.modelUsed.rawValue,
                 warnings: warnings
             ))
+        }
+
+        // Grammar: Check text
+        router.post("/v1/grammar/check") { [self] request, context in
+            let body: GrammarCheckServerRequest
+            do {
+                body = try await request.decode(as: GrammarCheckServerRequest.self, context: context)
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            let result = await GrammarEngine.shared.check(
+                text: body.text,
+                categories: body.categories
+            )
+
+            return try jsonResponse(GrammarCheckServerResponse(
+                result: result.result,
+                correctionsApplied: result.correctionsApplied
+            ))
+        }
+
+        // VAD: Detect speech segments
+        router.post("/v1/vad/detect") { [self] request, context in
+            let body: VADDetectServerRequest
+            do {
+                body = try await request.decode(as: VADDetectServerRequest.self, context: context)
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            guard await VADEngine.shared.isLoaded else {
+                return errorResponse(
+                    status: .serviceUnavailable,
+                    message: "VAD model not loaded",
+                    code: "vad_not_loaded"
+                )
+            }
+
+            let segments = await VADEngine.shared.detect(samples: body.samples)
+            let responseSegments = segments.map { seg in
+                VADSegment(startMs: seg.startMs, endMs: seg.endMs, probability: seg.probability)
+            }
+
+            return try jsonResponse(VADDetectServerResponse(segments: responseSegments))
         }
 
         // STT: Available languages
