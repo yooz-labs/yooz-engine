@@ -293,6 +293,67 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertNil(decoded.language)
     }
 
+    // MARK: - Grammar Types
+
+    func testGrammarCheckRequestEncoding() throws {
+        let request = GrammarCheckRequest(text: "I are happy")
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(GrammarCheckRequest.self, from: data)
+        XCTAssertEqual(decoded.text, "I are happy")
+        XCTAssertNil(decoded.categories)
+    }
+
+    func testGrammarCheckRequestWithCategories() throws {
+        let request = GrammarCheckRequest(text: "test", categories: ["grammar", "basic"])
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(GrammarCheckRequest.self, from: data)
+        XCTAssertEqual(decoded.categories, ["grammar", "basic"])
+    }
+
+    func testGrammarCheckResponseDecoding() throws {
+        let json = """
+        {"result": "I am happy", "correctionsApplied": 1}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(GrammarCheckResponse.self, from: data)
+        XCTAssertEqual(response.result, "I am happy")
+        XCTAssertEqual(response.correctionsApplied, 1)
+    }
+
+    // MARK: - VAD Types
+
+    func testVADResponseDecoding() throws {
+        let json = """
+        {"segments": [{"startMs": 100, "endMs": 2500, "probability": 0.95}]}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(VADResponse.self, from: data)
+        XCTAssertEqual(response.segments.count, 1)
+        XCTAssertEqual(response.segments[0].startMs, 100)
+        XCTAssertEqual(response.segments[0].endMs, 2500)
+        XCTAssertEqual(response.segments[0].probability, 0.95, accuracy: 0.01)
+    }
+
+    func testVADResponseEmptySegments() throws {
+        let json = """
+        {"segments": []}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(VADResponse.self, from: data)
+        XCTAssertTrue(response.segments.isEmpty)
+    }
+
+    func testSpeechSegmentDecoding() throws {
+        let json = """
+        {"startMs": 0, "endMs": 1000, "probability": 0.87}
+        """
+        let data = json.data(using: .utf8)!
+        let segment = try JSONDecoder().decode(SpeechSegment.self, from: data)
+        XCTAssertEqual(segment.startMs, 0)
+        XCTAssertEqual(segment.endMs, 1000)
+        XCTAssertEqual(segment.probability, 0.87, accuracy: 0.01)
+    }
+
     // MARK: - Audio Byte Serialization Round-Trip
 
     func testAudioSamplesByteRoundTrip() throws {

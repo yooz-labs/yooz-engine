@@ -57,9 +57,8 @@ targets:
         product: MLXLLM
       - package: mlx-swift-lm
         product: MLXLMCommon
-      # Phase 4: Rust grammar
-      # - framework: YoozTextCleanup.xcframework
-      #   embed: false
+      - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+        embed: false
 
   YoozEngineTests:
     type: bundle.unit-test
