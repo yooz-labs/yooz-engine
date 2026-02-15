@@ -341,6 +341,14 @@ final class APIServer: ObservableObject {
                 )
             }
 
+            guard body.samples.count >= VADEngine.windowSize else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Samples too short; need at least \(VADEngine.windowSize) (32ms at 16kHz)",
+                    code: "samples_too_short"
+                )
+            }
+
             do {
                 let segments = try await VADEngine.shared.detect(samples: body.samples)
                 let responseSegments = segments.map { seg in
