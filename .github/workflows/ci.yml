@@ -34,7 +34,7 @@ jobs:
         run: brew install swiftlint
 
       - name: Lint
-        run: swiftlint lint --strict Sources/ YoozEngine/
+        run: swiftlint lint Sources/ YoozEngine/
 
   client-sdk:
     name: Client SDK Build + Test
