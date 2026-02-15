@@ -202,6 +202,97 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(response.languages.first?.code, "en")
     }
 
+    // MARK: - LLM Types
+
+    func testLLMGenerateRequestEncoding() throws {
+        let request = LLMGenerateRequest(
+            prompt: "hello",
+            model: "yooz-light-v1"
+        )
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
+        XCTAssertEqual(decoded.prompt, "hello")
+        XCTAssertEqual(decoded.model, "yooz-light-v1")
+    }
+
+    func testLLMGenerateRequestMinimal() throws {
+        let request = LLMGenerateRequest(prompt: "test")
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
+        XCTAssertEqual(decoded.prompt, "test")
+        XCTAssertNil(decoded.model)
+    }
+
+    func testLLMGenerateResponseDecoding() throws {
+        let json = """
+        {
+            "text": "Hello, world!",
+            "model": "yooz-light-v1",
+            "tokensGenerated": 5,
+            "processingTimeMs": 120
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
+        XCTAssertEqual(response.text, "Hello, world!")
+        XCTAssertEqual(response.model, "yooz-light-v1")
+        XCTAssertEqual(response.tokensGenerated, 5)
+        XCTAssertEqual(response.processingTimeMs, 120)
+    }
+
+    func testLLMGenerateResponseMinimal() throws {
+        let json = """
+        {"text": "result", "model": "yooz-quality-v1"}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
+        XCTAssertEqual(response.text, "result")
+        XCTAssertNil(response.tokensGenerated)
+        XCTAssertNil(response.processingTimeMs)
+    }
+
+    // MARK: - TouchUp Types
+
+    func testTouchUpModeEnum() {
+        XCTAssertEqual(TouchUpMode.off.rawValue, "off")
+        XCTAssertEqual(TouchUpMode.light.rawValue, "light")
+        XCTAssertEqual(TouchUpMode.standard.rawValue, "standard")
+        XCTAssertEqual(TouchUpMode.full.rawValue, "full")
+    }
+
+    func testTouchUpResponseDecoding() throws {
+        let json = """
+        {
+            "result": "Hello, world.",
+            "mode": "standard",
+            "processingTimeMs": 85
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(TouchUpResponse.self, from: data)
+        XCTAssertEqual(response.result, "Hello, world.")
+        XCTAssertEqual(response.mode, .standard)
+        XCTAssertEqual(response.processingTimeMs, 85)
+        XCTAssertNil(response.modelUsed)
+        XCTAssertNil(response.warnings)
+    }
+
+    func testTouchUpRequestWithLanguage() throws {
+        let request = TouchUpRequest(text: "bonjour monde", mode: .full, language: "fr")
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(TouchUpRequest.self, from: data)
+        XCTAssertEqual(decoded.text, "bonjour monde")
+        XCTAssertEqual(decoded.mode, .full)
+        XCTAssertEqual(decoded.language, "fr")
+    }
+
+    func testTouchUpRequestWithoutLanguage() throws {
+        let request = TouchUpRequest(text: "hello", mode: .light)
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(TouchUpRequest.self, from: data)
+        XCTAssertNil(decoded.language)
+    }
+
     // MARK: - Audio Byte Serialization Round-Trip
 
     func testAudioSamplesByteRoundTrip() throws {

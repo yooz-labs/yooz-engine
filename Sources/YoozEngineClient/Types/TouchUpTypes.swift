@@ -23,4 +23,6 @@ public struct TouchUpResponse: Codable, Sendable {
     public let result: String
     public let mode: TouchUpMode
     public let processingTimeMs: Int?
+    public let modelUsed: String?
+    public let warnings: [String]?
 }
