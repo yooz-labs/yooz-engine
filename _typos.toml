@@ -1,0 +1,16 @@
+[files]
+extend-exclude = [
+    "Vendor/",
+    "*.xcframework",
+    "*.mlpackage",
+]
+
+[default.extend-words]
+hn = "hn"
+cn = "cn"
+tdt = "tdt"
+vad = "vad"
+stt = "stt"
+mlx = "mlx"
+codable = "codable"
+hel = "hel"
