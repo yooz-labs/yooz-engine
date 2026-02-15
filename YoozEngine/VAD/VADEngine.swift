@@ -55,14 +55,14 @@ actor VADEngine {
         config.computeUnits = .cpuAndNeuralEngine
 
         model = try MLModel(contentsOf: modelURL, configuration: config)
+        try resetState()
         isLoaded = true
-        resetState()
         logger.info("Silero VAD model loaded")
     }
 
     /// Reset RNN hidden state (call between recordings).
-    func reset() {
-        resetState()
+    func reset() throws {
+        try resetState()
     }
 
     // MARK: - Detection
@@ -74,13 +74,13 @@ actor VADEngine {
     ///
     /// - Parameter samples: Audio samples at 16kHz.
     /// - Returns: Array of detected speech segments with start/end in milliseconds.
-    func detect(samples: [Float]) -> [VADSegmentResult] {
+    /// - Throws: ``VADError/modelNotLoaded`` if the model has not been loaded.
+    func detect(samples: [Float]) throws -> [VADSegmentResult] {
         guard isLoaded, model != nil else {
-            logger.warning("VAD model not loaded, returning empty segments")
-            return []
+            throw VADError.modelNotLoaded
         }
 
-        resetState()
+        try resetState()
 
         let windowSize = Self.windowSize
         let sampleRate = Self.sampleRate
@@ -96,7 +96,7 @@ actor VADEngine {
         for frameIndex in 0..<frameCount {
             let offset = frameIndex * windowSize
             let window = Array(samples[offset..<offset + windowSize])
-            let probability = getSpeechProbability(window)
+            let probability = try getSpeechProbability(window)
             let rawSpeech = probability > speechThreshold
 
             if rawSpeech {
@@ -143,64 +143,52 @@ actor VADEngine {
 
     // MARK: - Private
 
-    private func getSpeechProbability(_ samples: [Float]) -> Float {
+    private func getSpeechProbability(_ samples: [Float]) throws -> Float {
         guard let model = model else {
-            return getEnergyFallback(samples)
+            throw VADError.modelNotLoaded
         }
 
-        do {
-            let inputArray = try MLMultiArray(
-                shape: [1, NSNumber(value: samples.count)],
-                dataType: .float32
-            )
-            for (i, sample) in samples.enumerated() {
-                inputArray[i] = NSNumber(value: sample)
-            }
-
-            let input = try MLDictionaryFeatureProvider(dictionary: [
-                "input": inputArray,
-                "h": hiddenState!,
-                "c": cellState!
-            ])
-
-            let output = try model.prediction(from: input)
-
-            if let outputArray = output.featureValue(for: "output")?.multiArrayValue {
-                let probability = outputArray[0].floatValue
-
-                if let newH = output.featureValue(for: "hn")?.multiArrayValue,
-                   let newC = output.featureValue(for: "cn")?.multiArrayValue {
-                    hiddenState = newH
-                    cellState = newC
-                }
-
-                return probability
-            }
-        } catch {
-            logger.error("VAD inference error: \(error.localizedDescription)")
-            return getEnergyFallback(samples)
+        guard let h = hiddenState, let c = cellState else {
+            throw VADError.stateNotInitialized
         }
 
-        return 0.0
+        let inputArray = try MLMultiArray(
+            shape: [1, NSNumber(value: samples.count)],
+            dataType: .float32
+        )
+        for (i, sample) in samples.enumerated() {
+            inputArray[i] = NSNumber(value: sample)
+        }
+
+        let input = try MLDictionaryFeatureProvider(dictionary: [
+            "input": inputArray,
+            "h": h,
+            "c": c
+        ])
+
+        let output = try model.prediction(from: input)
+
+        guard let outputArray = output.featureValue(for: "output")?.multiArrayValue else {
+            throw VADError.outputExtractionFailed
+        }
+
+        let probability = outputArray[0].floatValue
+
+        if let newH = output.featureValue(for: "hn")?.multiArrayValue,
+           let newC = output.featureValue(for: "cn")?.multiArrayValue {
+            hiddenState = newH
+            cellState = newC
+        }
+
+        return probability
     }
 
-    private func getEnergyFallback(_ samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0.0 }
-        var rms: Float = 0
-        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(samples.count))
-        return rms > 0.005 ? 0.9 : 0.1
-    }
-
-    private func resetState() {
-        do {
-            hiddenState = try MLMultiArray(shape: [2, 1, 64], dataType: .float32)
-            cellState = try MLMultiArray(shape: [2, 1, 64], dataType: .float32)
-            for i in 0..<hiddenState!.count {
-                hiddenState![i] = 0.0
-                cellState![i] = 0.0
-            }
-        } catch {
-            logger.error("Failed to reset VAD state: \(error.localizedDescription)")
+    private func resetState() throws {
+        hiddenState = try MLMultiArray(shape: [2, 1, 64], dataType: .float32)
+        cellState = try MLMultiArray(shape: [2, 1, 64], dataType: .float32)
+        for i in 0..<hiddenState!.count {
+            hiddenState![i] = 0.0
+            cellState![i] = 0.0
         }
     }
 }
@@ -215,11 +203,20 @@ struct VADSegmentResult {
 
 enum VADError: LocalizedError {
     case modelNotFound
+    case modelNotLoaded
+    case stateNotInitialized
+    case outputExtractionFailed
 
     var errorDescription: String? {
         switch self {
         case .modelNotFound:
             return "Silero VAD model not found in app bundle"
+        case .modelNotLoaded:
+            return "VAD model not loaded; call load() first"
+        case .stateNotInitialized:
+            return "VAD RNN state not initialized"
+        case .outputExtractionFailed:
+            return "Failed to extract output from VAD model prediction"
         }
     }
 }

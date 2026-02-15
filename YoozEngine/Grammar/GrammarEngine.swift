@@ -59,22 +59,27 @@ actor GrammarEngine {
         guard let names = names, !names.isEmpty else {
             return getAllCategories()
         }
-        return names.compactMap { name in
+        var resolved: [Category] = []
+        for name in names {
             switch name.lowercased() {
-            case "basic": return .basic
-            case "grammar": return .grammar
-            case "articles": return .articles
-            case "informal": return .informal
-            case "verbs": return .verbs
-            case "numbers": return .numbers
-            case "punctuation": return .punctuation
-            case "style": return .style
-            case "advanced": return .advanced
+            case "basic": resolved.append(.basic)
+            case "grammar": resolved.append(.grammar)
+            case "articles": resolved.append(.articles)
+            case "informal": resolved.append(.informal)
+            case "verbs": resolved.append(.verbs)
+            case "numbers": resolved.append(.numbers)
+            case "punctuation": resolved.append(.punctuation)
+            case "style": resolved.append(.style)
+            case "advanced": resolved.append(.advanced)
             default:
                 logger.warning("Unknown grammar category: \(name)")
-                return nil
             }
         }
+        if resolved.isEmpty {
+            logger.warning("All \(names.count) requested categories were invalid, using all categories")
+            return getAllCategories()
+        }
+        return resolved
     }
 
     /// Estimate number of corrections by counting word-level differences.

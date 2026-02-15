@@ -89,7 +89,11 @@ final class APIServer: ObservableObject {
         await TouchUpEngine.shared.unload()
 
         // Reset VAD state
-        await VADEngine.shared.reset()
+        do {
+            try await VADEngine.shared.reset()
+        } catch {
+            logger.error("Failed to reset VAD state: \(error)")
+        }
 
         serverTask?.cancel()
         _ = await serverTask?.result
@@ -298,15 +302,22 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            let result = await GrammarEngine.shared.check(
-                text: body.text,
-                categories: body.categories
-            )
-
-            return try jsonResponse(GrammarCheckServerResponse(
-                result: result.result,
-                correctionsApplied: result.correctionsApplied
-            ))
+            do {
+                let result = await GrammarEngine.shared.check(
+                    text: body.text,
+                    categories: body.categories
+                )
+                return try jsonResponse(GrammarCheckServerResponse(
+                    result: result.result,
+                    correctionsApplied: result.correctionsApplied
+                ))
+            } catch {
+                return errorResponse(
+                    status: .internalServerError,
+                    message: error.localizedDescription,
+                    code: "grammar_check_failed"
+                )
+            }
         }
 
         // VAD: Detect speech segments
@@ -330,12 +341,19 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            let segments = await VADEngine.shared.detect(samples: body.samples)
-            let responseSegments = segments.map { seg in
-                VADSegment(startMs: seg.startMs, endMs: seg.endMs, probability: seg.probability)
+            do {
+                let segments = try await VADEngine.shared.detect(samples: body.samples)
+                let responseSegments = segments.map { seg in
+                    VADSegment(startMs: seg.startMs, endMs: seg.endMs, probability: seg.probability)
+                }
+                return try jsonResponse(VADDetectServerResponse(segments: responseSegments))
+            } catch {
+                return errorResponse(
+                    status: .internalServerError,
+                    message: error.localizedDescription,
+                    code: "vad_detection_failed"
+                )
             }
-
-            return try jsonResponse(VADDetectServerResponse(segments: responseSegments))
         }
 
         // STT: Available languages
