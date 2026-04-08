@@ -16,8 +16,12 @@ public struct LLMClient: Sendable {
     }
 
     /// Convenience: generate with just a prompt.
-    public func generate(prompt: String, model: String? = nil) async throws -> String {
-        let request = LLMGenerateRequest(prompt: prompt, model: model)
+    public func generate(
+        prompt: String,
+        model: String? = nil,
+        systemPrompt: String? = nil
+    ) async throws -> String {
+        let request = LLMGenerateRequest(prompt: prompt, model: model, systemPrompt: systemPrompt)
         let response = try await generate(request)
         return response.text
     }

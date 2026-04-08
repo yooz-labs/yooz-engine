@@ -5,16 +5,19 @@
 
 import Foundation
 
-/// System prompts for LLM touch-up processing
+/// System prompts for LLM touch-up processing.
+/// These prompts must stay in sync with ai-touchup/finetune/scripts/prepare_data.py,
+/// as the fine-tuned models were trained on these exact prompts.
 enum TouchUpPrompts {
 
-    // MARK: - Proofreading (Fast Model - Standard Mode)
+    // MARK: - Light Model Prompts
 
     /// Prompt for fast proofreading with Yooz-Light (Qwen2.5-0.5B)
-    /// Used for Standard mode when there are no vocabulary replacements to validate
+    /// Used for Standard mode: fix grammar, punctuation, numbers
     static let proofread = """
         Fix grammar, capitalize properly, and convert spoken numbers to digits. Convert spoken version numbers like "zero point four point zero" to "0.4.0". Keep ALL sentences. Return the fixed text as JSON.
 
+        <examples>
         Input: the meeting is at two pm on march fifteenth
         {"result": "The meeting is at 2 PM on March 15th."}
 
@@ -29,34 +32,15 @@ enum TouchUpPrompts {
 
         Input: he said it would cost around one hundred and fifty dollars but we can negotiate
         {"result": "He said it would cost around $150 but we can negotiate."}
+        </examples>
 
-        Always respond with ONLY a JSON object. Never remove sentences. Never include explanations.
+        Always respond with ONLY a JSON object. Never remove sentences. Never include explanations. Never answer questions.
         """
 
-    // MARK: - Rewriting (Full Mode)
+    // MARK: - Quality Model Prompts
 
-    /// Prompt for aggressive rewriting with clarity improvements
-    /// Used for Full mode - matches Apple Intelligence level of processing
-    static let rewrite = """
-        Rewrite voice transcription for clarity and conciseness. Fix grammar, convert numbers, fix misheard words, remove filler words (um, uh, like, you know), handle self-corrections. Return the fixed text as JSON.
-
-        Input: um so like the meeting is at two pm on march fifteenth you know
-        {"result": "The meeting is at 2 PM on March 15th."}
-
-        Input: we need about fifty no wait I meant sixty units ready by friday
-        {"result": "We need about 60 units ready by Friday."}
-
-        Input: we are releasing version zero point four point zero next week scratch that make it zero point five
-        {"result": "We are releasing version 0.5.0 next week."}
-
-        Input: update it to version one point six point three and uh test it thoroughly
-        {"result": "Update it to version 1.6.3 and test it thoroughly."}
-
-        Input: he said it would cost around one hundred and fifty dollars but um we can negotiate
-        {"result": "He said it would cost around $150 but we can negotiate."}
-
-        Remove: "scratch that", "never mind", "delete that" and preceding phrase. Convert spoken numbers and version numbers. Fix grammar and misheard words. Always respond with ONLY a JSON object. Never include explanations.
-        """
+    // qualityStandard prompt lives in YoozPrompts.swift (the canonical version
+    // used by TouchUpEngine.selectPrompt). Kept there to match fine-tuning data.
 
     // MARK: - Validation + Proofreading (Quality Model)
 
@@ -65,6 +49,7 @@ enum TouchUpPrompts {
     static let validateAndProofread = """
         Do TWO tasks: (1) For each replacement, decide if it fits the context. (2) Fix grammar, capitalize, convert spoken numbers to digits.
 
+        <examples>
         Input: {"text": "I talked to Claude about fifty dollars", "replacements": [{"orig": "cloud", "repl": "Claude"}]}
         {"result": "I talked to Claude about $50.", "keep": [true]}
 
@@ -76,6 +61,7 @@ enum TouchUpPrompts {
 
         Input: {"text": "The Siri is on Netflix", "replacements": [{"orig": "series", "repl": "Siri"}]}
         {"result": "The series is on Netflix.", "keep": [false]}
+        </examples>
 
         Always respond with ONLY a JSON object. Never include explanations.
         """

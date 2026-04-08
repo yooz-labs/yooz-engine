@@ -105,6 +105,7 @@ enum ServerTouchUpMode: String, Codable, Sendable {
 struct LLMGenerateServerRequest: Decodable {
     let prompt: String
     let model: String?
+    let systemPrompt: String?
 }
 
 struct LLMGenerateServerResponse: ResponseCodable {

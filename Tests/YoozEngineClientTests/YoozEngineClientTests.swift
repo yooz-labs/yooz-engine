@@ -207,12 +207,14 @@ final class YoozEngineClientTests: XCTestCase {
     func testLLMGenerateRequestEncoding() throws {
         let request = LLMGenerateRequest(
             prompt: "hello",
-            model: "yooz-light-v1"
+            model: "yooz-light-v3",
+            systemPrompt: "Fix grammar"
         )
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
         XCTAssertEqual(decoded.prompt, "hello")
-        XCTAssertEqual(decoded.model, "yooz-light-v1")
+        XCTAssertEqual(decoded.model, "yooz-light-v3")
+        XCTAssertEqual(decoded.systemPrompt, "Fix grammar")
     }
 
     func testLLMGenerateRequestMinimal() throws {
@@ -221,13 +223,14 @@ final class YoozEngineClientTests: XCTestCase {
         let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
         XCTAssertEqual(decoded.prompt, "test")
         XCTAssertNil(decoded.model)
+        XCTAssertNil(decoded.systemPrompt)
     }
 
     func testLLMGenerateResponseDecoding() throws {
         let json = """
         {
             "text": "Hello, world!",
-            "model": "yooz-light-v1",
+            "model": "yooz-light-v3",
             "tokensGenerated": 5,
             "processingTimeMs": 120
         }
@@ -235,14 +238,14 @@ final class YoozEngineClientTests: XCTestCase {
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
         XCTAssertEqual(response.text, "Hello, world!")
-        XCTAssertEqual(response.model, "yooz-light-v1")
+        XCTAssertEqual(response.model, "yooz-light-v3")
         XCTAssertEqual(response.tokensGenerated, 5)
         XCTAssertEqual(response.processingTimeMs, 120)
     }
 
     func testLLMGenerateResponseMinimal() throws {
         let json = """
-        {"text": "result", "model": "yooz-quality-v1"}
+        {"text": "result", "model": "yooz-quality-v3"}
         """
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
