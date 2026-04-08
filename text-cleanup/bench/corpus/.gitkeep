@@ -1,0 +1,8 @@
+# Tatoeba corpus
+Download from: https://tatoeba.org/en/downloads
+
+Download English sentences:
+curl -sL "https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2" | bunzip2 > eng_sentences.tsv
+
+Create 10k sample:
+sort -R eng_sentences.tsv | head -10000 > tatoeba_10k.tsv

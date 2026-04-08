@@ -1,0 +1,128 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rules>
+    <category id="STYLE" name="Style">
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token>do</token>
+                <token>not</token>
+                <token regexp="yes">have|afford|agree|arrange|attempt|choose|dare|decide|expect|fail|forget|hate|help|hope|intend|learn|like|love|manage|mean|need|plan|prefer|promise|refuse|remember|suppose|tend|threaten|try|want</token>
+                <token>too</token>
+                <token postag="SENT_END" />
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>do not have|afford|agree|arrange|attempt|choose|dare|decide|expect|fail|forget|hate|help|hope|intend|learn|like|love|manage|mean|need|plan|prefer|promise|refuse|remember|suppose|tend|threaten|try|want to </suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token postag="SENT_START" />
+                <token>gotta</token>
+                <token postag="VB.*" postag_regexp="yes" />
+            </pattern>
+            <message>The word 'gotta' is informal.</message>
+            <suggestion> I've to </suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token regexp="yes">g[ou]n?na|finna</token>
+                <token postag="VB" />
+            </pattern>
+            <message>The word '\1' is informal.</message>
+            <suggestion>going to </suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token>gonna</token>
+                <token postag="VB" />
+            </pattern>
+            <message>The word 'gonna' is informal.</message>
+            <suggestion>going to </suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token regexp="yes">wh?atcha</token>
+                <token postag="VBG" />
+            </pattern>
+            <message>The word '\1' is informal.</message>
+            <suggestion>what are you </suggestion>
+        </rule>
+        <rule id="GOTCHA" name="gotcha (got you)">
+            <pattern>
+                <token regexp="yes">I|we|s?he|it|they</token>
+                <token postag="RB" min="0" />
+                <token>gotcha</token>
+            </pattern>
+            <message>The word "\1" is informal.</message>
+            <suggestion>I|we|s?he|it|they  got you</suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token regexp="yes">s?he|it</token>
+                <token postag="RB" min="0" />
+                <token>wanna</token>
+                <token postag="VB" />
+            </pattern>
+            <message>The word 'wanna' is informal.</message>
+            <suggestion>s?he|it  wants to </suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token>wanna</token>
+                <token postag="VB" />
+            </pattern>
+            <message>The word 'wanna' is informal.</message>
+            <suggestion>want to </suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token regexp="yes">I|you|s?he|it|we|they</token>
+                <token postag="RB" min="0" />
+                <token>dunno</token>
+            </pattern>
+            <message>The word 'dunno' is informal.</message>
+            <suggestion>I|you|s?he|it|we|they  don't know</suggestion>
+        </rule>
+        <rule id="THAN_I" name="be bigger than me (I)">
+            <pattern>
+                <token>be</token>
+                <token postag="JJR" />
+                <token>than</token>
+                <token regexp="yes">me|him|her|us|them</token>
+                <token regexp="yes">by|at|in|[.!?]</token>
+            </pattern>
+            <message>In formal / written English, it is recommended that you use a subject pronoun.</message>
+            <suggestion>be  than I by|at|in|[.!?]</suggestion>
+        </rule>
+    </category>
+    <category id="REDUNDANCY" name="Redundant Phrases">
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token postag="DT" />
+                <token regexp="yes">extremely|very</token>
+                <token postag="JJ">small</token>
+            </pattern>
+            <message>Consider replacing "\2 \3" with</message>
+            <suggestion> tiny small</suggestion>
+        </rule>
+        <rule id="UNKNOWN" name="Unknown">
+            <pattern>
+                <token postag="VB.*" postag_regexp="yes">'s</token>
+                <token>a</token>
+                <token>large</token>
+                <token>number</token>
+                <token>of</token>
+            </pattern>
+            <message>To reduce wordiness, try specifying a number or using 'many' or 'numerous' instead.</message>
+            <suggestion>are many</suggestion>
+        </rule>
+    </category>
+    <category id="PLAIN_ENGLISH" name="Plain English">
+        <rule id="SOLICIT_FOR" name="solicit for">
+            <pattern>
+                <token postag="V.*" postag_regexp="yes">solicit</token>
+                <token>for</token>
+            </pattern>
+            <message>Avoid. Use</message>
+            <suggestion>asking for</suggestion>
+        </rule>
+    </category>
+</rules>

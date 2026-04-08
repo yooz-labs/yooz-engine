@@ -1,0 +1,10 @@
+# nlprule binaries
+Download from: https://github.com/bminixhofer/nlprule/releases/tag/0.6.4
+
+Required files:
+- en_tokenizer.bin (11 MB)
+- en_rules.bin (7.2 MB)
+
+Download commands:
+curl -sL "https://github.com/bminixhofer/nlprule/releases/download/0.6.4/en_tokenizer.bin.gz" | gunzip > en_tokenizer.bin
+curl -sL "https://github.com/bminixhofer/nlprule/releases/download/0.6.4/en_rules.bin.gz" | gunzip > en_rules.bin

@@ -1,0 +1,27 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Build artifacts
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Benchmark data (large files)
+bench/corpus/*.tsv
+bench/corpus/*.bz2
+bench/nlprule/*.bin
+bench/nlprule/*.bin.gz

@@ -1,0 +1,62 @@
+# Test Corpus for Grammar Engine Benchmarks
+# Format: input|expected_output
+# Categories: subject-verb, articles, informal, typos, confused words
+
+# Subject-Verb Agreement
+I are happy today.|I am happy today.
+He don't know the answer.|He doesn't know the answer.
+She have a car.|She has a car.
+They was here yesterday.|They were here yesterday.
+We is going home.|We are going home.
+
+# Articles (a/an)
+I want a apple.|I want an apple.
+She is a honest person.|She is an honest person.
+He bought a umbrella.|He bought an umbrella.
+This is a hour long meeting.|This is an hour long meeting.
+I saw a elephant.|I saw an elephant.
+
+# Informal to Formal
+I gonna go home.|I going to go home.
+She wanna eat pizza.|She want to eat pizza.
+We gotta leave now.|We got to leave now.
+They kinda like it.|They kind of like it.
+It's sorta working.|It's sort of working.
+
+# Common Typos
+I need alot of help.|I need a lot of help.
+He is definately coming.|He is definitely coming.
+Its a nice day.|It's a nice day.
+Your welcome.|You're welcome.
+There going home.|They're going home.
+
+# Verb Tense
+I seen it yesterday.|I saw it yesterday.
+She done her homework.|She did her homework.
+He has went home.|He has gone home.
+They have ran away.|They have run away.
+I had wrote the letter.|I had written the letter.
+
+# Confused Words
+I could of done it.|I could have done it.
+Their going to the store.|They're going to the store.
+Its time to go.|It's time to go.
+Your the best.|You're the best.
+Who's book is this.|Whose book is this.
+
+# Redundancy
+At this point in time we should go.|At this point we should go.
+The reason is because it's late.|The reason is that it's late.
+I personally think it's good.|I think it's good.
+In my opinion I believe so.|In my opinion so.
+He is currently working now.|He is currently working.
+
+# Real Transcription Samples
+So I was like gonna go to the store and um I seen this really cool thing.|So I was like going to go to the store and um I saw this really cool thing.
+He don't know nothing about that alot of people was there.|He doesn't know nothing about that a lot of people were there.
+Its kinda like when your gonna do something but you wanna wait.|It's kind of like when you're going to do something but you want to wait.
+
+# Clean text (no corrections needed)
+The quick brown fox jumps over the lazy dog.|The quick brown fox jumps over the lazy dog.
+I am happy to see you today.|I am happy to see you today.
+She has finished her work already.|She has finished her work already.

@@ -1,0 +1,60 @@
+[package]
+name = "yooz-text-cleanup"
+version = "0.6.6"
+edition = "2021"
+authors = ["Yooz Labs"]
+description = "Fast, rule-based grammar correction for spoken-to-written text"
+license = "MIT"
+
+[lib]
+name = "yooz_text_cleanup"
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+quick-xml = { version = "0.31", features = ["serialize"] }
+regex = "1.10"
+uniffi = { version = "0.28", features = ["cli"] }
+
+[dependencies.harper-core]
+version = "0.6.6"
+optional = true
+
+[dependencies.nlprule]
+version = "0.6.6"
+optional = true
+
+[dev-dependencies]
+criterion = "0.5"
+# nlprule requires build files - we'll handle separately
+
+[features]
+benchmark = ["harper-core", "nlprule"]
+spelling = ["harper-core"]
+
+[[bench]]
+name = "rule_engine"
+harness = false
+
+[[bench]]
+name = "compare_engines"
+harness = false
+
+[[bin]]
+name = "tatoeba_benchmark"
+path = "benches/tatoeba_benchmark.rs"
+required-features = ["benchmark"]
+
+[[bin]]
+name = "pos_benchmark"
+path = "benches/pos_benchmark.rs"
+required-features = ["benchmark"]
+
+[[bin]]
+name = "spelling_benchmark"
+path = "benches/spelling_benchmark.rs"
+required-features = ["benchmark", "spelling"]
+
+[[bin]]
+name = "pos_debug"
+path = "benches/pos_debug.rs"

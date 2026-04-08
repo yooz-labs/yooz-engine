@@ -1,0 +1,739 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rules>
+    <category id="STYLE" name="Style">
+        <rule id="ANYWAYS" name="anyways (anyway)">
+            <pattern>
+                <token>anyways</token>
+            </pattern>
+            <message>The word '\1' is informal American English. Did you mean</message>
+            <suggestion>anyway</suggestion>
+        </rule>
+        <rule id="PPL" name="abbreviation 'ppl'">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">[Pp]pl</token>
+            </pattern>
+            <message>The abbreviation for</message>
+            <suggestion>people</suggestion>
+        </rule>
+        <rule id="USED_TO_COULD" name="used to could (be able to)">
+            <pattern>
+                <token>used</token>
+                <token>to</token>
+                <token>could</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>used to be able to</suggestion>
+        </rule>
+        <rule id="BESTEST" name="bestest (best)">
+            <pattern>
+                <token>bestest</token>
+            </pattern>
+            <message>The word "\1" is informal.</message>
+            <suggestion>best</suggestion>
+        </rule>
+        <rule id="BORED_OF" name="bored of (with)">
+            <pattern>
+                <token>bored</token>
+                <token>of</token>
+            </pattern>
+            <message>In standard English it's more accepted to use</message>
+            <suggestion>bored with</suggestion>
+        </rule>
+        <rule id="OUTTA" name="outta (out of)">
+            <pattern>
+                <token>outta</token>
+            </pattern>
+            <message>The word '\1' is informal.</message>
+            <suggestion>out of</suggestion>
+        </rule>
+        <rule id="LEMME" name="lemme (let me)">
+            <pattern>
+                <token>lemme</token>
+            </pattern>
+            <message>The word '\1' is informal.</message>
+            <suggestion>let me</suggestion>
+        </rule>
+        <rule id="GIMME" name="gimme (give me)">
+            <pattern>
+                <token regexp="yes">gimmi?e</token>
+                <token regexp="yes">my|y?our|his|her|its|their|the|an?|this|that|th[eo]se|many|much|any|some|more|less|what|back|(any|some)(thing|one)|dat|dis</token>
+            </pattern>
+            <message>The word "\1" is informal.</message>
+            <suggestion>give me my|y?our|his|her|its|their|the|an?|this|that|th[eo]se|many|much|any|some|more|less|what|back|(any|some)(thing|one)|dat|dis</suggestion>
+        </rule>
+        <rule id="AN_INVITE" name="an invite (invitation)">
+            <pattern>
+                <token>an</token>
+                <token>invite</token>
+            </pattern>
+            <message>The noun</message>
+            <suggestion>an invitation</suggestion>
+        </rule>
+        <rule id="IRREGARDLESS" name="irregardless (regardless)">
+            <pattern>
+                <token>irregardless</token>
+            </pattern>
+            <message>'Irregardless' is nonstandard. In formal style you should use</message>
+            <suggestion>regardless</suggestion>
+        </rule>
+        <rule id="ALSO_SENT_END" name="'also' at the end of the sentence">
+            <pattern>
+                <token>also</token>
+                <token>.</token>
+            </pattern>
+            <message>'Also' is not used at the end of the sentence. Use</message>
+            <suggestion>as well .</suggestion>
+        </rule>
+    </category>
+    <category id="REDUNDANCY" name="Redundant Phrases">
+        <rule id="SUFFICIENT_ENOUGH" name="sufficient enough → sufficient">
+            <pattern>
+                <token>sufficient</token>
+                <token>enough</token>
+            </pattern>
+            <message>'Sufficient enough' is redundant. Consider using only</message>
+            <suggestion>sufficient</suggestion>
+        </rule>
+        <rule id="OF_ANY_OF" name="of any of → of">
+            <pattern>
+                <token>of</token>
+                <token>any</token>
+                <token>of</token>
+            </pattern>
+            <message>Consider simply using</message>
+            <suggestion>of</suggestion>
+        </rule>
+        <rule id="SEND_AN_EMAIL" name="send an email to (email)">
+            <pattern>
+                <token>send</token>
+                <token regexp="yes">an?</token>
+                <token>email</token>
+                <token>to</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>email</suggestion>
+        </rule>
+        <rule id="BECAUSE_OF_THE_FACT_THAT" name="because of the fact that (because)">
+            <pattern>
+                <token>because</token>
+                <token>of</token>
+                <token>the</token>
+                <token>fact</token>
+                <token>that</token>
+            </pattern>
+            <message>This phrase is redundant. Consider using</message>
+            <suggestion>because</suggestion>
+        </rule>
+        <rule id="AND_ALSO" name="and also (and/also)">
+            <pattern>
+                <token>and</token>
+                <token>also</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>and</suggestion>
+        </rule>
+        <rule id="ARE_ABLE_TO" name="are able to (can)">
+            <pattern>
+                <token>are</token>
+                <token>able</token>
+                <token>to</token>
+            </pattern>
+            <message>This expression is wordy. Consider using</message>
+            <suggestion>can</suggestion>
+        </rule>
+        <rule id="AS_OF_YET" name="as of yet (yet)">
+            <pattern>
+                <token>as</token>
+                <token>of</token>
+                <token>yet</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>yet</suggestion>
+        </rule>
+        <rule id="BALD-HEADED" name="bald-headed (bald)">
+            <pattern>
+                <token>bald-headed</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>bald</suggestion>
+        </rule>
+        <rule id="CDROM" name="CDROM (CD-ROM)">
+            <pattern>
+                <token regexp="yes">CDROM|CDRom|Cdrom</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>CD-ROM</suggestion>
+        </rule>
+        <rule id="ACCUSED_OF_A_CHARGE_CHARGED_WITH" name="accused of a charge (charged with)">
+            <pattern>
+                <token>accused</token>
+                <token>of</token>
+                <token>a</token>
+                <token>charge</token>
+                <token>of</token>
+            </pattern>
+            <message>This phrase may be redundant. Consider writing:</message>
+            <suggestion>charged with</suggestion>
+        </rule>
+        <rule id="SELF_ADMITTED" name="self-admitted (admitted)">
+            <pattern>
+                <token>self-admitted</token>
+            </pattern>
+            <message>This phrase is redundant. Consider using just</message>
+            <suggestion>admitted</suggestion>
+        </rule>
+        <rule id="SO_AS_TO" name="so as to (to)">
+            <pattern>
+                <token>so</token>
+                <token>as</token>
+                <token>to</token>
+            </pattern>
+            <message>'So as to' expresses purpose and is used in formal texts. Consider using</message>
+            <suggestion>to</suggestion>
+        </rule>
+        <rule id="FEW_OCCASIONS" name="on a few occasions (occasionally)">
+            <pattern>
+                <token>on</token>
+                <token>a</token>
+                <token>few</token>
+                <token>occasions</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>occasionally</suggestion>
+        </rule>
+        <rule id="ALSO_OTHER" name="there are also other (also)">
+            <pattern>
+                <token>there</token>
+                <token>are</token>
+                <token>also</token>
+                <token>other</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>there are other</suggestion>
+        </rule>
+        <rule id="SMALL_NUMBER_OF" name="a small number of (a few)">
+            <pattern>
+                <token>a</token>
+                <token>small</token>
+                <token>number</token>
+                <token>of</token>
+            </pattern>
+            <message>Specify a number, remove phrase, use</message>
+            <suggestion>a few</suggestion>
+        </rule>
+        <rule id="SUBSEQUENT_TO" name="subsequent to (after)">
+            <pattern>
+                <token>subsequent</token>
+                <token>to</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>after</suggestion>
+        </rule>
+        <rule id="WITH_THE_EXCEPTION_OF" name="with the exception of (except)">
+            <pattern>
+                <token>with</token>
+                <token>the</token>
+                <token>exception</token>
+                <token>of</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>except</suggestion>
+        </rule>
+        <rule id="EVERY_NOW_AND_THEN" name="every now and then (now and then)">
+            <pattern>
+                <token>every</token>
+                <token>now</token>
+                <token>and</token>
+                <token>then</token>
+            </pattern>
+            <message>Consider an alternative to strengthen your wording.</message>
+            <suggestion>sometimes</suggestion>
+        </rule>
+        <rule id="FEMALE_ACTOR" name="female actor (actress)">
+            <pattern>
+                <token regexp="yes">female|wom[ae]n</token>
+                <token regexp="yes">actor|actress</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>actress</suggestion>
+        </rule>
+        <rule id="FEMALE_WAITER" name="female waiter (waitress)">
+            <pattern>
+                <token regexp="yes">female|wom[ae]n</token>
+                <token regexp="yes">waiter|waitress</token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>waitress</suggestion>
+        </rule>
+        <rule id="FIRST_WOMAN_NOUN" name="first woman president (female president)">
+            <pattern>
+                <token regexp="yes">first|second|third</token>
+                <token regexp="yes">wom[ae]n</token>
+                <token regexp="yes">officer|commander|minister|player|graduate|engineer|doctor|dentist|teacher|professor|speaker|president|senator|representative|employee|athlete|instructor|nominee|judge</token>
+            </pattern>
+            <message>Use</message>
+            <suggestion>first|second|third female officer|commander|minister|player|graduate|engineer|doctor|dentist|teacher|professor|speaker|president|senator|representative|employee|athlete|instructor|nominee|judge</suggestion>
+        </rule>
+        <rule id="FIRST_MAN_NOUN" name="first man president (male president)">
+            <pattern>
+                <token regexp="yes">first|second|third</token>
+                <token>man</token>
+                <token regexp="yes">officer|commander|minister|player|graduate|engineer|doctor|dentist|teacher|professor|speaker|president|senator|representative|employee|athlete|instructor|nominee|judge</token>
+            </pattern>
+            <message>Use</message>
+            <suggestion>first|second|third male officer|commander|minister|player|graduate|engineer|doctor|dentist|teacher|professor|speaker|president|senator|representative|employee|athlete|instructor|nominee|judge</suggestion>
+        </rule>
+        <rule id="MOUNT_FUJIYAMA" name="Mount Fuji">
+            <pattern>
+                <token>Mount</token>
+                <token>Fujiyama</token>
+            </pattern>
+            <message>As “Yama” means “mountain” in Japanese, better write</message>
+            <suggestion>Mount Fuji</suggestion>
+        </rule>
+    </category>
+    <category id="PLAIN_ENGLISH" name="Plain English">
+        <rule id="ABUNDANCE" name="abundance">
+            <pattern>
+                <token>abundance</token>
+            </pattern>
+            <message>Use</message>
+            <suggestion>enough</suggestion>
+        </rule>
+        <rule id="ACCEDE_TO" name="accede to (give in)">
+            <pattern>
+                <token>accede</token>
+                <token>to</token>
+            </pattern>
+            <message>Unless it is a throne that is acceded to, change into</message>
+            <suggestion>allow, agree to or give in to</suggestion>
+        </rule>
+        <rule id="ACCELERATE" name="accelerate">
+            <pattern>
+                <token>accelerate</token>
+            </pattern>
+            <message>Technical. Elsewhere replace with</message>
+            <suggestion>speed up</suggestion>
+        </rule>
+        <rule id="ACCENTUATE" name="accentuate">
+            <pattern>
+                <token>accentuate</token>
+            </pattern>
+            <message>Replace with</message>
+            <suggestion>stress</suggestion>
+        </rule>
+        <rule id="ACCOMMODATION" name="accommodation">
+            <pattern>
+                <token>accommodation</token>
+            </pattern>
+            <message>Grammar correction</message>
+            <suggestion>room</suggestion>
+        </rule>
+        <rule id="ACCOMPANY" name="accompany">
+            <pattern>
+                <token>accompany</token>
+            </pattern>
+            <message>If not in musical context, use</message>
+            <suggestion>go with</suggestion>
+        </rule>
+        <rule id="ACCURATE" name="accurate">
+            <pattern>
+                <token>accurate</token>
+            </pattern>
+            <message>If it is not about aiming, use</message>
+            <suggestion>right</suggestion>
+        </rule>
+        <rule id="ALONG_THE_LINES_OF" name="along the lines of (like)">
+            <pattern>
+                <token>along</token>
+                <token>the</token>
+                <token>lines</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>like</suggestion>
+        </rule>
+        <rule id="AS_A_MATTER_OF_FACT" name="as a matter of fact (in fact, actually, omit) ">
+            <pattern>
+                <token>as</token>
+                <token>a</token>
+                <token>matter</token>
+                <token>of</token>
+                <token>fact</token>
+            </pattern>
+            <message>Replace with less wordy</message>
+            <suggestion>in fact</suggestion>
+        </rule>
+        <rule id="AS_PER" name="as per (as, in accordance with) ">
+            <pattern>
+                <token>as</token>
+                <token>per</token>
+            </pattern>
+            <message>Business jargon meaning</message>
+            <suggestion>in accordance with</suggestion>
+        </rule>
+        <rule id="ASSIST_ASSISTANCE" name="assist, assistance (help)">
+            <pattern>
+                <token regexp="yes">assist|assistance</token>
+            </pattern>
+            <message>Did you mean simpler</message>
+            <suggestion>help</suggestion>
+        </rule>
+        <rule id="AT_ALL_TIMES" name="at all times (always) ">
+            <pattern>
+                <token>at</token>
+                <token>all</token>
+                <token>times</token>
+            </pattern>
+            <message>Simply,</message>
+            <suggestion>always</suggestion>
+        </rule>
+        <rule id="AT_YOUR_EARLIEST_CONVENIENCE" name="at your earliest convenience (as soon as you can)">
+            <pattern>
+                <token>at</token>
+                <token>your</token>
+                <token>earliest</token>
+                <token>convenience</token>
+            </pattern>
+            <message>Overly formal. Did you mean</message>
+            <suggestion>as soon as you can</suggestion>
+        </rule>
+        <rule id="DUE_TO_THE_FACT" name="wordy phrase: due to the fact">
+            <pattern>
+                <token>due</token>
+                <token>to</token>
+                <token>the</token>
+                <token>fact</token>
+                <token>that</token>
+            </pattern>
+            <message>Remove wordy "\1 \2 \3 \4 \5"</message>
+            <suggestion>because</suggestion>
+        </rule>
+        <rule id="BELATED" name="belated (late)">
+            <pattern>
+                <token>belated</token>
+            </pattern>
+            <message>Outdated. Did you mean</message>
+            <suggestion>late</suggestion>
+        </rule>
+        <rule id="BY_MEANS_OF" name="by means of (by, with, through)">
+            <pattern>
+                <token>by</token>
+                <token>means</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>by</suggestion>
+        </rule>
+        <rule id="CURRENTLY" name="currently">
+            <pattern>
+                <token>currently</token>
+            </pattern>
+            <message>Omit or replace with</message>
+            <suggestion>now</suggestion>
+        </rule>
+        <rule id="FOR_THE_PURPOSE_OF" name="for the purpose of (to, for)">
+            <pattern>
+                <token>for</token>
+                <token>the</token>
+                <token>purpose</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to</suggestion>
+        </rule>
+        <rule id="HAVE_THE_ABILITY_TO" name="have the ability to (be able to, can)">
+            <pattern>
+                <token>have</token>
+                <token>the</token>
+                <token>ability</token>
+                <token>to</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>can</suggestion>
+        </rule>
+        <rule id="HAVE_A_TENDENCY" name="have a tendency (tends)">
+            <pattern>
+                <token>have</token>
+                <token>a</token>
+                <token>tendency</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>tends</suggestion>
+        </rule>
+        <rule id="in_excess_of" name="in excess of (more than, over, exceeding)">
+            <pattern>
+                <token>in</token>
+                <token>excess</token>
+                <token>of</token>
+            </pattern>
+            <message>Better with</message>
+            <suggestion>more than</suggestion>
+        </rule>
+        <rule id="IN_TERMS_OF" name="in terms of (in, for)">
+            <pattern>
+                <token>in</token>
+                <token>terms</token>
+                <token>of</token>
+            </pattern>
+            <message>Change to</message>
+            <suggestion>in</suggestion>
+        </rule>
+        <rule id="IN_THE_AFFIRMATIVE" name="in the affirmative (yes, affirmatively)">
+            <pattern>
+                <token>in</token>
+                <token>the</token>
+                <token>affirmative</token>
+            </pattern>
+            <message>Change to</message>
+            <suggestion>yes</suggestion>
+        </rule>
+        <rule id="IN_THE_CASE_OF" name="in the case of (about, to)">
+            <pattern>
+                <token>in</token>
+                <token>the</token>
+                <token>case</token>
+                <token>of</token>
+            </pattern>
+            <message>Change to</message>
+            <suggestion>about</suggestion>
+        </rule>
+        <rule id="IN_THE_EVENT" name="in the event of, in the event that (if, in case)">
+            <pattern>
+                <token>in</token>
+                <token>the</token>
+                <token>event</token>
+                <token regexp="yes">of|that</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>if</suggestion>
+        </rule>
+        <rule id="IN_THE_FINAL_ANALYSIS" name="in the final or last or ultimate analysis (finally, in conclusion)">
+            <pattern>
+                <token>in</token>
+                <token>the</token>
+                <token regexp="yes">final|last|ultimate</token>
+                <token>analysis</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>finally</suggestion>
+        </rule>
+        <rule id="IN_THE_NATURE_OF" name="in the nature of (like)">
+            <pattern>
+                <token>in</token>
+                <token>the</token>
+                <token>nature</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>like</suggestion>
+        </rule>
+        <rule id="IN_THE_NEIGHBORHOOD_OF" name="in the neighborhood of (about)">
+            <pattern>
+                <token>in</token>
+                <token>the</token>
+                <token>neighborhood</token>
+                <token>of</token>
+            </pattern>
+            <message>Can be used as</message>
+            <suggestion>almost</suggestion>
+        </rule>
+        <rule id="MAJORITY" name="majority (most, usually) when not voting">
+            <pattern>
+                <token>majority</token>
+            </pattern>
+            <message>Majority in the sense of "more than half" is used with countable nouns only (esp. when voting); for uncountable nouns, use</message>
+            <suggestion>most</suggestion>
+        </rule>
+        <rule id="MAKE_DECISIONS_ABOUT" name="make decisions about (decide on)">
+            <pattern>
+                <token>make</token>
+                <token>decision</token>
+                <token>about</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>decide on</suggestion>
+        </rule>
+        <rule id="NOT_ABLE" name="not able (unable)">
+            <pattern>
+                <token>not</token>
+                <token>able</token>
+            </pattern>
+            <message>Avoid using "not". Did you mean</message>
+            <suggestion>unable</suggestion>
+        </rule>
+        <rule id="NOT_ACCEPT" name="not accept (reject)">
+            <pattern>
+                <token>not</token>
+                <token>accept</token>
+            </pattern>
+            <message>Avoid using "not". Did you mean</message>
+            <suggestion>reject</suggestion>
+        </rule>
+        <rule id="NOT_CERTAIN" name="not certain (uncertain)">
+            <pattern>
+                <token>not</token>
+                <token>certain</token>
+            </pattern>
+            <message>Avoid using "not". Did you mean</message>
+            <suggestion>uncertain</suggestion>
+        </rule>
+        <rule id="NOT_UNLIKE" name="not unlike (similar, alike)">
+            <pattern>
+                <token>not</token>
+                <token>unlike</token>
+            </pattern>
+            <message>Avoid using "not". Did you mean</message>
+            <suggestion>similar</suggestion>
+        </rule>
+        <rule id="NOT_MANY" name="not many (few)">
+            <pattern>
+                <token>not</token>
+                <token>many</token>
+            </pattern>
+            <message>Avoid using "not". Did you mean</message>
+            <suggestion>few</suggestion>
+        </rule>
+        <rule id="NOT_VERY_OFTEN" name="not often, not very often (seldom. rare, rarely)">
+            <pattern>
+                <token>not</token>
+                <token>very</token>
+                <token>often</token>
+            </pattern>
+            <message>Avoid using "not". Did you mean</message>
+            <suggestion>seldom</suggestion>
+        </rule>
+        <rule id="NOT_THE_SAME" name="not the same (different)">
+            <pattern>
+                <token>not</token>
+                <token>the</token>
+                <token>same</token>
+            </pattern>
+            <message>Avoid using "not". Did you mean</message>
+            <suggestion>different</suggestion>
+        </rule>
+        <rule id="OBTAIN" name="obtain (get)">
+            <pattern>
+                <token>obtain</token>
+            </pattern>
+            <message>Did you mean simpler</message>
+            <suggestion>get</suggestion>
+        </rule>
+        <rule id="ON_THE_OCCASION_OF" name="on the occasion of (on, when, because of)">
+            <pattern>
+                <token>on</token>
+                <token>the</token>
+                <token>occasion</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>on</suggestion>
+        </rule>
+        <rule id="ON_THE_OTHER_HAND" name="on the other hand (omit, but, yet)">
+            <pattern>
+                <token>on</token>
+                <token>the</token>
+                <token>other</token>
+                <token>hand</token>
+            </pattern>
+            <message>Avoid completely or try</message>
+            <suggestion>but</suggestion>
+        </rule>
+        <rule id="ON_TWO_SEPARATE_OCCASIONS" name="on two separate occasions (twice)">
+            <pattern>
+                <token>on</token>
+                <token>two</token>
+                <token>separate</token>
+                <token>occasions</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>twice</suggestion>
+        </rule>
+        <rule id="SOONER_RATHER_THAN_LATER" name="sooner rather than later (soon, now)">
+            <pattern>
+                <token>sooner</token>
+                <token>rather</token>
+                <token>than</token>
+                <token>later</token>
+            </pattern>
+            <message>Try</message>
+            <suggestion>soon</suggestion>
+        </rule>
+        <rule id="SUFFICIENT" name="sufficient (enough)">
+            <pattern>
+                <token>sufficient</token>
+            </pattern>
+            <message>Use</message>
+            <suggestion>enough</suggestion>
+        </rule>
+        <rule id="THE_UNDERSIGNED" name="the undersigned (I, me, we)">
+            <pattern>
+                <token>the</token>
+                <token>undersigned</token>
+            </pattern>
+            <message>Legalese. Did you mean</message>
+            <suggestion>I</suggestion>
+        </rule>
+        <rule id="UNTIL_SUCH_TIME_AS" name="until such time as (until)">
+            <pattern>
+                <token>until</token>
+                <token>such</token>
+                <token>time</token>
+                <token>as</token>
+            </pattern>
+            <message>Use</message>
+            <suggestion>until</suggestion>
+        </rule>
+        <rule id="WITH_OR_IN_REFERENCE_OR_REGARD_TO" name="with/in reference to, with/in regard to (about, of, on, for, concerning, regarding)">
+            <pattern>
+                <token regexp="yes">with|in</token>
+                <token regexp="yes">reference|regard</token>
+                <token>to</token>
+            </pattern>
+            <message>Replace with shorter</message>
+            <suggestion>about</suggestion>
+        </rule>
+        <rule id="YOU_ARE_REQUESTED" name="you are requested (please)">
+            <pattern>
+                <token>you</token>
+                <token>are</token>
+                <token>requested</token>
+                <token>to</token>
+            </pattern>
+            <message>Replace with</message>
+            <suggestion>please</suggestion>
+        </rule>
+        <rule id="REFERRING_BACK" name="Legal jargon referring to previous text">
+            <pattern>
+                <token regexp="yes">above-mentioned|abovementioned|above-listed|abovelisted|beforementioned|before-mentioned|aforementioned|afore-mentioned</token>
+            </pattern>
+            <message>Legalese. Bad style in any normal text. Remove and explain. Use</message>
+            <suggestion>this</suggestion>
+        </rule>
+    </category>
+    <category id="WIKIPEDIA" name="Wikipedia">
+        <rule id="HASH_SYMBOL" name="Replace '#'">
+            <pattern>
+                <token>#</token>
+            </pattern>
+            <message>Wikipedia style. Replace "#" with</message>
+            <suggestion>No.</suggestion>
+        </rule>
+        <rule id="WIKIPEDIA_12_PM" name="Replace '12 pm' with 'noon'">
+            <pattern>
+                <token>12</token>
+                <token>pm</token>
+            </pattern>
+            <message>Wikipedia style. Replace "12 pm" with</message>
+            <suggestion>noon</suggestion>
+        </rule>
+        <rule id="WIKIPEDIA_12_AM" name="Replace '12 am' with 'midnight'">
+            <pattern>
+                <token>12</token>
+                <token>am</token>
+            </pattern>
+            <message>Wikipedia style. Replace "12 am" with</message>
+            <suggestion>midnight</suggestion>
+        </rule>
+    </category>
+</rules>
