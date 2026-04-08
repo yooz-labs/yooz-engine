@@ -1,0 +1,3710 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rules>
+    <category id="CASING" name="Upper/Lowercase">
+        <rule id="TROJAN_HORSE_CASING" name="trojan (Trojan) horse">
+            <pattern>
+                <token case_sensitive="yes">trojan</token>
+                <token regexp="yes">horses?|virus(es)?|asteroids?|points?</token>
+            </pattern>
+            <message>Grammar correction</message>
+            <suggestion>Trojan horses?|virus(es)?|asteroids?|points?</suggestion>
+        </rule>
+        <rule id="OXFORD_COMMA_CASING" name="oxford (Oxford) comma">
+            <pattern>
+                <token case_sensitive="yes">oxford</token>
+                <token regexp="yes">commas?</token>
+            </pattern>
+            <message>The name of this dictionary or university needs to be capitalized.</message>
+            <suggestion>Oxford commas?</suggestion>
+        </rule>
+        <rule id="VOX_DEI" name="vox populi, vox dei (Dei)">
+            <pattern>
+                <token>populi</token>
+                <token>,</token>
+                <token>vox</token>
+                <token case_sensitive="yes">dei</token>
+            </pattern>
+            <message>In this Latin phrase,</message>
+            <suggestion>populi , vox Dei</suggestion>
+        </rule>
+        <rule id="EUCLIDEAN_CAPITALIZATION" name="euclidean (Euclidean) distance">
+            <pattern>
+                <token case_sensitive="yes">euclidean</token>
+            </pattern>
+            <message>The adjective "Euclidean" is typically capitalized.</message>
+            <suggestion>Euclidean</suggestion>
+        </rule>
+        <rule id="HALLOWEEN" name="Halloween">
+            <pattern>
+                <token case_sensitive="yes">halloween</token>
+            </pattern>
+            <message>The name of this day needs to be capitalized.</message>
+            <suggestion>Halloween</suggestion>
+        </rule>
+        <rule id="PILATES" name="Pilates">
+            <pattern>
+                <token case_sensitive="yes">pilates</token>
+            </pattern>
+            <message>The name of this physical fitness system is normally capitalized.</message>
+            <suggestion>Pilates</suggestion>
+        </rule>
+        <rule id="NEW_GUINEA" name="New guinea (New Guinea)">
+            <pattern>
+                <token>New</token>
+                <token>
+                    Guinea
+                    </token>
+            </pattern>
+            <message>Did you mean the proper noun</message>
+            <suggestion>New Guinea</suggestion>
+        </rule>
+        <rule id="PARMESAN" name="parmesan (Parmesan)">
+            <pattern>
+                <token case_sensitive="yes">parmesan</token>
+            </pattern>
+            <message>The word for this type of cheese is normally capitalized.</message>
+            <suggestion>Parmesan</suggestion>
+        </rule>
+    </category>
+    <category id="TYPOS" name="Possible Typo">
+        <rule id="BREATH_OF_SCOPE_BREADTH_OF_SCOPE" name="'breath of scope' (breadth of scope)">
+            <pattern>
+                <token>breath</token>
+                <token>of</token>
+                <token>scope</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>breadth of scope</suggestion>
+        </rule>
+        <rule id="BE_SEEM" name="can be seem (seen)">
+            <pattern>
+                <token case_sensitive="yes">be</token>
+                <token>seem</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>be seen</suggestion>
+        </rule>
+        <rule id="OVERT_HE" name="overt he (over the)">
+            <pattern>
+                <token>overt</token>
+                <token regexp="yes" case_sensitive="yes">[Hh]e</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>over the</suggestion>
+        </rule>
+        <rule id="HIPAA" name="HIPPA (HIPAA)">
+            <pattern>
+                <token>hippa
+                    </token>
+            </pattern>
+            <message>Did you mean 'HIPAA', the "Health Insurance Portability and Accountability Act"?</message>
+            <suggestion>HIPAA</suggestion>
+        </rule>
+        <rule id="UNITE_KINGDOM" name="Unite Kingdom -&gt; United Kingdom">
+            <pattern>
+                <token>unite</token>
+                <token>kingdom</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>United Kingdom</suggestion>
+        </rule>
+        <rule id="PERPETUUM_MOBILE" name="perpetuum mobile">
+            <pattern>
+                <token regexp="yes">p[aei]rp[aei]t(ue?|eu)m</token>
+                <token regexp="yes">mobil[eèé]?</token>
+            </pattern>
+            <message>Did you mean the Latin phrase</message>
+            <suggestion>perpetuum mobile</suggestion>
+        </rule>
+        <rule id="BEAT_REGARDS" name="beat (best) regards">
+            <pattern>
+                <token regexp="yes">bea?t</token>
+                <token>regards</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>best regards</suggestion>
+        </rule>
+        <rule id="LING" name="ling (long)">
+            <pattern>
+                <token case_sensitive="yes">ling</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>long</suggestion>
+        </rule>
+        <rule id="RE_CENT" name="re cent (recent)">
+            <pattern>
+                <token>re</token>
+                <token>cent</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>recent</suggestion>
+        </rule>
+        <rule id="IF_WHICH" name="if which (if, which)">
+            <pattern>
+                <token>if</token>
+                <token>which</token>
+            </pattern>
+            <message>One of these words is redundant, or a comma is missing.</message>
+            <suggestion>which</suggestion>
+        </rule>
+        <rule id="GOOD_NEWS" name="the good new (news) is ...">
+            <pattern>
+                <token>the</token>
+                <token regexp="yes">good|bad</token>
+                <token>new</token>
+                <token>be</token>
+                <token>that</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>the good|bad news be that</suggestion>
+        </rule>
+        <rule id="AH_HA" name="ah ha (aha)">
+            <pattern>
+                <token>ah</token>
+                <token>ha</token>
+            </pattern>
+            <message>This word is usually spelled as one word.</message>
+            <suggestion>aha</suggestion>
+        </rule>
+        <rule id="A_WAS" name="a was (way)">
+            <pattern>
+                <token>a</token>
+                <token>was</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>a way</suggestion>
+        </rule>
+        <rule id="AS_OPPOSE_TO_AS_OPPOSED_TO" name="as oppose to (as opposed to)">
+            <pattern>
+                <token>as</token>
+                <token>oppose</token>
+                <token>to</token>
+            </pattern>
+            <message>Did you mean the common phrase/idiom</message>
+            <suggestion>as opposed to</suggestion>
+        </rule>
+        <rule id="YOUR_SHOULD" name="your (you) should">
+            <pattern>
+                <token>your</token>
+                <token regexp="yes">should|could</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>you should|could</suggestion>
+        </rule>
+        <rule id="APART_FORM" name="apart form (apart from)">
+            <pattern>
+                <token>apart</token>
+                <token>form</token>
+            </pattern>
+            <message>Possible typo. Did you mean</message>
+            <suggestion>apart from</suggestion>
+        </rule>
+        <rule id="UP_TO_DATA" name="up to data (date)">
+            <pattern>
+                <token>up</token>
+                <token>to</token>
+                <token>data</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>up to date</suggestion>
+        </rule>
+        <rule id="FEEL_TREE_TO" name="feel tree (free) to">
+            <pattern>
+                <token>feel</token>
+                <token>tree</token>
+                <token>to</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>feel free to</suggestion>
+        </rule>
+        <rule id="DE_JURO" name="de juro (jure)">
+            <pattern>
+                <token>de</token>
+                <token>juro</token>
+            </pattern>
+            <message>This is an incorrect spelling of a Latin phrase. Did you mean</message>
+            <suggestion>de jure</suggestion>
+        </rule>
+        <rule id="I_THIN" name="I thin (think)">
+            <pattern>
+                <token regexp="yes">am|do|can|will</token>
+                <token>I</token>
+                <token>thin</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>am|do|can|will I think</suggestion>
+        </rule>
+        <rule id="ALL_BE_IT" name="all be it (albeit)">
+            <pattern>
+                <token>all</token>
+                <token>be</token>
+                <token>it</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>albeit</suggestion>
+        </rule>
+        <rule id="THERE_EXITS" name="there exits (there exists)">
+            <pattern>
+                <token>there</token>
+                <token>exits</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>there exists</suggestion>
+        </rule>
+        <rule id="IN_PARENTHESIS" name="in parenthesis (in parentheses)">
+            <pattern>
+                <token>in</token>
+                <token>parenthesis</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>in parentheses</suggestion>
+        </rule>
+        <rule id="VE_GO_TO" name="I've go to (I've got to)">
+            <pattern>
+                <token>'ve</token>
+                <token>go</token>
+                <token>to</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>'ve got to</suggestion>
+        </rule>
+        <rule id="FOR_ALONG_TIME" name="for along time (for a long time)">
+            <pattern>
+                <token>for</token>
+                <token>along</token>
+                <token>time</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>for a long time</suggestion>
+        </rule>
+        <rule id="AWAY_FRO" name="away fro (away from)">
+            <pattern>
+                <token>away</token>
+                <token>fro</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>away from</suggestion>
+        </rule>
+        <rule id="ONE_THE_ONE_HAND" name="'One the one hand' (On the one hand)">
+            <pattern>
+                <token>One</token>
+                <token>the</token>
+                <token regexp="yes">one|other</token>
+                <token>hand</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>on the one|other hand</suggestion>
+        </rule>
+        <rule id="PER_SE" name="per say (per se)">
+            <pattern>
+                <token>per</token>
+                <token>say</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>per se</suggestion>
+        </rule>
+        <rule id="UNDER_WEAR" name="under wear (underwear)">
+            <pattern>
+                <token>under</token>
+                <token>wear</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>underwear</suggestion>
+        </rule>
+        <rule id="WHAT_SO_EVER" name="whatsoever → whatsoever">
+            <pattern>
+                <token>what</token>
+                <token>so</token>
+                <token>ever</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>whatsoever</suggestion>
+        </rule>
+        <rule id="TOT_HE" name="tot he (to the)">
+            <pattern>
+                <token>tot</token>
+                <token>he</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to the</suggestion>
+        </rule>
+        <rule id="WITH_OUT" name="with out (without)">
+            <pattern>
+                <token>with</token>
+                <token>out</token>
+            </pattern>
+            <message>This word is usually spelled as one word. Did you mean</message>
+            <suggestion>without</suggestion>
+        </rule>
+        <rule id="ALLOT_OF" name="allot of (a lot of)">
+            <pattern>
+                <token>allot</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>a lot of</suggestion>
+        </rule>
+        <rule id="BED_ENGLISH" name="bed/bat (bad) English/...">
+            <pattern>
+                <token regexp="yes">bed|bat</token>
+                <token regexp="yes">English|attitudes?|foreign|languages?|spellings?|temper|grammar|news|ideas?|links?|days?|weather|luck|guys?|taste|breath|habits?|people|examples?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>bad English|attitudes?|foreign|languages?|spellings?|temper|grammar|news|ideas?|links?|days?|weather|luck|guys?|taste|breath|habits?|people|examples?</suggestion>
+        </rule>
+        <rule id="THINK_YOU_A" name="think you a/an (are)">
+            <pattern>
+                <token regexp="yes">th(inks?|ought)</token>
+                <token>you</token>
+                <token regexp="yes">an?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>th(inks?|ought) you are</suggestion>
+        </rule>
+        <rule id="IS_WERE" name="is were (where)">
+            <pattern>
+                <token>is</token>
+                <token>were</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>is where</suggestion>
+        </rule>
+        <rule id="GOING_ONE" name="going one (on)">
+            <pattern>
+                <token>what</token>
+                <token>be</token>
+                <token>going</token>
+                <token>one</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>what be going on</suggestion>
+        </rule>
+        <rule id="NAIL_ON_THE_HEAD" name="nail on the hat (head)">
+            <pattern>
+                <token>nail</token>
+                <token>on</token>
+                <token>the</token>
+                <token regexp="yes">h[ia][td]</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nail on the head</suggestion>
+        </rule>
+        <rule id="ON_THE_SHELF" name="sit of (on) the shelf">
+            <pattern>
+                <token regexp="yes">sit|be|leave|put|back</token>
+                <token>it</token>
+                <token regexp="yes">o(ne|[fhr])|in</token>
+                <token>the</token>
+                <token>shelf</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>sit|be|leave|put|back it on the shelf</suggestion>
+        </rule>
+        <rule id="COME_THROUGH" name="come threw (through)">
+            <pattern>
+                <token>come</token>
+                <token regexp="yes">thr[eo]w</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>come through</suggestion>
+        </rule>
+        <rule id="WEATHER_WHETHER" name="weather (whether)">
+            <pattern>
+                <token regexp="yes">wonder|ask|know</token>
+                <token>weather</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>wonder|ask|know whether</suggestion>
+        </rule>
+        <rule id="SEE_SEA" name="see (sea)">
+            <pattern>
+                <token>at</token>
+                <token>see</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>at sea</suggestion>
+        </rule>
+        <rule id="THE_ONLY_ON" name="the only on (one)">
+            <pattern>
+                <token>the</token>
+                <token regexp="yes">only|special|chosen</token>
+                <token>
+                        on
+                        </token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>the only|special|chosen one</suggestion>
+        </rule>
+        <rule id="PLEASE_NOT_THAT" name="please not (note) that">
+            <pattern>
+                <token>please</token>
+                <token>not</token>
+                <token regexp="yes">that|there</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>please note that|there</suggestion>
+        </rule>
+        <rule id="THROUGH_AWAY" name="through (throw) away">
+            <pattern>
+                <token>through</token>
+                <token>away</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>throw away</suggestion>
+        </rule>
+        <rule id="OR_WAY_IT" name="or way (was) it">
+            <pattern>
+                <token>or</token>
+                <token>way</token>
+                <token regexp="yes">(it|that|this)</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>or was (it|that|this)</suggestion>
+        </rule>
+        <rule id="YOU_THING" name="I/you/... thing (think)">
+            <pattern>
+                <token regexp="yes">I|you|s?he|they|we</token>
+                <token regexp="yes">things?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>I|you|s?he|they|we think</suggestion>
+        </rule>
+        <rule id="VBZ_VBD" name="it (is)">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">[Ii]s</token>
+                <token regexp="yes">wasn?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>it wasn?</suggestion>
+        </rule>
+        <rule id="LOOK_ATE" name="look ate (at)">
+            <pattern>
+                <token regexp="yes">look|stand</token>
+                <token>ate</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>look|stand at</suggestion>
+        </rule>
+        <rule id="A_KNOW_BUG" name="a know (known) bug/problem">
+            <pattern>
+                <token>a</token>
+                <token>know</token>
+                <token regexp="yes">bug|problem</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>a known bug|problem</suggestion>
+        </rule>
+        <rule id="MY_BE" name="my (may) be">
+            <pattern>
+                <token>my</token>
+                <token>be</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>may be</suggestion>
+        </rule>
+        <rule id="CAN_NOT" name="can not (cannot)">
+            <pattern>
+                <token>can</token>
+                <token>not</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>cannot</suggestion>
+        </rule>
+        <rule id="PRESIDENTS_DAY_APOSTROPHE" name="missing apostrophe in 'Presidents Day'">
+            <pattern>
+                <token>presidents</token>
+                <token>day</token>
+            </pattern>
+            <message>It appears that a possessive apostrophe is missing, if you mean the legal holiday</message>
+            <suggestion>Presidents' Day</suggestion>
+        </rule>
+        <rule id="INTERNATIONAL_WORKERS_DAY_APOSTROPHE" name="missing apostrophe in 'International Workers Day'">
+            <pattern>
+                <token>international</token>
+                <token>workers</token>
+                <token>day</token>
+            </pattern>
+            <message>It appears that a possessive apostrophe is missing, if you mean the legal holiday</message>
+            <suggestion>International Workers' Day</suggestion>
+        </rule>
+        <rule id="VARY_MUCH" name="...you vary (very) much">
+            <pattern>
+                <token>you</token>
+                <token>vary</token>
+                <token>much</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>you very much</suggestion>
+        </rule>
+        <rule id="SELF_FISH" name="self fish (selfish)">
+            <pattern>
+                <token>self</token>
+                <token>fish</token>
+            </pattern>
+            <message>Did you mean the adjective</message>
+            <suggestion>selfish</suggestion>
+        </rule>
+        <rule id="EVERY_WHERE" name="every where (everywhere)">
+            <pattern>
+                <token>every</token>
+                <token>where</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>everywhere</suggestion>
+        </rule>
+        <rule id="HOW_EVER" name="how ever (however)">
+            <pattern>
+                <token>how</token>
+                <token>ever</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>however</suggestion>
+        </rule>
+        <rule id="LAUGHING_STOCK" name="laughing stock (laughingstock)">
+            <pattern>
+                <token>laughing</token>
+                <token>stock</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>laughingstock</suggestion>
+        </rule>
+        <rule id="MEAN_WHILE" name="mean while (meanwhile)">
+            <pattern>
+                <token>mean</token>
+                <token>while</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>meanwhile</suggestion>
+        </rule>
+        <rule id="NATION_WIDE" name="nation wide (nationwide)">
+            <pattern>
+                <token>nation</token>
+                <token>wide</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nationwide</suggestion>
+        </rule>
+        <rule id="NEAR_BY" name="near by (nearby)">
+            <pattern>
+                <token>near</token>
+                <token>by</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nearby</suggestion>
+        </rule>
+        <rule id="NOW_A_DAYS" name="now a days (nowadays)">
+            <pattern>
+                <token>now</token>
+                <token>a</token>
+                <token>days</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nowadays</suggestion>
+        </rule>
+        <rule id="NOW_A_DAYS_HYPHEN" name="now-a-days (nowadays)">
+            <pattern>
+                <token>now-a-days</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nowadays</suggestion>
+        </rule>
+        <rule id="NOW_A_DAY_HYPHEN" name="now-a-day (nowadays)">
+            <pattern>
+                <token>now-a-day</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nowadays</suggestion>
+        </rule>
+        <rule id="OUT_SIDE" name="out side (outside)">
+            <pattern>
+                <token>out</token>
+                <token>side</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>outside</suggestion>
+        </rule>
+        <rule id="OVER_LOOKED" name="over looked (overlooked)">
+            <pattern>
+                <token>over</token>
+                <token>looked</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>overlooked</suggestion>
+        </rule>
+        <rule id="OVER_LOOKING" name="over looking (overlooking)">
+            <pattern>
+                <token>over</token>
+                <token>looking</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>overlooking</suggestion>
+        </rule>
+        <rule id="OVER_RATED" name="over rated (overrated)">
+            <pattern>
+                <token>over</token>
+                <token>rated</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>overrated</suggestion>
+        </rule>
+        <rule id="SKY_DIVING" name="sky diving (skydiving)">
+            <pattern>
+                <token>sky</token>
+                <token>diving</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>skydiving</suggestion>
+        </rule>
+        <rule id="SOME_HOW" name="some how (somehow)">
+            <pattern>
+                <token>some</token>
+                <token>how</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>somehow</suggestion>
+        </rule>
+        <rule id="THEM_SELVES" name="them selves (themselves)">
+            <pattern>
+                <token>them</token>
+                <token>selves</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>themselves</suggestion>
+        </rule>
+        <rule id="WORTH_WHILE" name="worth while (worthwhile)">
+            <pattern>
+                <token>worth</token>
+                <token>while</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>worthwhile</suggestion>
+        </rule>
+        <rule id="WAY_SIDE" name="way side (wayside)">
+            <pattern>
+                <token>way</token>
+                <token>side</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>wayside</suggestion>
+        </rule>
+        <rule id="ALONG_SIDE" name="along side (alongside)">
+            <pattern>
+                <token>along</token>
+                <token>side</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>alongside</suggestion>
+        </rule>
+        <rule id="BE_CAUSE" name="be cause (because)">
+            <pattern>
+                <token>be</token>
+                <token>cause</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>because</suggestion>
+        </rule>
+        <rule id="BE_WARE" name="be ware (beware)">
+            <pattern>
+                <token>be</token>
+                <token>ware</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>beware</suggestion>
+        </rule>
+        <rule id="BEFORE_HAND" name="before hand (beforehand)">
+            <pattern>
+                <token>before</token>
+                <token>hand</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>beforehand</suggestion>
+        </rule>
+        <rule id="THROUGH_OUT" name="through out (throughout)">
+            <pattern>
+                <token>through</token>
+                <token>out</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>throughout</suggestion>
+        </rule>
+        <rule id="ON-GOING" name="on-going (ongoing)">
+            <pattern>
+                <token>on-going</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>ongoing</suggestion>
+        </rule>
+        <rule id="FREE_LANCE" name="free lance (freelance)">
+            <pattern>
+                <token>free</token>
+                <token>lance</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>freelance</suggestion>
+        </rule>
+        <rule id="FREE_LANCES" name="free lances (freelances)">
+            <pattern>
+                <token>free</token>
+                <token>lances</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>freelances</suggestion>
+        </rule>
+        <rule id="FREE_LANCING" name="free lancing (freelancing)">
+            <pattern>
+                <token>free</token>
+                <token>lancing</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>freelancing</suggestion>
+        </rule>
+        <rule id="KEY_WORDS" name="key words (keywords)">
+            <pattern>
+                <token>key</token>
+                <token>words</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>keywords</suggestion>
+        </rule>
+        <rule id="CROWD_SOURCING" name="crowd sourcing (crowdsourcing)">
+            <pattern>
+                <token>crowd</token>
+                <token>sourcing</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>crowdsourcing</suggestion>
+        </rule>
+        <rule id="META_DATA" name="meta data (metadata)">
+            <pattern>
+                <token>meta</token>
+                <token>data</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>metadata</suggestion>
+        </rule>
+        <rule id="ANY_WHERE" name="any where (anywhere)">
+            <pattern>
+                <token>any</token>
+                <token>where</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>anywhere</suggestion>
+        </rule>
+        <rule id="SOME_WHERE" name="some where (somewhere)">
+            <pattern>
+                <token>some</token>
+                <token>where</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>somewhere</suggestion>
+        </rule>
+        <rule id="OTHER_THEN" name="other then (other than)">
+            <pattern>
+                <token>other</token>
+                <token>then</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>other than</suggestion>
+        </rule>
+        <rule id="BAITED_BREATH" name="baited (bated) breath">
+            <pattern>
+                <token>baited</token>
+                <token>breath</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>bated breath</suggestion>
+        </rule>
+        <rule id="BARE_IN_MIND" name="bare (bear) in mind">
+            <pattern>
+                <token>bare</token>
+                <token>in</token>
+                <token>mind</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>bear in mind</suggestion>
+        </rule>
+        <rule id="PLAYOFF_BIRTH" name="playoff birth (berth)">
+            <pattern>
+                <token>playoff</token>
+                <token>birth</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>playoff berth</suggestion>
+        </rule>
+        <rule id="DISC_BREAK" name="disc break (brakes)">
+            <pattern>
+                <token>disc</token>
+                <token>break</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>disc brake</suggestion>
+        </rule>
+        <rule id="HIT_THE_BREAKS" name="hit the breaks (brakes)">
+            <pattern>
+                <token>hit</token>
+                <token>the</token>
+                <token>breaks</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>hit the brakes</suggestion>
+        </rule>
+        <rule id="FULL_COMPLIMENT_OF" name="full compliment (complement) of">
+            <pattern>
+                <token>full</token>
+                <token>compliment</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>full complement of</suggestion>
+        </rule>
+        <rule id="IN_EDITION_TO" name="in edition (addition) to">
+            <pattern>
+                <token>in</token>
+                <token>edition</token>
+                <token>to</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>in addition to</suggestion>
+        </rule>
+        <rule id="FAIRED_AS_WELL" name="faired (fared) as well">
+            <pattern>
+                <token>faired</token>
+                <token>as</token>
+                <token>well</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>fared as well</suggestion>
+        </rule>
+        <rule id="AND_SO_FOURTH" name="and so fourth (forth)">
+            <pattern>
+                <token>and</token>
+                <token>so</token>
+                <token>fourth</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>and so forth</suggestion>
+        </rule>
+        <rule id="FORTH_PLACE" name="forth (fourth) place">
+            <pattern>
+                <token>forth</token>
+                <token>place</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>fourth place</suggestion>
+        </rule>
+        <rule id="DOOR_JAM" name="door jam (jamb)">
+            <pattern>
+                <token>door</token>
+                <token>jam</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>door jamb</suggestion>
+        </rule>
+        <rule id="MUTE_POINT" name="mute (moot) point">
+            <pattern>
+                <token>mute</token>
+                <token>point</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>moot point</suggestion>
+        </rule>
+        <rule id="MANAGERIAL_REIGNS" name="managerial reigns (reins)">
+            <pattern>
+                <token>managerial</token>
+                <token>reigns</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>managerial reins</suggestion>
+        </rule>
+        <rule id="REIGNS_OF_POWER" name="reigns (reins) of power">
+            <pattern>
+                <token>reigns</token>
+                <token>of</token>
+                <token>power</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>reins of power</suggestion>
+        </rule>
+        <rule id="ROLE_CALL" name="role (roll) call">
+            <pattern>
+                <token>role</token>
+                <token>call</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>roll call</suggestion>
+        </rule>
+        <rule id="CONSTRUCTION_SIGHT" name="construction sight (site)">
+            <pattern>
+                <token>construction</token>
+                <token>sight</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>construction site</suggestion>
+        </rule>
+        <rule id="OUT_OF_SINK" name="out of sink (sync)">
+            <pattern>
+                <token>out</token>
+                <token>of</token>
+                <token>sink</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>out of sync</suggestion>
+        </rule>
+        <rule id="DIFFERENT_TACT" name="different tact (tack)">
+            <pattern>
+                <token>different</token>
+                <token>tact</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>different tack</suggestion>
+        </rule>
+        <rule id="WAIVED_OFF" name="waived (waved) off">
+            <pattern>
+                <token>waived</token>
+                <token>off</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>waved off</suggestion>
+        </rule>
+        <rule id="WRECK_HAVOC" name="wreck (wreak) havoc">
+            <pattern>
+                <token>wreck</token>
+                <token>havoc</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>wreak havoc</suggestion>
+        </rule>
+        <rule id="DUCK_DUCT" name="duck (duct) tape">
+            <pattern>
+                <token>duck</token>
+                <token>tape</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>duct tape</suggestion>
+        </rule>
+        <rule id="GOON" name="goon (go on)">
+            <pattern>
+                <token>not</token>
+                <token case_sensitive="yes">goon</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>not go on</suggestion>
+        </rule>
+        <rule id="LAID_AHEAD" name="laid (lay) ahead">
+            <pattern>
+                <token>laid</token>
+                <token>ahead</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>lay ahead</suggestion>
+        </rule>
+        <rule id="JIVE_WITH" name="jive (jibe) with">
+            <pattern>
+                <token>jive</token>
+                <token>with</token>
+            </pattern>
+            <message>Make sure that '\1' refers to a type of dance. Did you mean</message>
+            <suggestion>jibe with</suggestion>
+        </rule>
+        <rule id="MASH_POTATOES" name="mash (mashed) potatoes">
+            <pattern>
+                <token>mash</token>
+                <token>potatoes</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>mashed potatoes</suggestion>
+        </rule>
+        <rule id="IS_RENOWN_FOR" name="is renown (renowned) for">
+            <pattern>
+                <token>is</token>
+                <token>renown</token>
+                <token>for</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>is renowned for</suggestion>
+        </rule>
+        <rule id="BREW_HAHA" name="brew haha (brouhaha)">
+            <pattern>
+                <token>brew</token>
+                <token>haha</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>brouhaha</suggestion>
+        </rule>
+        <rule id="WORKING_PROGRESS" name="working (work in) progress">
+            <pattern>
+                <token>working</token>
+                <token>progress</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>work in progress</suggestion>
+        </rule>
+        <rule id="HISTORIC_RECORD" name="historic (historical) record">
+            <pattern>
+                <token>historic</token>
+                <token>record</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>historical record</suggestion>
+        </rule>
+        <rule id="GUEST_STARED" name="guest stared (guest-starred)">
+            <pattern>
+                <token>guest</token>
+                <token>stared</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>guest-starred</suggestion>
+        </rule>
+        <rule id="IN_TITLED" name="in titled (entitled)">
+            <pattern>
+                <token regexp="yes">[ei]n</token>
+                <token>titled</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>entitled</suggestion>
+        </rule>
+        <rule id="IS_CONTAINED_OF" name="is contained of (contains)">
+            <pattern>
+                <token>is</token>
+                <token>contained</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>contains</suggestion>
+        </rule>
+        <rule id="AFTER_BEEN" name="after been (being)">
+            <pattern>
+                <token>after</token>
+                <token>been</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>after being</suggestion>
+        </rule>
+        <rule id="IMMINENT_DOMAIN" name="imminent (eminent) domain">
+            <pattern>
+                <token>imminent</token>
+                <token>domain</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>eminent domain</suggestion>
+        </rule>
+        <rule id="CHOMPING_AT_THE_BIT" name="chomping (champing) at the bit">
+            <pattern>
+                <token>chomping</token>
+                <token>at</token>
+                <token>the</token>
+                <token>bit</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>champing at the bit</suggestion>
+        </rule>
+        <rule id="CONSTELLATION_PRIZE" name="constellation (consolation) prize">
+            <pattern>
+                <token>constellation</token>
+                <token>prize</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>consolation prize</suggestion>
+        </rule>
+        <rule id="CONSTITUTES_OF" name="constitutes (consists) of">
+            <pattern>
+                <token>constitutes</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>consists of</suggestion>
+        </rule>
+        <rule id="COULD_CARE_LESS" name="could (couldn't) care less">
+            <pattern>
+                <token>could</token>
+                <token>care</token>
+                <token>less</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>couldn't care less</suggestion>
+        </rule>
+        <rule id="COULDNT_CARELESS" name="couldn't careless (care less)">
+            <pattern>
+                <token>could</token>
+                <token>n't</token>
+                <token>careless</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>could n't care less</suggestion>
+        </rule>
+        <rule id="COULD_GIVE_A_DAMN" name="could (couldn't) give a damn">
+            <pattern>
+                <token>could</token>
+                <token>give</token>
+                <token>a</token>
+                <token>damn</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>couldn't give a damn</suggestion>
+        </rule>
+        <rule id="DAILY_REGIMENT" name="daily regiment (regimen)">
+            <pattern>
+                <token>daily</token>
+                <token>regiment</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>daily regimen</suggestion>
+        </rule>
+        <rule id="DE_FACTOR" name="de factor (facto)">
+            <pattern>
+                <token>de</token>
+                <token>factor</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>de facto</suggestion>
+        </rule>
+        <rule id="WORSE-CASE_SCENARIO" name="worse-case (worst-case) scenario">
+            <pattern>
+                <token>worse-case</token>
+                <token>scenario</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>worst-case scenario</suggestion>
+        </rule>
+        <rule id="WORST_COMES_TO_WORST" name="worst (worse) comes to worst">
+            <pattern>
+                <token>worst</token>
+                <token>comes</token>
+                <token>to</token>
+                <token>worst</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>worse comes to worst</suggestion>
+        </rule>
+        <rule id="TREASURE_TROUGH" name="treasure trough (trove)">
+            <pattern>
+                <token>treasure</token>
+                <token>trough</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>treasure trove</suggestion>
+        </rule>
+        <rule id="AD_NAUSEUM" name="ad nauseum (nauseam)">
+            <pattern>
+                <token>ad</token>
+                <token>nauseum</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>ad nauseam</suggestion>
+        </rule>
+        <rule id="LAND_LOVER" name="land lover (landlubber)">
+            <pattern>
+                <token>land</token>
+                <token>lover</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>landlubber</suggestion>
+        </rule>
+        <rule id="STRIKE_A_CORD" name="strike a cord (chord)">
+            <pattern>
+                <token>strike</token>
+                <token>a</token>
+                <token>cord</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>strike a chord</suggestion>
+        </rule>
+        <rule id="SAFETY_DEPOSIT_BOX" name="safety (safe) deposit box">
+            <pattern>
+                <token>safety</token>
+                <token>deposit</token>
+                <token>box</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>safe deposit box</suggestion>
+        </rule>
+        <rule id="STATUE_OF_LIMITATIONS" name="statue (statute) of limitations">
+            <pattern>
+                <token>statue</token>
+                <token>of</token>
+                <token>limitations</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>statute of limitations</suggestion>
+        </rule>
+        <rule id="ALL_THE_FARTHER" name="all the farther (as far as)">
+            <pattern>
+                <token>all</token>
+                <token>the</token>
+                <token>farther</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>as far as</suggestion>
+        </rule>
+        <rule id="AS_TIME_PROGRESSED" name="as time progressed (passed)">
+            <pattern>
+                <token>as</token>
+                <token>time</token>
+                <token>progressed</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>as time passed</suggestion>
+        </rule>
+        <rule id="AS_FOLLOW" name="as follow (follows)">
+            <pattern>
+                <token>as</token>
+                <token>follow</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>as follows</suggestion>
+        </rule>
+        <rule id="BEYOND_THE_PAIL" name="beyond the pail (pale)">
+            <pattern>
+                <token>beyond</token>
+                <token>the</token>
+                <token>pail</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>beyond the pale</suggestion>
+        </rule>
+        <rule id="BECKON_CALL" name="beckon (beck and) call">
+            <pattern>
+                <token>beckon</token>
+                <token>call</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>beck and call</suggestion>
+        </rule>
+        <rule id="BEGS_BELIEF" name="begs (beggars) belief">
+            <pattern>
+                <token>begs</token>
+                <token>belief</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>beggars belief</suggestion>
+        </rule>
+        <rule id="BUTTLOAD" name="buttload (boatload)">
+            <pattern>
+                <token>buttload</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>boatload</suggestion>
+        </rule>
+        <rule id="BRUSSEL_SPROUT" name="brussel (brussels) sprout">
+            <pattern>
+                <token regexp="yes">brussell?|brussells</token>
+                <token>sprout</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>brussels sprout</suggestion>
+        </rule>
+        <rule id="BUILD_OFF_OF" name="build off of (build on)">
+            <pattern>
+                <token>build</token>
+                <token>off</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>build on</suggestion>
+        </rule>
+        <rule id="TRITE_AND_TRUE" name="trite (tried) and true">
+            <pattern>
+                <token>trite</token>
+                <token>and</token>
+                <token>true</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>tried and true</suggestion>
+        </rule>
+        <rule id="BETWEEN_YOU_AND_I" name="between you and I (me)">
+            <pattern>
+                <token>between</token>
+                <token>you</token>
+                <token>and</token>
+                <token>I</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>between you and me</suggestion>
+        </rule>
+        <rule id="EVERY_SINCE" name="every (ever) since">
+            <pattern>
+                <token>every</token>
+                <token>since</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>ever since</suggestion>
+        </rule>
+        <rule id="FOWL_SWOOP" name="fowl (fell) swoop">
+            <pattern>
+                <token>fowl</token>
+                <token>swoop</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>fell swoop</suggestion>
+        </rule>
+        <rule id="GARDENERGARDEN_SNAKE" name="gardener (garter) snake">
+            <pattern>
+                <token regexp="yes">gardener|garden</token>
+                <token>snake</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>garter snake</suggestion>
+        </rule>
+        <rule id="HAY_DAY" name="hay day (heyday)">
+            <pattern>
+                <token regexp="yes">h[ae]y</token>
+                <token>day</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>heyday</suggestion>
+        </rule>
+        <rule id="HARDLY_NEVER" name="hardly never (ever)">
+            <pattern>
+                <token>hardly</token>
+                <token>never</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>hardly ever</suggestion>
+        </rule>
+        <rule id="HEW_AND_CRY" name="hew (hue) and cry">
+            <pattern>
+                <token>hew</token>
+                <token>and</token>
+                <token>cry</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>hue and cry</suggestion>
+        </rule>
+        <rule id="MINUS_WELL" name="minus well (might as well)">
+            <pattern>
+                <token>minus</token>
+                <token>well</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>might as well</suggestion>
+        </rule>
+        <rule id="OFT_CHANCE" name="oft chance (off chance)">
+            <pattern>
+                <token>oft</token>
+                <token>chance</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>off chance</suggestion>
+        </rule>
+        <rule id="ON_THE_SAME_TOKEN" name="on the same token (by the same token)">
+            <pattern>
+                <token>on</token>
+                <token>the</token>
+                <token>same</token>
+                <token>token</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>by the same token</suggestion>
+        </rule>
+        <rule id="ONE_OF_THE_ONLY" name="one of the only (few)">
+            <pattern>
+                <token>one</token>
+                <token>of</token>
+                <token>the</token>
+                <token>only</token>
+            </pattern>
+            <message>Some people suggest that the phrase is idiomatic or illogical and that a better option is</message>
+            <suggestion>one of the few</suggestion>
+        </rule>
+        <rule id="PEDAL_TO_THE_MEDAL" name="pedal to the medal (metal)">
+            <pattern>
+                <token>pedal</token>
+                <token>to</token>
+                <token>the</token>
+                <token>medal</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>pedal to the metal</suggestion>
+        </rule>
+        <rule id="PAWN_OFF" name="pawn off (palm off)">
+            <pattern>
+                <token>pawn</token>
+                <token>off</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>palm off</suggestion>
+        </rule>
+        <rule id="PLAYS_A_FACTOR" name="plays a factor (plays a role)">
+            <pattern>
+                <token>plays</token>
+                <token>a</token>
+                <token>factor</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>plays a role</suggestion>
+        </rule>
+        <rule id="REALMS_OF_POSSIBILITY" name="realms (realm) of possibility">
+            <pattern>
+                <token>realms</token>
+                <token>of</token>
+                <token>possibility</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>realm of possibility</suggestion>
+        </rule>
+        <rule id="RING_ITS_NECK" name="ring (wring) its neck">
+            <pattern>
+                <token>ring</token>
+                <token>its</token>
+                <token>neck</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>wring its neck</suggestion>
+        </rule>
+        <rule id="RODROT_IRON" name="rod (wrought) iron">
+            <pattern>
+                <token regexp="yes">ro[dt]</token>
+                <token>iron</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>wrought iron</suggestion>
+        </rule>
+        <rule id="SOUSE_CHEF" name="souse (sous) chef">
+            <pattern>
+                <token>souse</token>
+                <token>chef</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>sous chef</suggestion>
+        </rule>
+        <rule id="STOCK_AND_TRADE" name="stock and trade (stock in trade)">
+            <pattern>
+                <token>stock</token>
+                <token>and</token>
+                <token>trade</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>stock in trade</suggestion>
+        </rule>
+        <rule id="SOUND_BYTE" name="sound byte (bite)">
+            <pattern>
+                <token>sound</token>
+                <token>byte</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>sound bite</suggestion>
+        </rule>
+        <rule id="TO_THE_MANOR_BORN" name="to the manor (manner) born">
+            <pattern>
+                <token>to</token>
+                <token>the</token>
+                <token>manor</token>
+                <token>born</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to the manner born</suggestion>
+        </rule>
+        <rule id="VINTAGE_POINT" name="vintage (vantage) point">
+            <pattern>
+                <token>vintage</token>
+                <token>point</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>vantage point</suggestion>
+        </rule>
+        <rule id="WHIM_AND_A_PRAYER" name="whim (wing) and a prayer">
+            <pattern>
+                <token>whim</token>
+                <token>and</token>
+                <token>a</token>
+                <token>prayer</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>wing and a prayer</suggestion>
+        </rule>
+        <rule id="YEAR_END_AND_YEAR_OUT" name="year end (in) and year out">
+            <pattern>
+                <token>year</token>
+                <token>end</token>
+                <token>and</token>
+                <token>year</token>
+                <token>out</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>year in and year out</suggestion>
+        </rule>
+        <rule id="HAND_AND_HAND" name="hand and hand (hand in hand)">
+            <pattern>
+                <token>hand</token>
+                <token>and</token>
+                <token>hand</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>hand in hand</suggestion>
+        </rule>
+        <rule id="GRASPING_FOR_STRAWS" name="grasping for straws (grasping at straws)">
+            <pattern>
+                <token>grasping</token>
+                <token>for</token>
+                <token>straws</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>grasping at straws</suggestion>
+        </rule>
+        <rule id="GRILL_CHEESE" name="grill (grilled) cheese">
+            <pattern>
+                <token>grill</token>
+                <token>cheese</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>grilled cheese</suggestion>
+        </rule>
+        <rule id="MIGHT_HAS_WELL" name="might has (as) well">
+            <pattern>
+                <token>might</token>
+                <token>has</token>
+                <token>well</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>might as well</suggestion>
+        </rule>
+        <rule id="ON_THE_CONTRAIRE" name="on the contraire (au contraire)">
+            <pattern>
+                <token>on</token>
+                <token>the</token>
+                <token>contraire</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>au contraire</suggestion>
+        </rule>
+        <rule id="DAMP_SQUID" name="damp squid (squib)">
+            <pattern>
+                <token>damp</token>
+                <token>squid</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>damp squib</suggestion>
+        </rule>
+        <rule id="CURSING_THROUGH_VEINS" name="cursing (coursing) through veins">
+            <pattern>
+                <token>cursing</token>
+                <token>through</token>
+                <token>veins</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>coursing through veins</suggestion>
+        </rule>
+        <rule id="DARING-DO" name="daring-do (derring-do)">
+            <pattern>
+                <token>daring-do</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>derring-do</suggestion>
+        </rule>
+        <rule id="DEATH_NAIL" name="death nail (knell)">
+            <pattern>
+                <token>death</token>
+                <token>nail</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>death knell</suggestion>
+        </rule>
+        <rule id="REAP_WHAT_YOU_SEW" name="reap what you sew (sow)">
+            <pattern>
+                <token>reap</token>
+                <token>what</token>
+                <token>you</token>
+                <token>sew</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>reap what you sow</suggestion>
+        </rule>
+        <rule id="SPARE_OF_THE_MOMENT" name="spare (spur) of the moment">
+            <pattern>
+                <token>spare</token>
+                <token>of</token>
+                <token>the</token>
+                <token>moment</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>spur of the moment</suggestion>
+        </rule>
+        <rule id="TONGUE_AND_CHEEK" name="tongue and (in) cheek">
+            <pattern>
+                <token>tongue</token>
+                <token>and</token>
+                <token>cheek</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>tongue in cheek</suggestion>
+        </rule>
+        <rule id="URINE_ANALYSIS" name="urine analysis (urinalysis)">
+            <pattern>
+                <token>urine</token>
+                <token>analysis</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>urinalysis</suggestion>
+        </rule>
+        <rule id="WET_YOUR_APPETITE" name="wet (whet) your appetite">
+            <pattern>
+                <token>wet</token>
+                <token>your</token>
+                <token>appetite</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>whet your appetite</suggestion>
+        </rule>
+        <rule id="TATTLE-TAIL" name="tattle-tail (tattle-tale)">
+            <pattern>
+                <token>tattle-tail</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>tattle-tale</suggestion>
+        </rule>
+        <rule id="OLD_WISE_TAILTALE" name="old wise tail (old wives' tale)">
+            <pattern>
+                <token>old</token>
+                <token>wise</token>
+                <token regexp="yes">ta(il|le)</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>old wives' tale</suggestion>
+        </rule>
+        <rule id="ON_THE_LAMB" name="on the lamb (lam)">
+            <pattern>
+                <token>on</token>
+                <token>the</token>
+                <token>lamb</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>on the lam</suggestion>
+        </rule>
+        <rule id="IM_AM" name="Im am (I am)">
+            <pattern>
+                <token>I</token>
+                <token>'m</token>
+                <token>am</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>I am</suggestion>
+        </rule>
+        <rule id="FLASHPOINT" name="flashpoint (flash point)">
+            <pattern>
+                <token>flashpoint</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>flash point</suggestion>
+        </rule>
+        <rule id="PRP_BACKUP" name="They backup (back up)">
+            <pattern>
+                <token regexp="yes">I|you|they|we</token>
+                <token>backup</token>
+            </pattern>
+            <message>The verb 'back up' is spelled as two words. The noun 'backup' is spelled as one.</message>
+            <suggestion>I|you|they|we back up</suggestion>
+        </rule>
+        <rule id="CAN_BLACKOUT" name="can blackout (black out)">
+            <pattern>
+                <token>can</token>
+                <token>blackout</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>can black out</suggestion>
+        </rule>
+        <rule id="GOT_SHUTOUT" name="got shutout (shut out)">
+            <pattern>
+                <token>got</token>
+                <token>shutout</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>got shut out</suggestion>
+        </rule>
+        <rule id="IN_ALONG_TIME" name="in along (a long) time">
+            <pattern>
+                <token>in</token>
+                <token>along</token>
+                <token>time</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>in a long time</suggestion>
+        </rule>
+        <rule id="INCASE_OF" name="incase (in case) of">
+            <pattern>
+                <token>incase</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>in case of</suggestion>
+        </rule>
+        <rule id="PORTLAND_TRAILBLAZERS" name="Portland Trailblazers (Trail Blazers)">
+            <pattern>
+                <token>Portland</token>
+                <token>Trailblazers</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Portland Trail Blazers</suggestion>
+        </rule>
+        <rule id="TAKE_AWHILE" name="take awhile (a while)">
+            <pattern>
+                <token>take</token>
+                <token>awhile</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>take a while</suggestion>
+        </rule>
+        <rule id="TO_BACKOUT" name="to backout (back out)">
+            <pattern>
+                <token>to</token>
+                <token>backout</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to back out</suggestion>
+        </rule>
+        <rule id="TO_BLACKOUT" name="to blackout (black out)">
+            <pattern>
+                <token>
+                    to
+                    </token>
+                <token>blackout</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to black out</suggestion>
+        </rule>
+        <rule id="ALONG_TIME" name="along (a long) time">
+            <pattern>
+                <token>along</token>
+                <token>time</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>a long time</suggestion>
+        </rule>
+        <rule id="DOWNPAYMENT" name="downpayment (down payment)">
+            <pattern>
+                <token>downpayment</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>down payment</suggestion>
+        </rule>
+        <rule id="ALA_MODE" name="ala mode (a la mode)">
+            <pattern>
+                <token>ala</token>
+                <token>mode</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>à la mode</suggestion>
+        </rule>
+        <rule id="AFTERALL" name="afterall (after all)">
+            <pattern>
+                <token>afterall</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>after all</suggestion>
+        </rule>
+        <rule id="ELDER_OLDER" name="to be elder (older) than">
+            <pattern>
+                <token>be</token>
+                <token>elder</token>
+                <token>than</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>be older than</suggestion>
+        </rule>
+        <rule id="HAWAIIAN" name="Hawaiian">
+            <pattern>
+                <token regexp="yes">hawaii?</token>
+                <token regexp="yes">['’`´‘ʻ]</token>
+                <token regexp="yes">i?an</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Hawaiian</suggestion>
+        </rule>
+        <rule id="ALZHEIMERS" name="Alzheimers">
+            <pattern>
+                <token>Alzheimers</token>
+            </pattern>
+            <message>The name of this disease is always capitalized and spelled with a possessive apostrophe.</message>
+            <suggestion>Alzheimer's</suggestion>
+        </rule>
+    </category>
+    <category id="COMPOUNDING" name="Compounding">
+        <rule id="CUMBER_SOME" name="cumber some (cumbersome)">
+            <pattern>
+                <token>cumber</token>
+                <token regexp="yes">some?</token>
+            </pattern>
+            <message>Did you mean the adjective</message>
+            <suggestion>cumbersome</suggestion>
+        </rule>
+        <rule id="CHRISTMAS_TIME" name="Christmas time (Christmastime)">
+            <pattern>
+                <token>Christmas</token>
+                <token>time</token>
+            </pattern>
+            <message>The noun</message>
+            <suggestion>Christmastime</suggestion>
+        </rule>
+        <rule id="DO_ABLE" name="Do able (Doable)">
+            <pattern>
+                <token>do</token>
+                <token case_sensitive="yes">able</token>
+            </pattern>
+            <message>Did you mean the adjective</message>
+            <suggestion>doable</suggestion>
+        </rule>
+        <rule id="ASTRA_ZENECA" name="AstraZeneca">
+            <pattern>
+                <token>astra</token>
+                <token>zeneca</token>
+            </pattern>
+            <message>The pharma company</message>
+            <suggestion>AstraZeneca</suggestion>
+        </rule>
+    </category>
+    <category id="GRAMMAR" name="Grammar">
+        <rule id="ATTORNEY_GENERALS" name="attorney generals (attorneys general)">
+            <pattern>
+                <token>attorney</token>
+                <token>generals</token>
+            </pattern>
+            <message>The set phrase "attorney general" is correctly pluralized as</message>
+            <suggestion>attorneys general</suggestion>
+        </rule>
+        <rule id="TO_WORRIED_ABOUT" name="to worried (worry) about">
+            <pattern>
+                <token>to</token>
+                <token>worried</token>
+                <token>about</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to worry about</suggestion>
+        </rule>
+        <rule id="SINGLES_DAY" name="Singles(') Day">
+            <pattern>
+                <token>singles</token>
+                <token regexp="yes">['’`´‘ʻ]</token>
+                <token>day</token>
+            </pattern>
+            <message>Did you mean the holiday</message>
+            <suggestion>Singles' Day</suggestion>
+        </rule>
+        <rule id="GOOD_EDUCATED" name="She is good-educated (well-educated).">
+            <pattern>
+                <token>good-educated</token>
+            </pattern>
+            <message>In English, we use "well" to modify participles and adjectives like "educated." Did you mean</message>
+            <suggestion>well-educated</suggestion>
+        </rule>
+        <rule id="WIDE_ACCEPTED" name="It is wide(ly) accepted that...">
+            <pattern>
+                <token>wide</token>
+                <token regexp="yes">accepted|acceptable|used</token>
+            </pattern>
+            <message>Did you mean to use the adverb "widely" here?</message>
+            <suggestion>widely accepted|acceptable|used</suggestion>
+        </rule>
+        <rule id="THE_WHETHER" name="How's the whether (weather)?">
+            <pattern>
+                <token>the</token>
+                <token>whether</token>
+            </pattern>
+            <message>Possible error detected.</message>
+            <suggestion>whether</suggestion>
+        </rule>
+        <rule id="LADIES_AND_GENTLEMAN" name="ladies and gentleman (gentlemen)">
+            <pattern>
+                <token>ladies</token>
+                <token regexp="yes">and|&amp;</token>
+                <token>gentleman</token>
+            </pattern>
+            <message>Did you mean the plural form</message>
+            <suggestion>ladies and|&amp; gentlemen</suggestion>
+        </rule>
+        <rule id="NONE_THE_LESS" name="none the less (nonetheless)">
+            <pattern>
+                <token regexp="yes">none?</token>
+                <token>the</token>
+                <token>less</token>
+            </pattern>
+            <message>Did you mean the adverbial phrase</message>
+            <suggestion>nonetheless</suggestion>
+        </rule>
+        <rule id="SOFTWARES" name="softwares → pieces of software">
+            <pattern>
+                <token>softwares</token>
+            </pattern>
+            <message>In standard English, the noun "\1" is uncountable. Consider using an alternative.</message>
+            <suggestion>pieces of software</suggestion>
+        </rule>
+        <rule id="HARDWARES" name="hardwares → pieces of hardware">
+            <pattern>
+                <token>hardwares</token>
+            </pattern>
+            <message>In standard English, the noun "\1" is uncountable. Consider using an alternative.</message>
+            <suggestion>pieces of hardware</suggestion>
+        </rule>
+        <rule id="HOMO_ERECTUS" name="homo (Homo) erectus">
+            <pattern>
+                <token case_sensitive="yes">homo</token>
+                <token regexp="yes">err?ectus</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Homo erectus</suggestion>
+        </rule>
+        <rule id="HOMO_SAPIENS" name="homo (Homo) sapiens">
+            <pattern>
+                <token case_sensitive="yes">homo</token>
+                <token regexp="yes">sapiens?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Homo sapiens</suggestion>
+        </rule>
+        <rule id="HARLEY_DAVIDSON_HYPHEN" name="Miami-Dade">
+            <pattern>
+                <token>harley</token>
+                <token>davidson</token>
+            </pattern>
+            <message>The name of this motorcycle maker is spelled with a hyphen.</message>
+            <suggestion>Harley-Davidson</suggestion>
+        </rule>
+        <rule id="IDK" name="idk (IDK)">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">[Ii]dk</token>
+            </pattern>
+            <message>Did you mean the abbreviation for "I don't know"?</message>
+            <suggestion>IDK</suggestion>
+        </rule>
+        <rule id="MOST_OF_THE_TIMES" name="most of the times (time)">
+            <pattern>
+                <token>most</token>
+                <token>of</token>
+                <token>the</token>
+                <token>
+                    times
+                    </token>
+            </pattern>
+            <message>Consider using</message>
+            <suggestion>most of the time</suggestion>
+        </rule>
+        <rule id="SPLITTED" name="splitted (split)">
+            <pattern>
+                <token>splitted</token>
+            </pattern>
+            <message>The past tense and past participle of the verb "to split" is</message>
+            <suggestion>split</suggestion>
+        </rule>
+        <rule id="CHOOSED" name="choosed (chose)">
+            <pattern>
+                <token>choosed</token>
+            </pattern>
+            <message>The past tense and past participle of the verb "to choose" is</message>
+            <suggestion>chose</suggestion>
+        </rule>
+        <rule id="BIDDED" name="bidded (bid)">
+            <pattern>
+                <token>bidded</token>
+            </pattern>
+            <message>The past tense of the verb "to bid" is</message>
+            <suggestion>bid</suggestion>
+        </rule>
+        <rule id="STRIKED" name="striked (struck)">
+            <pattern>
+                <token>striked</token>
+            </pattern>
+            <message>The past tense or the past participle of the verb "to strike" is</message>
+            <suggestion>struck</suggestion>
+        </rule>
+        <rule id="CASTED" name="casted (cast)">
+            <pattern>
+                <token>casted</token>
+            </pattern>
+            <message>The past tense and past participle of the verb "cast" is</message>
+            <suggestion>cast</suggestion>
+        </rule>
+        <rule id="JAILBREAKED" name="jailbreaked (jailbroke)">
+            <pattern>
+                <token regexp="yes">jail-?breaked</token>
+            </pattern>
+            <message>The past tense of the verb "jailbreak" is</message>
+            <suggestion>jailbroke</suggestion>
+        </rule>
+        <rule id="STATE_OF_THE_UNION" name="proper capitalization of 'State of the Union'">
+            <pattern>
+                <token>state</token>
+                <token>of</token>
+                <token>the</token>
+                <token>union</token>
+            </pattern>
+            <message>Consider using the proper capitalization if you mean the president's annual speech.</message>
+            <suggestion>State of the Union</suggestion>
+        </rule>
+        <rule id="GETTED" name="getted (got)">
+            <pattern>
+                <token>getted</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>got</suggestion>
+        </rule>
+        <rule id="THANKS_IN_ADVANCED" name="Thanks in advanced (advance)">
+            <pattern>
+                <token regexp="yes">thanks?</token>
+                <token>you</token>
+                <token>in</token>
+                <token regexp="yes">advance[ds]</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>thanks? you in advance</suggestion>
+        </rule>
+        <rule id="IS_CAUSE_BY" name="is cause (caused) by">
+            <pattern>
+                <token regexp="yes">is|was|are|were|been</token>
+                <token>cause</token>
+                <token>by</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>is|was|are|were|been caused by</suggestion>
+        </rule>
+        <rule id="TO_WITHDRAWN" name="to/will before withdrawn">
+            <pattern>
+                <token regexp="yes">to|will</token>
+                <token>withdrawn</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to|will withdraw</suggestion>
+        </rule>
+        <rule id="THEY_WARE" name="'they ware' vs 'they were'">
+            <pattern>
+                <token regexp="yes">they|we|you</token>
+                <token>ware</token>
+            </pattern>
+            <message>'ware' is a noun. Did you mean</message>
+            <suggestion>they|we|you were</suggestion>
+        </rule>
+        <rule id="A_BLESS_DAY" name="Have a bless (blessed) day">
+            <pattern>
+                <token regexp="yes">an?|the</token>
+                <token>bless</token>
+                <token regexp="yes">day|week|month|year|weekend|holiday|vacation|Monday|Wednesday|T(ue|hur)sday|Friday|S(atur|un)day</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>an?|the blessed day|week|month|year|weekend|holiday|vacation|Monday|Wednesday|T(ue|hur)sday|Friday|S(atur|un)day</suggestion>
+        </rule>
+        <rule id="AREA_51" name="area 51 (Area 51)">
+            <pattern>
+                <token case_sensitive="yes">area</token>
+                <token>51</token>
+            </pattern>
+            <message>The word '\1 \2' is a proper noun and needs to be capitalized.</message>
+            <suggestion>Area 51</suggestion>
+        </rule>
+        <rule id="YA_LL" name="Ya'll (Y'all)">
+            <pattern>
+                <token>ya</token>
+                <token>'ll</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>y'all</suggestion>
+        </rule>
+        <rule id="BE_FINED_WITH" name="be fined with (be fine with)">
+            <pattern>
+                <token>be</token>
+                <token>fined</token>
+                <token>with</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>be fine with</suggestion>
+        </rule>
+        <rule id="VERY_THANKS_THANKS_A_LOT" name="very thanks (thanks a lot)">
+            <pattern>
+                <token>very</token>
+                <token>thanks</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>thanks a lot</suggestion>
+        </rule>
+        <rule id="ON_FIRST_GLANCE" name="on (at) first glance">
+            <pattern>
+                <token>on</token>
+                <token regexp="yes">first|a</token>
+                <token>glance</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>at first|a glance</suggestion>
+        </rule>
+        <rule id="CONGRATULATIONS_FOR" name="congratulations for (on)">
+            <pattern>
+                <token>congratulations</token>
+                <token>
+                        for
+                    </token>
+            </pattern>
+            <message>The correct preposition here is</message>
+            <suggestion>congratulations on</suggestion>
+        </rule>
+        <rule id="AS_WILL_AS" name="as will (well) as">
+            <pattern>
+                <token>as</token>
+                <token>will</token>
+                <token>as</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>as well as</suggestion>
+        </rule>
+        <rule id="TAKE_IT_PERSONAL" name="Take it personal (personally)">
+            <pattern>
+                <token>take</token>
+                <token>it</token>
+                <token>personal</token>
+            </pattern>
+            <message>It seems that the adverb</message>
+            <suggestion>take it personally</suggestion>
+        </rule>
+        <rule id="THE_SAME_AS" name="Comparison with 'the same ... as'">
+            <pattern>
+                <token>the</token>
+                <token>same</token>
+                <token regexp="yes">like|than</token>
+            </pattern>
+            <message>Comparison is written 'the same ... as'.</message>
+            <suggestion>the same as</suggestion>
+        </rule>
+        <rule id="DIDENT" name="he dident (didn't)">
+            <pattern>
+                <token>dident</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>didn't</suggestion>
+        </rule>
+        <rule id="PRP_DINT" name="he dint (didn't)">
+            <pattern>
+                <token regexp="yes">I|you|s?he|we|they|it</token>
+                <token>dint</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>I|you|s?he|we|they|it didn't</suggestion>
+        </rule>
+        <rule id="PRP_MUS" name="he mus (must)">
+            <pattern>
+                <token regexp="yes">I|you|s?he|we|they|it</token>
+                <token>mus</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>I|you|s?he|we|they|it must</suggestion>
+        </rule>
+        <rule id="WENT" name="wen't (went)">
+            <pattern>
+                <token>wen</token>
+                <token regexp="yes">['’`´‘ʻ]</token>
+                <token>t</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>went</suggestion>
+        </rule>
+        <rule id="WASENT" name="he wasent (wasn't)">
+            <pattern>
+                <token regexp="yes">was[ie]nt</token>
+            </pattern>
+            <message>Typo detected. Did you mean</message>
+            <suggestion>wasn't</suggestion>
+        </rule>
+        <rule id="DOESENT" name="dosent (doesn't)">
+            <pattern>
+                <token regexp="yes">doe?sent|doesint</token>
+            </pattern>
+            <message>Typo detected. Did you mean</message>
+            <suggestion>doesn't</suggestion>
+        </rule>
+        <rule id="EQUALLY_AS" name="equally as (equally)">
+            <pattern>
+                <token>equally</token>
+                <token>as</token>
+            </pattern>
+            <message>Use either</message>
+            <suggestion>equally</suggestion>
+        </rule>
+        <rule id="IF_OR_NOT" name="if or not (whether or not)">
+            <pattern>
+                <token>if</token>
+                <token>or</token>
+                <token>not</token>
+            </pattern>
+            <message>This is a non-standard phrase. Did you mean</message>
+            <suggestion>whether or not</suggestion>
+        </rule>
+        <rule id="LOSE_LIVES" name="lose their life (lives)">
+            <pattern>
+                <token regexp="yes">lose|save|sacrifice|give|risk|end|put|change|affect</token>
+                <token>their</token>
+                <token>life</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>lose|save|sacrifice|give|risk|end|put|change|affect their lives</suggestion>
+        </rule>
+        <rule id="FIRST_SERVED" name="first come, first serve(d)">
+            <pattern>
+                <token>first</token>
+                <token>come</token>
+                <token>,</token>
+                <token>first</token>
+                <token>serve</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>first come , first served</suggestion>
+        </rule>
+        <rule id="SHOE_IN" name="shoe-in (shoo)">
+            <pattern>
+                <token>shoe-in</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>shoo-in</suggestion>
+        </rule>
+        <rule id="PROSTRATE_PROSTATE" name="prostrate (prostate)">
+            <pattern>
+                <token>prostrate</token>
+                <token regexp="yes">cancer|enlargement|exam|gland</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>prostate cancer|enlargement|exam|gland</suggestion>
+        </rule>
+        <rule id="WORSE_WORST" name="worse come to worse (worst)">
+            <pattern>
+                <token>worse</token>
+                <token>come</token>
+                <token>to</token>
+                <token>worse</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>worse come to worst</suggestion>
+        </rule>
+        <rule id="GOOD_WELL" name="good (well)">
+            <pattern>
+                <token>speak</token>
+                <token regexp="yes" case_sensitive="yes">Akan|Amharic|Arabic|Assamese|Awadhi|Azerbaijani|Balochi|Bangla|Belarusian|Bengali|Bhojpuri|Burmese|Cantonese|Cebuano|Chewa|Chhattisgarhi|Chinese|Chittagonian|Czech|Deccan|Dhundhari|Dutch|English|Filipino|French|Fula|Gaelic|German|Greek|Gujarati|Hakka|Haryanvi|Hausa|Hiligaynon|Hindi|Hmong|Hunanese|Hungarian|Igbo|Ilocano|Ilonggo|Indonesian|Italian|Ja[pv]anese|Jin|Kannada|Kazakh|Khmer|Kinyarwanda|Kirundi|Konkani|Korean|Kurdish|Madurese|Magahi|Maithili|Malagasy|Malay(alam)?|Malaysian|Mandarin|Marathi|Marwari|Mossi|Nepali|Odia|Oriya|Oromo|Pashto|Persian|Polish|Portuguese|Punjabi|Quechua|Romanian|Russian|Saraiki|Serbo-Croatian|Shona|Sindhi|Sinhalese|Somali|Spanish|Sundanese|Swedish|Sylheti|Tagalog|Tamil|Telugu|Thai|Turk(ish|men)|Ukrainian|Urdu|Uyghur|Uzbek|Vietnamese|Visayan|Wu|Xhosa|Xiang|Yoruba|Yue|Zhuang|Zulu</token>
+                <token>very</token>
+                <token>good</token>
+            </pattern>
+            <message>Did you mean the adverb</message>
+            <suggestion>speak Akan|Amharic|Arabic|Assamese|Awadhi|Azerbaijani|Balochi|Bangla|Belarusian|Bengali|Bhojpuri|Burmese|Cantonese|Cebuano|Chewa|Chhattisgarhi|Chinese|Chittagonian|Czech|Deccan|Dhundhari|Dutch|English|Filipino|French|Fula|Gaelic|German|Greek|Gujarati|Hakka|Haryanvi|Hausa|Hiligaynon|Hindi|Hmong|Hunanese|Hungarian|Igbo|Ilocano|Ilonggo|Indonesian|Italian|Ja[pv]anese|Jin|Kannada|Kazakh|Khmer|Kinyarwanda|Kirundi|Konkani|Korean|Kurdish|Madurese|Magahi|Maithili|Malagasy|Malay(alam)?|Malaysian|Mandarin|Marathi|Marwari|Mossi|Nepali|Odia|Oriya|Oromo|Pashto|Persian|Polish|Portuguese|Punjabi|Quechua|Romanian|Russian|Saraiki|Serbo-Croatian|Shona|Sindhi|Sinhalese|Somali|Spanish|Sundanese|Swedish|Sylheti|Tagalog|Tamil|Telugu|Thai|Turk(ish|men)|Ukrainian|Urdu|Uyghur|Uzbek|Vietnamese|Visayan|Wu|Xhosa|Xiang|Yoruba|Yue|Zhuang|Zulu very well</suggestion>
+        </rule>
+    </category>
+    <category id="COLLOCATIONS" name="Collocations">
+        <rule id="YESTERDAY_NIGHT" name="Wrong phrase: 'yesterday night' (last night)">
+            <pattern>
+                <token>yesterday</token>
+                <token>night</token>
+            </pattern>
+            <message>This is a non-standard collocation. Normally,</message>
+            <suggestion>last night</suggestion>
+        </rule>
+        <rule id="TODAY_NIGHT" name="Wrong phrase: 'today night' (tonight)">
+            <pattern>
+                <token>today</token>
+                <token>night</token>
+            </pattern>
+            <message>This is a non-standard collocation. Normally,</message>
+            <suggestion>tonight</suggestion>
+        </rule>
+        <rule id="SINKING_HIP" name="a sinking (s)hip">
+            <pattern>
+                <token>sinking</token>
+                <token regexp="yes">[hs]ip</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>sinking ship</suggestion>
+        </rule>
+        <rule id="POPULAR_AMONG_WITH" name="Collocation: Popular among/with">
+            <pattern>
+                <token>popular</token>
+                <token>among</token>
+            </pattern>
+            <message>The usual collocation for "popular" is "with", not "among".</message>
+            <suggestion>popular with</suggestion>
+        </rule>
+        <rule id="TIRED_OF_FROM" name="Collocation: Tired of/from">
+            <pattern>
+                <token>tired</token>
+                <token>of</token>
+                <token>the</token>
+                <token>last</token>
+                <token>night</token>
+            </pattern>
+            <message>The usual preposition in this context is "from".</message>
+            <suggestion>tired from last night</suggestion>
+        </rule>
+        <rule id="PASSIONATE_BY_ABOUT" name="Collocation: Passionate by/about">
+            <pattern>
+                <token regexp="yes">passionated?</token>
+                <token>by</token>
+            </pattern>
+            <message>The usual preposition for "passionate" is "about", not "by".</message>
+            <suggestion>passionate about</suggestion>
+        </rule>
+        <rule id="IN_AT_A_PARTY" name="Collocation: in/at a party">
+            <pattern>
+                <token>in</token>
+                <token>a</token>
+                <token>party</token>
+            </pattern>
+            <message>Unless you mean "in a political party", the usual preposition for a party is "at".</message>
+            <suggestion>at a party</suggestion>
+        </rule>
+        <rule id="VULNERABLE_FROM_TO" name="Collocation: vulnerable from/to">
+            <pattern>
+                <token>vulnerable</token>
+                <token>from</token>
+            </pattern>
+            <message>The usual collocation for the word "vulnerable" is "to", not "from", as in "vulnerable to attack".</message>
+            <suggestion>vulnerable to</suggestion>
+        </rule>
+        <rule id="PERSPECTIVES_ABOUT_ON" name="Collocation: perspectives about/on">
+            <pattern>
+                <token>perspectives</token>
+                <token>about</token>
+            </pattern>
+            <message>The usual preposition for "perspectives" is "on", not "about".</message>
+            <suggestion>perspectives on</suggestion>
+        </rule>
+        <rule id="VARIETIES_IN_OF" name="Collocation: varieties in/of">
+            <pattern>
+                <token>varieties</token>
+                <token>in</token>
+            </pattern>
+            <message>The usual preposition for "varieties" is "of", not "in".</message>
+            <suggestion>varieties of</suggestion>
+        </rule>
+        <rule id="RESPONSIBLE_OF_FOR" name="Collocation: responsible of/for">
+            <pattern>
+                <token regexp="yes">respons[ai]bles?</token>
+                <token>of</token>
+            </pattern>
+            <message>The usual collocation for "responsible" is "responsible for". Did you mean</message>
+            <suggestion>responsible for</suggestion>
+        </rule>
+        <rule id="NEAR_FROM_TO" name="Collocation: near from/to">
+            <pattern>
+                <token>near</token>
+                <token>from</token>
+            </pattern>
+            <message>The usual preposition for "near" is "to".</message>
+            <suggestion>near to</suggestion>
+        </rule>
+        <rule id="BRING_PUN_ON_THE_AGENDA" name="Collocation: bring to/put on the agenda">
+            <pattern>
+                <token regexp="yes">bring|brought</token>
+                <token>to</token>
+                <token>the</token>
+                <token>agenda</token>
+            </pattern>
+            <message>The usual verb + preposition for "agenda" are "put on". Did you mean</message>
+            <suggestion>put on the agenda</suggestion>
+        </rule>
+        <rule id="TIRED_ABOUT_OF" name="Collocation: tired about/of">
+            <pattern>
+                <token>tired</token>
+                <token>about</token>
+            </pattern>
+            <message>The usual collocation for "\1" is "of" or "from", not "\2". Did you mean</message>
+            <suggestion>tired of</suggestion>
+        </rule>
+        <rule id="GESTURE_OF_GREETING" name="Translation error: a gesture of greeting">
+            <pattern>
+                <token regexp="yes">ma[dk]es?</token>
+                <token>me</token>
+                <token>a</token>
+                <token regexp="yes">gestures?</token>
+                <token>of</token>
+                <token>greeting</token>
+            </pattern>
+            <message>This expression sounds awkward. Did you mean</message>
+            <suggestion>waved at me</suggestion>
+        </rule>
+    </category>
+    <category id="CONFUSED_WORDS" name="Commonly Confused Words">
+        <rule id="LEAS_LEAST" name="leas vs least">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">[Aa]t</token>
+                <token case_sensitive="yes">leas</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>[Aa]t least</suggestion>
+        </rule>
+        <rule id="FORWARD_FOREWORD" name="forward vs. foreword">
+            <pattern>
+                <token>look</token>
+                <token>foreword</token>
+            </pattern>
+            <message>Did you mean the adverb</message>
+            <suggestion>look forward</suggestion>
+        </rule>
+        <rule id="WON_OWN" name="won vs own">
+            <pattern>
+                <token regexp="yes">my|y?our|their|its</token>
+                <token case_sensitive="yes">won</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>my|y?our|their|its own</suggestion>
+        </rule>
+        <rule id="CONFUSION_ALLUSION_ILLUSION" name="It's an allusion (illusion) of not being lonely">
+            <pattern>
+                <token>allusion</token>
+                <token>of</token>
+            </pattern>
+            <message>In most contexts, you allude "to" something. Did you mean to write "illusion" here?</message>
+            <suggestion>illusion of</suggestion>
+        </rule>
+        <rule id="MARY_CHRISTMAS" name="Mary (Merry) Christmas">
+            <pattern>
+                <token regexp="yes">marr?y</token>
+                <token regexp="yes">christmas|krist?mas</token>
+            </pattern>
+            <message>Did you mean the Christmas greeting</message>
+            <suggestion>merry Christmas</suggestion>
+        </rule>
+        <rule id="JAPANISE_JAPANESE" name="Japanise vs Japanese">
+            <pattern>
+                <token>japanise</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Japanese</suggestion>
+        </rule>
+        <rule id="NAIVE_NATIVE" name="naive vs native">
+            <pattern>
+                <token>naive</token>
+                <token regexp="yes">English|Spanish|Italian|French|Russian|German|Portuguese|Dutch|mobile</token>
+                <token regexp="yes">Americans?|speakers?|apps?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>native English|Spanish|Italian|French|Russian|German|Portuguese|Dutch|mobile Americans?|speakers?|apps?</suggestion>
+        </rule>
+        <rule id="CORSE_COURSE" name="corse vs course">
+            <pattern>
+                <token regexp="yes">off?</token>
+                <token>corse</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>off? course</suggestion>
+        </rule>
+        <rule id="IND_KIND" name="ind vs kind">
+            <pattern>
+                <token>ind</token>
+                <token regexp="yes">message|regards|feedback|words|of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>kind message|regards|feedback|words|of</suggestion>
+        </rule>
+        <rule id="GENERA_GENERAL" name="genera vs general">
+            <pattern>
+                <token regexp="yes">an?|another|one</token>
+                <token>genera</token>
+            </pattern>
+            <message>"Genera" is the plural noun for "genus". Did you mean the adjective</message>
+            <suggestion>an?|another|one general</suggestion>
+        </rule>
+        <rule id="SIGH_SIGHT" name="sigh vs sight">
+            <pattern>
+                <token>out</token>
+                <token>of</token>
+                <token>sigh</token>
+            </pattern>
+            <message>Did you mean the noun</message>
+            <suggestion>out of sight</suggestion>
+        </rule>
+        <rule id="FOUD_FOUND" name="foud vs found">
+            <pattern>
+                <token regexp="yes">we|they|you|it|s?he|I|have|ve|had|has|been|were|was|is|'s|am|'m|are|'re|be|can(not)?</token>
+                <token regexp="yes" case_sensitive="yes">[Ff]oud</token>
+            </pattern>
+            <message>Did you mean the verb</message>
+            <suggestion>we|they|you|it|s?he|I|have|ve|had|has|been|were|was|is|'s|am|'m|are|'re|be|can(not)? found</suggestion>
+        </rule>
+        <rule id="HAPPED_HAPPENED" name="happed vs happened">
+            <pattern>
+                <token>happed</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>happened</suggestion>
+        </rule>
+        <rule id="IT_SI" name="it vs si">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">
+                    [Ii]t|[Ss]he|[Hh]e|[Tt]?[Hh]ere|[Ww]ho|[Ww]here|[Ww]hen|[Ww]hat|[Hh]ow|[Ww]hich
+                </token>
+                <token>si</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>
+                    [Ii]t|[Ss]he|[Hh]e|[Tt]?[Hh]ere|[Ww]ho|[Ww]here|[Ww]hen|[Ww]hat|[Hh]ow|[Ww]hich
+                 is</suggestion>
+        </rule>
+        <rule id="FARE_FAIR" name="fare vs fair">
+            <pattern>
+                <token>be</token>
+                <token regexp="yes">(no)?t</token>
+                <token>fare</token>
+            </pattern>
+            <message>Did you mean the adjective</message>
+            <suggestion>be (no)?t fair</suggestion>
+        </rule>
+        <rule id="A_OR" name="once a (or) twice">
+            <pattern>
+                <token>once</token>
+                <token>a</token>
+                <token>twice</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>once or twice</suggestion>
+        </rule>
+        <rule id="WHAT_IT_THE" name="what it (is) the">
+            <pattern>
+                <token regexp="yes">what|when|how|who|where|which</token>
+                <token>it</token>
+                <token regexp="yes">the|an?|my|her|y?our|his|their</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>what|when|how|who|where|which is the|an?|my|her|y?our|his|their</suggestion>
+        </rule>
+        <rule id="MUSH_MUCH" name="mush vs. much">
+            <pattern>
+                <token regexp="yes">you|it|her|him|them|us|me|thanks</token>
+                <token regexp="yes">very|so</token>
+                <token regexp="yes">mush|match|mutch</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>you|it|her|him|them|us|me|thanks very|so much</suggestion>
+        </rule>
+        <rule id="PRICE_SENSIBILITY" name="price sensibility (sensitivity)">
+            <pattern>
+                <token>price</token>
+                <token>sensibility</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>price sensitivity</suggestion>
+        </rule>
+        <rule id="RATIO_RATION" name="ration or ratio">
+            <pattern>
+                <token regexp="yes">aspect|compression</token>
+                <token>ration</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>aspect|compression ratio</suggestion>
+        </rule>
+        <rule id="THE_FLEW" name="the flew (flu)">
+            <pattern>
+                <token>the</token>
+                <token>swine</token>
+                <token>flew</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>the swine flu</suggestion>
+        </rule>
+        <rule id="MARRIAGE_ANNIVERSARY" name="marriage (wedding) anniversary">
+            <pattern>
+                <token>marriage</token>
+                <token>anniversary</token>
+            </pattern>
+            <message>Wedding anniversaries are the proper term to describe the anniversary of the day of a wedding.</message>
+            <suggestion>wedding anniversary</suggestion>
+        </rule>
+        <rule id="BOLD_FACED" name="a bold-faced (bald-faced) lie">
+            <pattern>
+                <token regexp="yes">bold-?faced?</token>
+                <token regexp="yes">lies?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>bald-faced lies?</suggestion>
+        </rule>
+        <rule id="ONE_FELL_SWOOP" name="one foul (fell) swoop">
+            <pattern>
+                <token>one</token>
+                <token>foul</token>
+                <token>swoop</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>one fell swoop</suggestion>
+        </rule>
+        <rule id="DOG-EAT-DOG" name="doggy-dog (dog-eat-dog)">
+            <pattern>
+                <token>doggy-dog</token>
+                <token>world</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>dog-eat-dog world</suggestion>
+        </rule>
+        <rule id="GRANITE" name="take for granite (granted)">
+            <pattern>
+                <token>take</token>
+                <token>for</token>
+                <token>granite</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>take for granted</suggestion>
+        </rule>
+        <rule id="FROM_THAN_ON" name="from than (then) on">
+            <pattern>
+                <token>from</token>
+                <token>than</token>
+                <token>on</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>from then on</suggestion>
+        </rule>
+        <rule id="AND_THAN" name="and than (then)">
+            <pattern>
+                <token regexp="yes">and|since|until</token>
+                <token case_sensitive="yes">than</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>and|since|until then</suggestion>
+        </rule>
+        <rule id="THAN_INTERJ" name="..., than, ... (then)">
+            <pattern>
+                <token>,</token>
+                <token>than</token>
+                <token>,</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>, then ,</suggestion>
+        </rule>
+        <rule id="WHO_THAN" name="who than (then)">
+            <pattern>
+                <token>who</token>
+                <token>than</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>who then</suggestion>
+        </rule>
+        <rule id="CONFUSION_OF_HART_HEART" name="hard (heart)">
+            <pattern>
+                <token>at</token>
+                <token>the</token>
+                <token regexp="yes">he?ard|hart</token>
+                <token>of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>at the heart of</suggestion>
+        </rule>
+        <rule id="IN_THE_PASSED" name="in the passed (in the past)">
+            <pattern>
+                <token>in</token>
+                <token>the</token>
+                <token>passed</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>in the past</suggestion>
+        </rule>
+        <rule id="PIGEON_ENGLISH" name="pigeon (pidgin) English/...">
+            <pattern>
+                <token>pigeon</token>
+                <token regexp="yes">English|French|Spanish|Chinese|Russian</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>pidgin English|French|Spanish|Chinese|Russian</suggestion>
+        </rule>
+        <rule id="TELEPHONE_POLL" name="telephone/... poll (pole)">
+            <pattern>
+                <token regexp="yes">tele(phone|graph)|totem</token>
+                <token>poll</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>tele(phone|graph)|totem pole</suggestion>
+        </rule>
+        <rule id="OPINION_POLE" name="opinion/... pole (poll)">
+            <pattern>
+                <token regexp="yes">opinion|government|election|exit</token>
+                <token>pole</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>opinion|government|election|exit poll</suggestion>
+        </rule>
+        <rule id="I_HERD" name="I herd (heard)">
+            <pattern>
+                <token regexp="yes">I|you|s?he|it|we|they</token>
+                <token>herd</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>I|you|s?he|it|we|they heard</suggestion>
+        </rule>
+        <rule id="CONFUSION_OF_ANOTHER_IN_OTHER" name="another (in other)">
+            <pattern>
+                <token>another</token>
+                <token>words</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>in other words</suggestion>
+        </rule>
+        <rule id="CONFUSION_OF_SOBBER_SOBER" name="sobber (sober)">
+            <pattern>
+                <token>sobber</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>sober</suggestion>
+        </rule>
+        <rule id="IN_VEIN" name="in vein (in vain)">
+            <pattern>
+                <token>in</token>
+                <token>vein</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>in vain</suggestion>
+        </rule>
+        <rule id="INSURE_THAT" name="insure that (ensure that)">
+            <pattern>
+                <token>insure</token>
+                <token>that</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>ensure that</suggestion>
+        </rule>
+        <rule id="IN_MASSE" name="in masse (en masse)">
+            <pattern>
+                <token>in</token>
+                <token>masse</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>en masse</suggestion>
+        </rule>
+        <rule id="EN_MASS" name="en mass (en masse)">
+            <pattern>
+                <token>en</token>
+                <token>mass</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>en masse</suggestion>
+        </rule>
+        <rule id="FOR_SELL" name="for sell (for sale)">
+            <pattern>
+                <token>for</token>
+                <token>sell</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>for sale</suggestion>
+        </rule>
+        <rule id="CHALK_FULL" name="chalk full (chock-full)">
+            <pattern>
+                <token>chalk</token>
+                <token>full</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>chock-full</suggestion>
+        </rule>
+        <rule id="EGG_YOKE" name="egg yoke (egg yolk)">
+            <pattern>
+                <token>egg</token>
+                <token>yoke</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>egg yolk</suggestion>
+        </rule>
+        <rule id="ET_ALL" name="et all (et al.)">
+            <pattern>
+                <token>et</token>
+                <token>all</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>et al.</suggestion>
+        </rule>
+        <rule id="BOB_WIRE" name="bob/barb wire (barbed wire)">
+            <pattern>
+                <token regexp="yes">b(o|ar)b</token>
+                <token>wire</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>barbed wire</suggestion>
+        </rule>
+        <rule id="BYE_THE_WAY" name="bye the way (by the way)">
+            <pattern>
+                <token>bye</token>
+                <token>the</token>
+                <token>way</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>by the way</suggestion>
+        </rule>
+        <rule id="BACK_AND_FOURTH" name="back and fourth (back and forth)">
+            <pattern>
+                <token>back</token>
+                <token>and</token>
+                <token>fourth</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>back and forth</suggestion>
+        </rule>
+        <rule id="BACK_IN_FORTH" name="back in forth (back and forth)">
+            <pattern>
+                <token>back</token>
+                <token>in</token>
+                <token>forth</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>back and forth</suggestion>
+        </rule>
+        <rule id="ASK_WETHER" name="ask wether/weather (whether)">
+            <pattern>
+                <token regexp="yes">ask|question</token>
+                <token regexp="yes">wea?ther</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>ask|question whether</suggestion>
+        </rule>
+        <rule id="DO_TO_THE_FACT_THAT" name="'Do to that fact that' → 'Due to'">
+            <pattern>
+                <token>do</token>
+                <token>to</token>
+                <token>the</token>
+                <token>fact</token>
+                <token>that</token>
+            </pattern>
+            <message>Use</message>
+            <suggestion>due to</suggestion>
+        </rule>
+        <rule id="DEPENDENT" name="Dependent">
+            <pattern>
+                <token>dependant</token>
+                <token>on</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>dependent on</suggestion>
+        </rule>
+        <rule id="FURTHER_ADIEU" name="Further ado instead of further adieu">
+            <pattern>
+                <token>further</token>
+                <token>adieu</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>further ado</suggestion>
+        </rule>
+        <rule id="ADOPT_TO" name="Adapt to v. adopt to">
+            <pattern>
+                <token>adopt</token>
+                <token>to</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>adapt to</suggestion>
+        </rule>
+        <rule id="TO_AIDE" name="Aide in wrong context">
+            <pattern>
+                <token>to</token>
+                <token>aide</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>to aid</suggestion>
+        </rule>
+        <rule id="ALL_THE_FURTHER" name="'all the further' is a common, but incorrect phrase">
+            <pattern>
+                <token>all</token>
+                <token>the</token>
+                <token>further</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>as far as</suggestion>
+        </rule>
+        <rule id="AMENABLE_AMENDABLE" name="Amendable to error">
+            <pattern>
+                <token>amendable</token>
+                <token>to</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>amenable to</suggestion>
+        </rule>
+        <rule id="ASCETIC_ACID" name="Ascetic acid v acetic acid">
+            <pattern>
+                <token>ascetic</token>
+                <token>acid</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>acetic acid</suggestion>
+        </rule>
+        <rule id="AS_WELL_AS_BETTER" name="Missing 'as' in 'as well as or better than'">
+            <pattern>
+                <token>as</token>
+                <token>well</token>
+                <token>or</token>
+                <token>better</token>
+                <token>than</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>as well as or better than</suggestion>
+        </rule>
+        <rule id="AWAITING_FOR" name="Awaiting for - incorrect">
+            <pattern>
+                <token>awaiting</token>
+                <token>for</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>awaiting</suggestion>
+        </rule>
+        <rule id="CONFUSION_OF_CORRAL_CORAL" name="corral (coral)">
+            <pattern>
+                <token>corral</token>
+                <token regexp="yes">polyps?|reefs?|islands?|necklaces?|lipsticks?|bleaching|sea|springs?|atolls?|bay|ecosystems?|red|populations?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>coral polyps?|reefs?|islands?|necklaces?|lipsticks?|bleaching|sea|springs?|atolls?|bay|ecosystems?|red|populations?</suggestion>
+        </rule>
+        <rule id="CONFUSION_OF_MARSHAL_MARTIAL" name="marshal/marital (martial)">
+            <pattern>
+                <token regexp="yes">mar(sh|it)al</token>
+                <token regexp="yes">art(ist)?s?|court|discipline|laws?|life|music|overtones?|people|prowess|rhetoric|traditions?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>martial art(ist)?s?|court|discipline|laws?|life|music|overtones?|people|prowess|rhetoric|traditions?</suggestion>
+        </rule>
+        <rule id="CONFUSION_OF_ADDICTING_ADDICITVE" name="addicting (addictive)">
+            <pattern>
+                <token>addicting</token>
+                <token regexp="yes">behaviou?rs?|drugs?|game(play)?s?|nature|opiods?|painkillers?|substances?</token>
+            </pattern>
+            <message>Did you mean the adjective</message>
+            <suggestion>addictive behaviou?rs?|drugs?|game(play)?s?|nature|opiods?|painkillers?|substances?</suggestion>
+        </rule>
+        <rule id="DEEP_SEEDED" name="deep-seeded (deep-seated)">
+            <pattern>
+                <token>deep-seeded</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>deep-seated</suggestion>
+        </rule>
+        <rule id="DECEASE_DISEASE" name="decease (disease)">
+            <pattern>
+                <token regexp="yes">bacterial|cardiac|cardiovascular|chronic|deadly|fatal|fungal|genetic|infectious|pulmonary|respiratory|terminal|vascular</token>
+                <token>decease</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>bacterial|cardiac|cardiovascular|chronic|deadly|fatal|fungal|genetic|infectious|pulmonary|respiratory|terminal|vascular disease</suggestion>
+        </rule>
+        <rule id="STRIPPED_STRIPED" name="stripped (striped)">
+            <pattern>
+                <token>stripped</token>
+                <token regexp="yes">animals?|dress(es)?|hyenas?|jackets?|marlins?|pants|pattern|pyjamas|socks|suits?|sweaters?|(T-)?shirts?|ties?|trousers?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>striped animals?|dress(es)?|hyenas?|jackets?|marlins?|pants|pattern|pyjamas|socks|suits?|sweaters?|(T-)?shirts?|ties?|trousers?</suggestion>
+        </rule>
+        <rule id="STRIPED_STRIPPED" name="striped (stripped)">
+            <pattern>
+                <token>striped</token>
+                <token regexp="yes">naked|of</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>stripped naked|of</suggestion>
+        </rule>
+        <rule id="CALENDER" name="calender (calendar)">
+            <pattern>
+                <token>calender</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>calendar</suggestion>
+        </rule>
+        <rule id="ON_BEHAVE" name="on behave (on behalf)">
+            <pattern>
+                <token>on</token>
+                <token>behave</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>on behalf</suggestion>
+        </rule>
+        <rule id="WITCH_IS_WRONG" name="witch (which) is wrong">
+            <pattern>
+                <token>witch</token>
+                <token regexp="yes">is|was</token>
+                <token regexp="yes">wrong|right|(in)?correct|available|good|due|great|likely|responsible</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>which is|was wrong|right|(in)?correct|available|good|due|great|likely|responsible</suggestion>
+        </rule>
+        <rule id="WILDLY_ACCEPTED" name="wildly (widely) accepted">
+            <pattern>
+                <token>wildly</token>
+                <token>accepted</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>widely accepted</suggestion>
+        </rule>
+        <rule id="WAS_WANDERING_IF" name="I was wandering (wondering) if">
+            <pattern>
+                <token regexp="yes">am|was|is|been</token>
+                <token>wandering</token>
+                <token regexp="yes">if|whether</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>am|was|is|been wondering if|whether</suggestion>
+        </rule>
+        <rule id="EASE_OFF_USE" name="ease off (of) use">
+            <pattern>
+                <token>ease</token>
+                <token>off</token>
+                <token>use</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>ease of use</suggestion>
+        </rule>
+        <rule id="ADMIN_ADMIT" name="admin (admit)">
+            <pattern>
+                <token>must</token>
+                <token>admin</token>
+                <token>that</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>must admit that</suggestion>
+        </rule>
+        <rule id="TAKING_CASE_OF_IT" name="take case (care) of it">
+            <pattern>
+                <token>take</token>
+                <token>case</token>
+                <token>of</token>
+                <token regexp="yes">it|the|an?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>take care of it|the|an?</suggestion>
+        </rule>
+        <rule id="I_WANDER_IF" name="I wander (wonder) if">
+            <pattern>
+                <token>I</token>
+                <token>wander</token>
+                <token regexp="yes">if|whether</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>I wonder if|whether</suggestion>
+        </rule>
+        <rule id="WORTH_THAN" name="worth (worse) than">
+            <pattern>
+                <token regexp="yes">more|less</token>
+                <token>worth</token>
+                <token>than</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>more|less worse than</suggestion>
+        </rule>
+        <rule id="ECONOMICAL_ECONOMIC" name="'economical (economic) growth' etc.">
+            <pattern>
+                <token>economical</token>
+                <token regexp="yes">growth|development|policy|activity|recovery|reform|policies|crisis|cooperation|co-operation|problems|conditions|system|reforms|performance|history|climate|indicators|relations|power|situation|community|life|planning|affairs|theory|recession|change|review|factors|aid|benefits|circumstances|decline|sanctions|interests|analysis|strategy|difficulties|integration|issues|efficiency|assistance|position|terms|management|base|programme|digest|environment|union|activities|modelling|structure|success|reasons|sense|changes|forces|order|progress|loss|consequences|prosperity|resources|pressures|commission|depression|systems|miracle|regeneration|structures|trends|blockade|adviser|impact|restructuring|developments|measures|prospects|independence|stability|status|support|expansion</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>economic growth|development|policy|activity|recovery|reform|policies|crisis|cooperation|co-operation|problems|conditions|system|reforms|performance|history|climate|indicators|relations|power|situation|community|life|planning|affairs|theory|recession|change|review|factors|aid|benefits|circumstances|decline|sanctions|interests|analysis|strategy|difficulties|integration|issues|efficiency|assistance|position|terms|management|base|programme|digest|environment|union|activities|modelling|structure|success|reasons|sense|changes|forces|order|progress|loss|consequences|prosperity|resources|pressures|commission|depression|systems|miracle|regeneration|structures|trends|blockade|adviser|impact|restructuring|developments|measures|prospects|independence|stability|status|support|expansion</suggestion>
+        </rule>
+        <rule id="ECONOMIC_ECONOMICAL" name="'economic (economical) car' etc.">
+            <pattern>
+                <token>economic</token>
+                <token regexp="yes">way|use|repair|means|methods|method|price|proposition|manner|basis|car|cooking|design|heating|motoring|shopper</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>economical way|use|repair|means|methods|method|price|proposition|manner|basis|car|cooking|design|heating|motoring|shopper</suggestion>
+        </rule>
+        <rule id="VERSE" name="'written in verses (verse)'">
+            <pattern>
+                <token>write</token>
+                <token>in</token>
+                <token>verses</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>write in verse</suggestion>
+        </rule>
+        <rule id="NIECE_NICE" name="niece (nice) day etc.">
+            <pattern>
+                <token>niece</token>
+                <token regexp="yes">try|holiday|vacation|day|conference</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nice try|holiday|vacation|day|conference</suggestion>
+        </rule>
+        <rule id="FIRST_AID_KIT" name="first aid kid (kit)">
+            <pattern>
+                <token regexp="yes">aid|starter|t(ravel|ool)</token>
+                <token>kid</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>aid|starter|t(ravel|ool) kit</suggestion>
+        </rule>
+    </category>
+    <category id="NONSTANDARD_PHRASES" name="Nonstandard Phrases">
+        <rule id="ALONG_THE_SAME_VEIN" name="along the same vein (along the same line, in the same vein)">
+            <pattern>
+                <token>along</token>
+                <token>the</token>
+                <token>same</token>
+                <token>vein</token>
+            </pattern>
+            <message>This phrase is nonstandard. Use</message>
+            <suggestion>in the same vein</suggestion>
+        </rule>
+        <rule id="EARLY_ADAPTER" name="early adapter (early adopter)">
+            <pattern>
+                <token>early</token>
+                <token>adapter</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>early adopter</suggestion>
+        </rule>
+        <rule id="FAR_BE_IT_FOR_ME" name="far be it for me (far be it from me)">
+            <pattern>
+                <token>far</token>
+                <token>be</token>
+                <token>it</token>
+                <token>for</token>
+                <token>me</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>far be it from me</suggestion>
+        </rule>
+        <rule id="MONEY_IS_NO_OPTION" name="money is no option (money is no object)">
+            <pattern>
+                <token>money</token>
+                <token>is</token>
+                <token>no</token>
+                <token>option</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>money is no object</suggestion>
+        </rule>
+        <rule id="NIP_IT_IN_THE_BUTT" name="nip it in the butt (nip it in the bud)">
+            <pattern>
+                <token>nip</token>
+                <token>it</token>
+                <token>in</token>
+                <token>the</token>
+                <token>butt</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nip it in the bud</suggestion>
+        </rule>
+        <rule id="NOW_AND_DAYS" name="now and days (nowadays)">
+            <pattern>
+                <token>now</token>
+                <token>and</token>
+                <token>days</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>nowadays</suggestion>
+        </rule>
+        <rule id="THE_PROOF_IS_IN_THE_PUDDING" name="the proof is in the pudding (the proof of the pudding is in the eating)">
+            <pattern>
+                <token>the</token>
+                <token>proof</token>
+                <token>is</token>
+                <token>in</token>
+                <token>the</token>
+                <token>pudding</token>
+            </pattern>
+            <message>If you don't want to look for proofs hidden in your pudding, you probably meant</message>
+            <suggestion>the proof of the pudding is in the eating</suggestion>
+        </rule>
+        <rule id="QUI_BONO" name="qui bono (cui bono)">
+            <pattern>
+                <token>qui</token>
+                <token>bono</token>
+            </pattern>
+            <message>Non-standard Latin. Did you mean</message>
+            <suggestion>cui bono</suggestion>
+        </rule>
+        <rule id="IN_OR_WITH_REGARDS_TO_OF" name="in/with regards to/of (regarding, with regard to)">
+            <pattern>
+                <token regexp="yes">in|with</token>
+                <token>regards</token>
+                <token regexp="yes">to|of</token>
+            </pattern>
+            <message>Although "\1 \2 \3" is sometimes used in casual speech, it is typically considered a nonstandard phrase.</message>
+            <suggestion>in regard to</suggestion>
+        </rule>
+        <rule id="VERY_KNOWN" name="very known (very well-known, well-known)">
+            <pattern>
+                <token>very</token>
+                <token>known</token>
+            </pattern>
+            <message>Incorrect phrase. Use</message>
+            <suggestion>very well-known</suggestion>
+        </rule>
+        <rule id="INFORMATIONS" name="legal term: informations">
+            <pattern>
+                <token>informations</token>
+            </pattern>
+            <message>The word '\1' is a legal term. In standard English, the word 'information' is a non-count noun.</message>
+            <suggestion>information</suggestion>
+        </rule>
+    </category>
+    <category id="SEMANTICS" name="Semantics">
+        <rule id="RIGHT_IN_MY_ALLEY" name="right in (up) my alley">
+            <pattern>
+                <token>right</token>
+                <token>in</token>
+                <token>my</token>
+                <token>alley</token>
+            </pattern>
+            <message>Did you mean 'up'?</message>
+            <suggestion>right up my alley</suggestion>
+        </rule>
+        <rule id="PEAS_IN_A_POT" name="two peas in a pot (pod)">
+            <pattern>
+                <token>two</token>
+                <token>peas</token>
+                <token>in</token>
+                <token>a</token>
+                <token>pot</token>
+            </pattern>
+            <message>Did you mean 'pod'?</message>
+            <suggestion>two peas in a pod</suggestion>
+        </rule>
+        <rule id="CASE_AND_POINT" name="case and (in) point">
+            <pattern>
+                <token>case</token>
+                <token>and</token>
+                <token>point</token>
+            </pattern>
+            <message>Did you mean 'case in point'?</message>
+            <suggestion>case in point</suggestion>
+        </rule>
+    </category>
+    <category id="TYPOGRAPHY" name="Typography">
+        <rule id="TL_DR" name="TL DR (TL;DR)">
+            <pattern>
+                <token regexp="yes">tl|TL</token>
+                <token regexp="yes">[/:]</token>
+                <token regexp="yes">dr|DR</token>
+            </pattern>
+            <message>Did you mean the internet acronym</message>
+            <suggestion>TL;DR</suggestion>
+        </rule>
+    </category>
+    <category id="PROPER_NOUNS" name="Proper Nouns">
+        <rule id="SPACEX" name="SpaceX">
+            <pattern>
+                <token>Space</token>
+                <token>X</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>SpaceX</suggestion>
+        </rule>
+        <rule id="POWER_SHELL" name="PowerShell">
+            <pattern>
+                <token>power</token>
+                <token>shell</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>PowerShell</suggestion>
+        </rule>
+        <rule id="EDGAR_ALLAN_POE" name="Allen Poe (Allan Poe)">
+            <pattern>
+                <token regexp="yes">All?[ae]n</token>
+                <token regexp="yes">Poe?</token>
+            </pattern>
+            <message>Did you mean the American writer "Edgar Allan Poe"?</message>
+            <suggestion>Allan Poe</suggestion>
+        </rule>
+        <rule id="WHATS_APP" name="WhatsApp">
+            <pattern>
+                <token>whats</token>
+                <token>app</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>WhatsApp</suggestion>
+        </rule>
+        <rule id="CHAT_GPT" name="Chat GPT (ChatGPT)">
+            <pattern>
+                <token>Chat</token>
+                <token>GPT</token>
+            </pattern>
+            <message>Grammar correction</message>
+            <suggestion>ChatGPT</suggestion>
+        </rule>
+        <rule id="HERBERT_DIES" name="Herbert Dies (Diess)">
+            <pattern>
+                <token case_sensitive="yes">Herbert</token>
+                <token case_sensitive="yes">Dies</token>
+            </pattern>
+            <message>Did you mean the automotive manager</message>
+            <suggestion>Herbert Diess</suggestion>
+        </rule>
+        <rule id="EIFFEL_TOWER" name="Eifel (Eiffel)">
+            <pattern>
+                <token>eifel</token>
+                <token>tower</token>
+            </pattern>
+            <message>Did you mean the</message>
+            <suggestion>Eiffel Tower</suggestion>
+        </rule>
+        <rule id="GIT_HUB" name="GitHub">
+            <pattern>
+                <token>git</token>
+                <token>hub</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>GitHub</suggestion>
+        </rule>
+        <rule id="CARNEGIE_MELLON" name="Carnegie Mellon">
+            <pattern>
+                <token regexp="yes">Carn[ie]g(y|ie)</token>
+                <token regexp="yes">Mell?[eo]n</token>
+            </pattern>
+            <message>Did you mean the university</message>
+            <suggestion>Carnegie Mellon</suggestion>
+        </rule>
+        <rule id="AIR_BNB" name="Air Bnb (Airbnb)">
+            <pattern>
+                <token>Air</token>
+                <token>Bnb</token>
+            </pattern>
+            <message>The name of this online marketplace is spelled as one word.</message>
+            <suggestion>Airbnb</suggestion>
+        </rule>
+        <rule id="WERNHER_VON_BRAUN" name="Werner (Wernher) von Braun">
+            <pattern>
+                <token regexp="yes">wernh?err?</token>
+                <token regexp="yes">v[ao][mn]</token>
+                <token regexp="yes">brown|brauh?n</token>
+            </pattern>
+            <message>Did you mean the German-born aerospace engineer</message>
+            <suggestion>Wernher von Braun</suggestion>
+        </rule>
+        <rule id="JENNIFER_ANISTON" name="Jennifer Aniston">
+            <pattern>
+                <token regexp="yes">Jenn?iff?er</token>
+                <token regexp="yes">Ann?iston</token>
+            </pattern>
+            <message>Did you mean the actress</message>
+            <suggestion>Jennifer Aniston</suggestion>
+        </rule>
+        <rule id="RINGO_STARR" name="Ringo Starr">
+            <pattern>
+                <token>Ringo</token>
+                <token regexp="yes">Starr?</token>
+            </pattern>
+            <message>Did you mean the Beatles drummer</message>
+            <suggestion>Ringo Starr</suggestion>
+        </rule>
+        <rule id="SALVADOR_DALI" name="Salvador Dalí">
+            <pattern>
+                <token regexp="yes">Salva[td]ore?</token>
+                <token regexp="yes">Dall?[íìi]</token>
+            </pattern>
+            <message>Did you mean the Spanish surrealist artist</message>
+            <suggestion>Salvador Dalí</suggestion>
+        </rule>
+        <rule id="JESUS_CHRIS" name="Jesus Chris (Christ)">
+            <pattern>
+                <token>Jesus</token>
+                <token regexp="yes" case_sensitive="yes">Chris|Criest</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Jesus Christ</suggestion>
+        </rule>
+        <rule id="JAVA_SCRIPT" name="JavaScript">
+            <pattern>
+                <token>java</token>
+                <token>script</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>JavaScript</suggestion>
+        </rule>
+        <rule id="COCA_COLA" name="Coca Cola (Coca-Cola)">
+            <pattern>
+                <token>Coca</token>
+                <token>Cola</token>
+            </pattern>
+            <message>The name of this popular soft drink is capitalized and spelled with a hyphen.</message>
+            <suggestion>Coca-Cola</suggestion>
+        </rule>
+        <rule id="GREYS_ANATOMY" name="Grey's Anatomy">
+            <pattern>
+                <token regexp="yes">Gr[ae]ys?</token>
+                <token>Anatomy</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Grey's Anatomy</suggestion>
+        </rule>
+        <rule id="ASSASSINS_CREED" name="Assassin's Creed">
+            <pattern>
+                <token regexp="yes">ass?ass?ins?</token>
+                <token regexp="yes">['’`´‘ʻ]</token>
+                <token>s</token>
+                <token>creed</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Assassin's Creed</suggestion>
+        </rule>
+        <rule id="MERRIAM_WEBSTER" name="Merriam Webster (Merriam-Webster)">
+            <pattern>
+                <token regexp="yes">Merr?iam</token>
+                <token regexp="yes">Webb?ster</token>
+            </pattern>
+            <message>The name of this popular dictionary is spelled with a hyphen.</message>
+            <suggestion>Merriam-Webster</suggestion>
+        </rule>
+        <rule id="SAINT_TROPEZ" name="Saint Tropez (Saint-Tropez)">
+            <pattern>
+                <token>Saint</token>
+                <token>Tropez</token>
+            </pattern>
+            <message>The name of this town on the French Riviera is spelled with a hyphen.</message>
+            <suggestion>Saint-Tropez</suggestion>
+        </rule>
+        <rule id="ROLLS_ROYCE" name="Rolls Royce (Rolls-Royce)">
+            <pattern>
+                <token>Rolls</token>
+                <token>Royce</token>
+            </pattern>
+            <message>This car brand is normally spelled with a hyphen</message>
+            <suggestion>Rolls-Royce</suggestion>
+        </rule>
+        <rule id="ALKA_SELTZER" name="Alka Seltzer (Alker-Seltzer)">
+            <pattern>
+                <token regexp="yes">Alk(a|er)</token>
+                <token regexp="yes">Selt?zer</token>
+            </pattern>
+            <message>The name of this medicine is normally spelled with a hyphen</message>
+            <suggestion>Alka-Seltzer</suggestion>
+        </rule>
+        <rule id="JAY_Z" name="Jay Z (Jay-Z)">
+            <pattern>
+                <token>Jay</token>
+                <token>Z</token>
+            </pattern>
+            <message>The name of this rapper is spelled with a hyphen</message>
+            <suggestion>Jay-Z</suggestion>
+        </rule>
+        <rule id="OBJECTIVE_C" name="Objective-C">
+            <pattern>
+                <token>Objective</token>
+                <token>C</token>
+            </pattern>
+            <message>Did you mean the programming language</message>
+            <suggestion>Objective-C</suggestion>
+        </rule>
+        <rule id="DELTA_AIRLINES" name="Delta Air Lines">
+            <pattern>
+                <token>Delta</token>
+                <token regexp="yes">Airlines?</token>
+            </pattern>
+            <message>The name of this airline is</message>
+            <suggestion>Delta Air Lines</suggestion>
+        </rule>
+        <rule id="MCDONALDS" name="McDonald's">
+            <pattern>
+                <token>mcdonalds</token>
+            </pattern>
+            <message>Did you mean the fast food chain</message>
+            <suggestion>McDonald's</suggestion>
+        </rule>
+        <rule id="SCHITTS_CREEK" name="Schitt's Creek">
+            <pattern>
+                <token regexp="yes">sch?it?ts</token>
+                <token>creek</token>
+            </pattern>
+            <message>Did you mean the TV show</message>
+            <suggestion>Schitt's Creek</suggestion>
+        </rule>
+        <rule id="SAMS_CLUB" name="Sam's Club">
+            <pattern>
+                <token>sams</token>
+                <token>club</token>
+            </pattern>
+            <message>Did you mean the retail warehouse</message>
+            <suggestion>Sam's Club</suggestion>
+        </rule>
+        <rule id="VICTORIAS_SECRET" name="Victoria's Secret">
+            <pattern>
+                <token regexp="yes">Victorias?</token>
+                <token>
+                    Secret
+                    </token>
+            </pattern>
+            <message>Did you mean the lingerie company</message>
+            <suggestion>Victoria's Secret</suggestion>
+        </rule>
+        <rule id="LOCKHEED_MARTIN" name="Lockheed Martin">
+            <pattern>
+                <token>Lockhead</token>
+                <token>Martin</token>
+            </pattern>
+            <message>Did you mean the defense company</message>
+            <suggestion>Lockheed Martin</suggestion>
+        </rule>
+        <rule id="JACK_DANIELS" name="Jack Daniel's">
+            <pattern>
+                <token>Jack</token>
+                <token>
+                    Daniels
+                    </token>
+            </pattern>
+            <message>Did you mean the whiskey brand</message>
+            <suggestion>Jack Daniel's</suggestion>
+        </rule>
+        <rule id="KINGS_COLLEGE" name="King's College">
+            <pattern>
+                <token>Kings</token>
+                <token regexp="yes">Coll?[ae]ge</token>
+            </pattern>
+            <message>Did you mean the university</message>
+            <suggestion>King's College</suggestion>
+        </rule>
+        <rule id="DOMINOS_PIZZA" name="Dominos Pizza">
+            <pattern>
+                <token regexp="yes">Dominos?</token>
+                <token>Pizza</token>
+            </pattern>
+            <message>Did you mean the restaurant chain</message>
+            <suggestion>Domino's Pizza</suggestion>
+        </rule>
+        <rule id="UNCLE_BENS" name="Uncle Bens -&gt; Ben's">
+            <pattern>
+                <token>Uncle</token>
+                <token>Bens</token>
+            </pattern>
+            <message>Did you mean the rice brand</message>
+            <suggestion>Uncle Ben's</suggestion>
+        </rule>
+        <rule id="KELLOGGS" name="Kellogg's">
+            <pattern>
+                <token regexp="yes">Kell?ogg?s</token>
+            </pattern>
+            <message>The food company is spelled</message>
+            <suggestion>Kellogg's</suggestion>
+        </rule>
+        <rule id="WENDYS" name="Wendy's">
+            <pattern>
+                <token>wendys</token>
+            </pattern>
+            <message>Did you mean the name</message>
+            <suggestion>Wendy's</suggestion>
+        </rule>
+        <rule id="SAINSBURYS" name="Sainsbury's">
+            <pattern>
+                <token>sainsburys</token>
+            </pattern>
+            <message>Did you mean the grocery shopping company</message>
+            <suggestion>Sainsbury's</suggestion>
+        </rule>
+        <rule id="SAO_PAOLO" name="Sau Paulo (São Paulo)">
+            <pattern>
+                <token regexp="yes">S[áãàa][ou]</token>
+                <token regexp="yes">Pa[ou]l[uo]</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>São Paulo</suggestion>
+        </rule>
+        <rule id="ERDOGAN" name="Erdogan (Erdoğan)">
+            <pattern>
+                <token>Erdogan</token>
+            </pattern>
+            <message>The name of the Turkish politician is spelled</message>
+            <suggestion>Erdoğan</suggestion>
+        </rule>
+        <rule id="EARL_GREY" name="Earl Grey">
+            <pattern>
+                <token>earl</token>
+                <token regexp="yes">gr[ae]y</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Earl Grey</suggestion>
+        </rule>
+        <rule id="NEW_ZEELAND" name="New Zeeland (Zealand)">
+            <pattern>
+                <token>new</token>
+                <token regexp="yes">zeeland|sealand</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>New Zealand</suggestion>
+        </rule>
+        <rule id="NDRANGHETA" name="'Ndrangheta">
+            <pattern>
+                <token>
+                    Ndrangheta
+                    </token>
+            </pattern>
+            <message>This name is prefixed with an apostrophe.</message>
+            <suggestion>'Ndrangheta</suggestion>
+        </rule>
+        <rule id="EMMANUEL_MACRON" name="Emmanuel Macron">
+            <pattern>
+                <token regexp="yes">E?mm?anue?ll?e?</token>
+                <token regexp="yes">Macrone?</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Emmanuel Macron</suggestion>
+        </rule>
+        <rule id="PAYPAL" name="PayPal">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">Paypal|paypal|payPal</token>
+            </pattern>
+            <message>The official name of this payment provider is spelled with two capital "P".</message>
+            <suggestion>PayPal</suggestion>
+        </rule>
+        <rule id="YOUTUBE" name="YouTube">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">Youtube|you[Tt]ube</token>
+            </pattern>
+            <message>The official name of this popular video platform is spelled with a capital "T".</message>
+            <suggestion>YouTube</suggestion>
+        </rule>
+        <rule id="LINKEDIN" name="LinkedIn">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">Linkedin|linked[Ii]n</token>
+            </pattern>
+            <message>The name of this social business platform is spelled with a capital "I".</message>
+            <suggestion>LinkedIn</suggestion>
+        </rule>
+        <rule id="WECHAT" name="WeChat">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">Wechat|wechat</token>
+            </pattern>
+            <message>The official name of this popular chat service is spelled with a capital "C".</message>
+            <suggestion>WeChat</suggestion>
+        </rule>
+        <rule id="GITHUB" name="GitHub">
+            <pattern>
+                <token regexp="yes" case_sensitive="yes">Github|github</token>
+            </pattern>
+            <message>The official name of this software platform is spelled with a capital "H".</message>
+            <suggestion>GitHub</suggestion>
+        </rule>
+        <rule id="JIMMY_BUFFET" name="Jimmy Buffet (Buffett)">
+            <pattern>
+                <token>Jimmy</token>
+                <token>Buffet</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Jimmy Buffett</suggestion>
+        </rule>
+        <rule id="HARRISON_FORD" name="Harison (Harrison) Ford">
+            <pattern>
+                <token>Harison</token>
+                <token>Ford</token>
+            </pattern>
+            <message>Did you mean the American actor and film producer</message>
+            <suggestion>Harrison Ford</suggestion>
+        </rule>
+        <rule id="SCHROEDINGER" name="Erwin Schroedinger (Schrödinger)">
+            <pattern>
+                <token regexp="yes">Schroe?dinger</token>
+            </pattern>
+            <message>Did you refer to the Austrian physicist Erwin</message>
+            <suggestion>Schrödinger</suggestion>
+        </rule>
+        <rule id="JIMMY_HENDRIX" name="Jimmy (Jimi) Hendrix">
+            <pattern>
+                <token>Jimmy</token>
+                <token>Hendrix</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Jimi Hendrix</suggestion>
+        </rule>
+        <rule id="PHILLIPS_ARENA" name="Phillips (Philips) Arena">
+            <pattern>
+                <token>Phillips</token>
+                <token>Arena</token>
+            </pattern>
+            <message>Did you mean</message>
+            <suggestion>Philips Arena</suggestion>
+        </rule>
+        <rule id="APPSTORE" name="AppStore (App Store, Amazon Appstore)">
+            <pattern>
+                <token>appstore</token>
+            </pattern>
+            <message>If you mean the Apple digital distribution platform, use</message>
+            <suggestion>App Store</suggestion>
+        </rule>
+        <rule id="POKEMON" name="Pokémon">
+            <pattern>
+                <token>Pokemon</token>
+            </pattern>
+            <message>The name of this game or TV show is spelled with an accent.</message>
+            <suggestion>Pokémon</suggestion>
+        </rule>
+        <rule id="POKEMONS" name="Plural of Pokémon">
+            <pattern>
+                <token regexp="yes">Pok[eé]mons</token>
+            </pattern>
+            <message>The plural of 'Pokémon' is</message>
+            <suggestion>Pokémon</suggestion>
+        </rule>
+    </category>
+</rules>

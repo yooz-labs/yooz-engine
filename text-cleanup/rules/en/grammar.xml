@@ -1,0 +1,2272 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    English Grammar Rules for Yooz Text Cleanup
+
+    Focus: Spoken-to-written text correction
+    Target: 100-500 rules covering common speech patterns
+
+    Categories:
+    - GRAMMAR: Subject-verb agreement
+    - ARTICLES: a/an corrections
+    - INFORMAL: Spoken contractions (gonna, wanna)
+    - VERBS: Irregular verb corrections
+    - BASIC: Common typos and misspellings
+    - PUNCTUATION: Capitalization fixes
+    - STYLE: Redundancy and wordiness
+    - ADVANCED: Complex grammar patterns
+
+    Last Updated: December 27, 2025
+-->
+<rules>
+
+    <!-- ================================================================== -->
+    <!-- GRAMMAR: Subject-Verb Agreement (~40 rules)                        -->
+    <!-- ================================================================== -->
+    <category id="GRAMMAR" name="Subject-Verb Agreement">
+
+        <!-- I + verb agreement -->
+        <!-- Higher priority rule for "I are VBG" to avoid AM_I cascade -->
+        <rule id="I_ARE_VBG" name="I are + verb-ing" prio="20">
+            <pattern>
+                <token>I</token>
+                <token>are</token>
+                <token postag="VBG" />
+            </pattern>
+            <message>Use 'am' with 'I'.</message>
+            <suggestion>I'm \3</suggestion>
+        </rule>
+
+        <rule id="I_ARE" name="I are" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>are</token>
+            </pattern>
+            <message>Use 'am' with 'I'.</message>
+            <suggestion>I am</suggestion>
+        </rule>
+
+        <rule id="I_IS" name="I is" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>is</token>
+            </pattern>
+            <message>Use 'am' with 'I'.</message>
+            <suggestion>I am</suggestion>
+        </rule>
+
+        <rule id="I_DOESNT" name="I doesn't" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>doesn't</token>
+            </pattern>
+            <message>Use 'don't' with 'I'.</message>
+            <suggestion>I don't</suggestion>
+        </rule>
+
+        <!-- NOTE: "I were" rule removed - too many false positives with subjunctive
+             e.g., "If I were you" is correct and should NOT be changed to "If I was you" -->
+
+        <!-- He/She/It + verb agreement -->
+        <rule id="HE_DONT" name="He don't" prio="10">
+            <pattern>
+                <token>He</token>
+                <token>don't</token>
+            </pattern>
+            <message>Use 'doesn't' with 'he'.</message>
+            <suggestion>He doesn't</suggestion>
+        </rule>
+
+        <rule id="SHE_DONT" name="She don't" prio="10">
+            <pattern>
+                <token>She</token>
+                <token>don't</token>
+            </pattern>
+            <message>Use 'doesn't' with 'she'.</message>
+            <suggestion>She doesn't</suggestion>
+        </rule>
+
+        <rule id="IT_DONT" name="It don't" prio="10">
+            <pattern>
+                <token>It</token>
+                <token>don't</token>
+            </pattern>
+            <message>Use 'doesn't' with 'it'.</message>
+            <suggestion>It doesn't</suggestion>
+        </rule>
+
+        <rule id="HE_HAVE" name="He have" prio="9">
+            <pattern>
+                <token>He</token>
+                <token>have</token>
+            </pattern>
+            <message>Use 'has' with 'he'.</message>
+            <suggestion>He has</suggestion>
+        </rule>
+
+        <rule id="SHE_HAVE" name="She have" prio="9">
+            <pattern>
+                <token>She</token>
+                <token>have</token>
+            </pattern>
+            <message>Use 'has' with 'she'.</message>
+            <suggestion>She has</suggestion>
+        </rule>
+
+        <rule id="IT_HAVE" name="It have" prio="9">
+            <pattern>
+                <token>It</token>
+                <token>have</token>
+            </pattern>
+            <message>Use 'has' with 'it'.</message>
+            <suggestion>It has</suggestion>
+        </rule>
+
+        <rule id="HE_WERE" name="He were" prio="8">
+            <pattern>
+                <token>He</token>
+                <token>were</token>
+            </pattern>
+            <message>Use 'was' with 'he'.</message>
+            <suggestion>He was</suggestion>
+        </rule>
+
+        <rule id="SHE_WERE" name="She were" prio="8">
+            <pattern>
+                <token>She</token>
+                <token>were</token>
+            </pattern>
+            <message>Use 'was' with 'she'.</message>
+            <suggestion>She was</suggestion>
+        </rule>
+
+        <rule id="IT_WERE" name="It were" prio="8">
+            <pattern>
+                <token>It</token>
+                <token>were</token>
+            </pattern>
+            <message>Use 'was' with 'it'.</message>
+            <suggestion>It was</suggestion>
+        </rule>
+
+        <!-- We/They/You + verb agreement -->
+        <rule id="WE_WAS" name="We was" prio="9">
+            <pattern>
+                <token>We</token>
+                <token>was</token>
+            </pattern>
+            <message>Use 'were' with 'we'.</message>
+            <suggestion>We were</suggestion>
+        </rule>
+
+        <rule id="THEY_WAS" name="They was" prio="9">
+            <pattern>
+                <token>They</token>
+                <token>was</token>
+            </pattern>
+            <message>Use 'were' with 'they'.</message>
+            <suggestion>They were</suggestion>
+        </rule>
+
+        <rule id="YOU_WAS" name="You was" prio="9">
+            <pattern>
+                <token>You</token>
+                <token>was</token>
+            </pattern>
+            <message>Use 'were' with 'you'.</message>
+            <suggestion>You were</suggestion>
+        </rule>
+
+        <rule id="WE_DOESNT" name="We doesn't" prio="10">
+            <pattern>
+                <token>We</token>
+                <token>doesn't</token>
+            </pattern>
+            <message>Use 'don't' with 'we'.</message>
+            <suggestion>We don't</suggestion>
+        </rule>
+
+        <rule id="THEY_DOESNT" name="They doesn't" prio="10">
+            <pattern>
+                <token>They</token>
+                <token>doesn't</token>
+            </pattern>
+            <message>Use 'don't' with 'they'.</message>
+            <suggestion>They don't</suggestion>
+        </rule>
+
+        <rule id="YOU_DOESNT" name="You doesn't" prio="10">
+            <pattern>
+                <token>You</token>
+                <token>doesn't</token>
+            </pattern>
+            <message>Use 'don't' with 'you'.</message>
+            <suggestion>You don't</suggestion>
+        </rule>
+
+        <rule id="WE_IS" name="We is" prio="10">
+            <pattern>
+                <token>We</token>
+                <token>is</token>
+            </pattern>
+            <message>Use 'are' with 'we'.</message>
+            <suggestion>We are</suggestion>
+        </rule>
+
+        <rule id="THEY_IS" name="They is" prio="10">
+            <pattern>
+                <token>They</token>
+                <token>is</token>
+            </pattern>
+            <message>Use 'are' with 'they'.</message>
+            <suggestion>They are</suggestion>
+        </rule>
+
+        <rule id="YOU_IS" name="You is" prio="10">
+            <pattern>
+                <token>You</token>
+                <token>is</token>
+            </pattern>
+            <message>Use 'are' with 'you'.</message>
+            <suggestion>You are</suggestion>
+        </rule>
+
+        <!-- There/Here + verb agreement -->
+        <rule id="THERE_IS_PLURAL" name="There is (plural noun)" prio="6" tags="picky">
+            <pattern>
+                <token>There</token>
+                <token>is</token>
+                <token>many</token>
+            </pattern>
+            <message>Use 'are' with plural subjects.</message>
+            <suggestion>There are many</suggestion>
+        </rule>
+
+        <rule id="THERE_IS_SEVERAL" name="There is several" prio="6">
+            <pattern>
+                <token>There</token>
+                <token>is</token>
+                <token>several</token>
+            </pattern>
+            <message>Use 'are' with 'several'.</message>
+            <suggestion>There are several</suggestion>
+        </rule>
+
+        <rule id="THERE_WAS_MANY" name="There was many" prio="6">
+            <pattern>
+                <token>There</token>
+                <token>was</token>
+                <token>many</token>
+            </pattern>
+            <message>Use 'were' with 'many'.</message>
+            <suggestion>There were many</suggestion>
+        </rule>
+
+        <!-- Double negatives -->
+        <rule id="DONT_KNOW_NOTHING" name="don't know nothing" prio="7">
+            <pattern>
+                <token>don't</token>
+                <token>know</token>
+                <token>nothing</token>
+            </pattern>
+            <message>Avoid double negatives.</message>
+            <suggestion>don't know anything</suggestion>
+        </rule>
+
+        <rule id="CANT_DO_NOTHING" name="can't do nothing" prio="7">
+            <pattern>
+                <token>can't</token>
+                <token>do</token>
+                <token>nothing</token>
+            </pattern>
+            <message>Avoid double negatives.</message>
+            <suggestion>can't do anything</suggestion>
+        </rule>
+
+        <rule id="DIDNT_SEE_NOBODY" name="didn't see nobody" prio="7">
+            <pattern>
+                <token>didn't</token>
+                <token>see</token>
+                <token>nobody</token>
+            </pattern>
+            <message>Avoid double negatives.</message>
+            <suggestion>didn't see anybody</suggestion>
+        </rule>
+
+        <rule id="AINT_GOT_NO" name="ain't got no" prio="7">
+            <pattern>
+                <token>ain't</token>
+                <token>got</token>
+                <token>no</token>
+            </pattern>
+            <message>Avoid double negatives.</message>
+            <suggestion>don't have any</suggestion>
+        </rule>
+
+        <!-- Common spoken errors -->
+        <rule id="COULD_OF" name="could of" prio="10">
+            <pattern>
+                <token>could</token>
+                <token>of</token>
+            </pattern>
+            <message>'Could of' is incorrect. Use 'could have'.</message>
+            <suggestion>could have</suggestion>
+        </rule>
+
+        <rule id="WOULD_OF" name="would of" prio="10">
+            <pattern>
+                <token>would</token>
+                <token>of</token>
+            </pattern>
+            <message>'Would of' is incorrect. Use 'would have'.</message>
+            <suggestion>would have</suggestion>
+        </rule>
+
+        <rule id="SHOULD_OF" name="should of" prio="10">
+            <pattern>
+                <token>should</token>
+                <token>of</token>
+            </pattern>
+            <message>'Should of' is incorrect. Use 'should have'.</message>
+            <suggestion>should have</suggestion>
+        </rule>
+
+        <rule id="MUST_OF" name="must of" prio="10">
+            <pattern>
+                <token>must</token>
+                <token>of</token>
+            </pattern>
+            <message>'Must of' is incorrect. Use 'must have'.</message>
+            <suggestion>must have</suggestion>
+        </rule>
+
+        <rule id="MIGHT_OF" name="might of" prio="10">
+            <pattern>
+                <token>might</token>
+                <token>of</token>
+            </pattern>
+            <message>'Might of' is incorrect. Use 'might have'.</message>
+            <suggestion>might have</suggestion>
+        </rule>
+
+        <!-- Pronoun errors -->
+        <rule id="ME_AND_HIM" name="Me and him" prio="5" tags="picky">
+            <pattern>
+                <token>Me</token>
+                <token>and</token>
+                <token>him</token>
+            </pattern>
+            <message>Consider 'He and I' as subject.</message>
+            <suggestion>He and I</suggestion>
+        </rule>
+
+        <rule id="ME_AND_HER" name="Me and her" prio="5" tags="picky">
+            <pattern>
+                <token>Me</token>
+                <token>and</token>
+                <token>her</token>
+            </pattern>
+            <message>Consider 'She and I' as subject.</message>
+            <suggestion>She and I</suggestion>
+        </rule>
+
+        <rule id="HIM_AND_ME" name="Him and me (subject)" prio="5" tags="picky">
+            <pattern>
+                <token>Him</token>
+                <token>and</token>
+                <token>me</token>
+            </pattern>
+            <message>Consider 'He and I' as subject.</message>
+            <suggestion>He and I</suggestion>
+        </rule>
+
+    </category>
+
+    <!-- ================================================================== -->
+    <!-- ARTICLES: a/an corrections (~50 rules)                             -->
+    <!-- ================================================================== -->
+    <category id="ARTICLES" name="Article Usage">
+
+        <!-- A before vowel sounds - common words -->
+        <rule id="A_APPLE" name="a apple" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>apple</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an apple</suggestion>
+        </rule>
+
+        <rule id="A_ORANGE" name="a orange" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>orange</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an orange</suggestion>
+        </rule>
+
+        <rule id="A_ELEPHANT" name="a elephant" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>elephant</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an elephant</suggestion>
+        </rule>
+
+        <rule id="A_IDEA" name="a idea" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>idea</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an idea</suggestion>
+        </rule>
+
+        <rule id="A_HOUR" name="a hour" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>hour</token>
+            </pattern>
+            <message>Use 'an' before 'hour' (silent h).</message>
+            <suggestion>an hour</suggestion>
+        </rule>
+
+        <rule id="A_HONEST" name="a honest" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>honest</token>
+            </pattern>
+            <message>Use 'an' before 'honest' (silent h).</message>
+            <suggestion>an honest</suggestion>
+        </rule>
+
+        <rule id="A_HONOR" name="a honor" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>honor</token>
+            </pattern>
+            <message>Use 'an' before 'honor' (silent h).</message>
+            <suggestion>an honor</suggestion>
+        </rule>
+
+        <rule id="A_HEIR" name="a heir" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>heir</token>
+            </pattern>
+            <message>Use 'an' before 'heir' (silent h).</message>
+            <suggestion>an heir</suggestion>
+        </rule>
+
+        <rule id="A_UMBRELLA" name="a umbrella" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>umbrella</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an umbrella</suggestion>
+        </rule>
+
+        <rule id="A_INTERESTING" name="a interesting" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>interesting</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an interesting</suggestion>
+        </rule>
+
+        <rule id="A_IMPORTANT" name="a important" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>important</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an important</suggestion>
+        </rule>
+
+        <rule id="A_EASY" name="a easy" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>easy</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an easy</suggestion>
+        </rule>
+
+        <rule id="A_OBVIOUS" name="a obvious" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>obvious</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an obvious</suggestion>
+        </rule>
+
+        <rule id="A_UNUSUAL" name="a unusual" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>unusual</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an unusual</suggestion>
+        </rule>
+
+        <rule id="A_UGLY" name="a ugly" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>ugly</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an ugly</suggestion>
+        </rule>
+
+        <rule id="A_ANIMAL" name="a animal" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>animal</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an animal</suggestion>
+        </rule>
+
+        <rule id="A_EMAIL" name="a email" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>email</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an email</suggestion>
+        </rule>
+
+        <rule id="A_EXAMPLE" name="a example" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>example</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an example</suggestion>
+        </rule>
+
+        <rule id="A_ERROR" name="a error" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>error</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an error</suggestion>
+        </rule>
+
+        <rule id="A_ISSUE" name="a issue" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>issue</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an issue</suggestion>
+        </rule>
+
+        <rule id="A_OPPORTUNITY" name="a opportunity" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>opportunity</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an opportunity</suggestion>
+        </rule>
+
+        <rule id="A_OPINION" name="a opinion" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>opinion</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an opinion</suggestion>
+        </rule>
+
+        <rule id="A_ACCIDENT" name="a accident" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>accident</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an accident</suggestion>
+        </rule>
+
+        <rule id="A_ANSWER" name="a answer" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>answer</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an answer</suggestion>
+        </rule>
+
+        <rule id="A_ARTICLE" name="a article" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>article</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an article</suggestion>
+        </rule>
+
+        <rule id="A_ATTEMPT" name="a attempt" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>attempt</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an attempt</suggestion>
+        </rule>
+
+        <rule id="A_OFFICE" name="a office" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>office</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an office</suggestion>
+        </rule>
+
+        <rule id="A_OFFER" name="a offer" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>offer</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an offer</suggestion>
+        </rule>
+
+        <rule id="A_ORDER" name="a order" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>order</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an order</suggestion>
+        </rule>
+
+        <rule id="A_UPDATE" name="a update" prio="10">
+            <pattern>
+                <token>a</token>
+                <token>update</token>
+            </pattern>
+            <message>Use 'an' before vowel sounds.</message>
+            <suggestion>an update</suggestion>
+        </rule>
+
+        <!-- AN before consonant sounds -->
+        <rule id="AN_UNIVERSITY" name="an university" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>university</token>
+            </pattern>
+            <message>Use 'a' before 'university' (sounds like 'yoo').</message>
+            <suggestion>a university</suggestion>
+        </rule>
+
+        <rule id="AN_UNION" name="an union" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>union</token>
+            </pattern>
+            <message>Use 'a' before 'union' (sounds like 'yoo').</message>
+            <suggestion>a union</suggestion>
+        </rule>
+
+        <rule id="AN_UNITED" name="an united" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>united</token>
+            </pattern>
+            <message>Use 'a' before 'united' (sounds like 'yoo').</message>
+            <suggestion>a united</suggestion>
+        </rule>
+
+        <rule id="AN_UNIQUE" name="an unique" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>unique</token>
+            </pattern>
+            <message>Use 'a' before 'unique' (sounds like 'yoo').</message>
+            <suggestion>a unique</suggestion>
+        </rule>
+
+        <rule id="AN_ONE" name="an one" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>one</token>
+            </pattern>
+            <message>Use 'a' before 'one' (sounds like 'w').</message>
+            <suggestion>a one</suggestion>
+        </rule>
+
+        <rule id="AN_ONCE" name="an once" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>once</token>
+            </pattern>
+            <message>Use 'a' before 'once' (sounds like 'w').</message>
+            <suggestion>a once</suggestion>
+        </rule>
+
+        <rule id="AN_EUROPEAN" name="an European" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>European</token>
+            </pattern>
+            <message>Use 'a' before 'European' (sounds like 'y').</message>
+            <suggestion>a European</suggestion>
+        </rule>
+
+        <rule id="AN_USEFUL" name="an useful" prio="9">
+            <pattern>
+                <token>an</token>
+                <token>useful</token>
+            </pattern>
+            <message>Use 'a' before 'useful' (sounds like 'y').</message>
+            <suggestion>a useful</suggestion>
+        </rule>
+
+    </category>
+
+    <!-- ================================================================== -->
+    <!-- INFORMAL: Spoken contractions to formal (~50 rules)                -->
+    <!-- ================================================================== -->
+    <category id="INFORMAL" name="Informal Speech">
+
+        <!-- Common spoken contractions -->
+        <rule id="GONNA" name="gonna" prio="6">
+            <pattern>
+                <token>gonna</token>
+            </pattern>
+            <message>Consider 'going to' for formal writing.</message>
+            <suggestion>going to</suggestion>
+        </rule>
+
+        <rule id="WANNA" name="wanna" prio="6">
+            <pattern>
+                <token>wanna</token>
+            </pattern>
+            <message>Consider 'want to' for formal writing.</message>
+            <suggestion>want to</suggestion>
+        </rule>
+
+        <rule id="GOTTA" name="gotta" prio="6">
+            <pattern>
+                <token>gotta</token>
+            </pattern>
+            <message>Consider 'got to' or 'have to' for formal writing.</message>
+            <suggestion>have to</suggestion>
+        </rule>
+
+        <rule id="LEMME" name="lemme" prio="6">
+            <pattern>
+                <token>lemme</token>
+            </pattern>
+            <message>Consider 'let me' for formal writing.</message>
+            <suggestion>let me</suggestion>
+        </rule>
+
+        <rule id="GIMME" name="gimme" prio="6">
+            <pattern>
+                <token>gimme</token>
+            </pattern>
+            <message>Consider 'give me' for formal writing.</message>
+            <suggestion>give me</suggestion>
+        </rule>
+
+        <rule id="KINDA" name="kinda" prio="6">
+            <pattern>
+                <token>kinda</token>
+            </pattern>
+            <message>Consider 'kind of' for formal writing.</message>
+            <suggestion>kind of</suggestion>
+        </rule>
+
+        <rule id="SORTA" name="sorta" prio="6">
+            <pattern>
+                <token>sorta</token>
+            </pattern>
+            <message>Consider 'sort of' for formal writing.</message>
+            <suggestion>sort of</suggestion>
+        </rule>
+
+        <rule id="DUNNO" name="dunno" prio="6">
+            <pattern>
+                <token>dunno</token>
+            </pattern>
+            <message>Consider 'don't know' for formal writing.</message>
+            <suggestion>don't know</suggestion>
+        </rule>
+
+        <rule id="OUTTA" name="outta" prio="6">
+            <pattern>
+                <token>outta</token>
+            </pattern>
+            <message>Consider 'out of' for formal writing.</message>
+            <suggestion>out of</suggestion>
+        </rule>
+
+        <rule id="LOTTA" name="lotta" prio="6">
+            <pattern>
+                <token>lotta</token>
+            </pattern>
+            <message>Consider 'lot of' for formal writing.</message>
+            <suggestion>lot of</suggestion>
+        </rule>
+
+        <rule id="LOTSA" name="lotsa" prio="6">
+            <pattern>
+                <token>lotsa</token>
+            </pattern>
+            <message>Consider 'lots of' for formal writing.</message>
+            <suggestion>lots of</suggestion>
+        </rule>
+
+        <rule id="COULDA" name="coulda" prio="6">
+            <pattern>
+                <token>coulda</token>
+            </pattern>
+            <message>Consider 'could have' for formal writing.</message>
+            <suggestion>could have</suggestion>
+        </rule>
+
+        <rule id="WOULDA" name="woulda" prio="6">
+            <pattern>
+                <token>woulda</token>
+            </pattern>
+            <message>Consider 'would have' for formal writing.</message>
+            <suggestion>would have</suggestion>
+        </rule>
+
+        <rule id="SHOULDA" name="shoulda" prio="6">
+            <pattern>
+                <token>shoulda</token>
+            </pattern>
+            <message>Consider 'should have' for formal writing.</message>
+            <suggestion>should have</suggestion>
+        </rule>
+
+        <rule id="MUSTA" name="musta" prio="6">
+            <pattern>
+                <token>musta</token>
+            </pattern>
+            <message>Consider 'must have' for formal writing.</message>
+            <suggestion>must have</suggestion>
+        </rule>
+
+        <rule id="MIGHTA" name="mighta" prio="6">
+            <pattern>
+                <token>mighta</token>
+            </pattern>
+            <message>Consider 'might have' for formal writing.</message>
+            <suggestion>might have</suggestion>
+        </rule>
+
+        <rule id="OUGHTA" name="oughta" prio="6">
+            <pattern>
+                <token>oughta</token>
+            </pattern>
+            <message>Consider 'ought to' for formal writing.</message>
+            <suggestion>ought to</suggestion>
+        </rule>
+
+        <rule id="TRYNA" name="tryna" prio="6">
+            <pattern>
+                <token>tryna</token>
+            </pattern>
+            <message>Consider 'trying to' for formal writing.</message>
+            <suggestion>trying to</suggestion>
+        </rule>
+
+        <rule id="FINNA" name="finna" prio="6">
+            <pattern>
+                <token>finna</token>
+            </pattern>
+            <message>Consider 'going to' or 'about to' for formal writing.</message>
+            <suggestion>about to</suggestion>
+        </rule>
+
+        <rule id="BOUTTA" name="boutta" prio="6">
+            <pattern>
+                <token>boutta</token>
+            </pattern>
+            <message>Consider 'about to' for formal writing.</message>
+            <suggestion>about to</suggestion>
+        </rule>
+
+        <rule id="AINT" name="ain't" prio="5">
+            <pattern>
+                <token>ain't</token>
+            </pattern>
+            <message>Consider 'isn't', 'aren't', or 'am not' for formal writing.</message>
+            <suggestion>isn't</suggestion>
+        </rule>
+
+        <rule id="YEAH" name="yeah" prio="4" tags="picky">
+            <pattern>
+                <token>yeah</token>
+            </pattern>
+            <message>Consider 'yes' for formal writing.</message>
+            <suggestion>yes</suggestion>
+        </rule>
+
+        <rule id="YEP" name="yep" prio="4" tags="picky">
+            <pattern>
+                <token>yep</token>
+            </pattern>
+            <message>Consider 'yes' for formal writing.</message>
+            <suggestion>yes</suggestion>
+        </rule>
+
+        <rule id="NOPE" name="nope" prio="4" tags="picky">
+            <pattern>
+                <token>nope</token>
+            </pattern>
+            <message>Consider 'no' for formal writing.</message>
+            <suggestion>no</suggestion>
+        </rule>
+
+        <rule id="NAH" name="nah" prio="4" tags="picky">
+            <pattern>
+                <token>nah</token>
+            </pattern>
+            <message>Consider 'no' for formal writing.</message>
+            <suggestion>no</suggestion>
+        </rule>
+
+        <rule id="OK" name="ok" prio="3" tags="picky">
+            <pattern>
+                <token>ok</token>
+            </pattern>
+            <message>Consider 'okay' for formal writing.</message>
+            <suggestion>okay</suggestion>
+        </rule>
+
+        <rule id="CUZ" name="cuz" prio="5">
+            <pattern>
+                <token>cuz</token>
+            </pattern>
+            <message>Consider 'because' for formal writing.</message>
+            <suggestion>because</suggestion>
+        </rule>
+
+        <rule id="CAUSE_BECAUSE" name="cause (because)" prio="5">
+            <pattern>
+                <token>'cause</token>
+            </pattern>
+            <message>Consider 'because' for formal writing.</message>
+            <suggestion>because</suggestion>
+        </rule>
+
+        <rule id="TIL" name="til" prio="4">
+            <pattern>
+                <token>til</token>
+            </pattern>
+            <message>Consider 'until' for formal writing.</message>
+            <suggestion>until</suggestion>
+        </rule>
+
+        <rule id="THRU" name="thru" prio="4">
+            <pattern>
+                <token>thru</token>
+            </pattern>
+            <message>Consider 'through' for formal writing.</message>
+            <suggestion>through</suggestion>
+        </rule>
+
+        <rule id="THO" name="tho" prio="4">
+            <pattern>
+                <token>tho</token>
+            </pattern>
+            <message>Consider 'though' for formal writing.</message>
+            <suggestion>though</suggestion>
+        </rule>
+
+        <!-- Spoken phrases -->
+        <rule id="I_MEAN" name="I mean" prio="2" tags="picky">
+            <pattern>
+                <token>I</token>
+                <token>mean</token>
+                <token>,</token>
+            </pattern>
+            <message>Consider removing filler phrase.</message>
+            <suggestion></suggestion>
+        </rule>
+
+        <rule id="YOU_KNOW" name="you know" prio="2" tags="picky">
+            <pattern>
+                <token>you</token>
+                <token>know</token>
+                <token>,</token>
+            </pattern>
+            <message>Consider removing filler phrase.</message>
+            <suggestion></suggestion>
+        </rule>
+
+    </category>
+
+    <!-- ================================================================== -->
+    <!-- VERBS: Irregular verb corrections (~40 rules)                      -->
+    <!-- ================================================================== -->
+    <category id="VERBS" name="Irregular Verbs">
+
+        <!-- Seen/Saw -->
+        <rule id="I_SEEN" name="I seen" prio="9">
+            <pattern>
+                <token>I</token>
+                <token>seen</token>
+            </pattern>
+            <message>Use 'saw' for simple past. 'Seen' requires 'have'.</message>
+            <suggestion>I saw</suggestion>
+        </rule>
+
+        <rule id="HE_SEEN" name="He seen" prio="9">
+            <pattern>
+                <token>He</token>
+                <token>seen</token>
+            </pattern>
+            <message>Use 'saw' for simple past.</message>
+            <suggestion>He saw</suggestion>
+        </rule>
+
+        <rule id="SHE_SEEN" name="She seen" prio="9">
+            <pattern>
+                <token>She</token>
+                <token>seen</token>
+            </pattern>
+            <message>Use 'saw' for simple past.</message>
+            <suggestion>She saw</suggestion>
+        </rule>
+
+        <rule id="WE_SEEN" name="We seen" prio="9">
+            <pattern>
+                <token>We</token>
+                <token>seen</token>
+            </pattern>
+            <message>Use 'saw' for simple past.</message>
+            <suggestion>We saw</suggestion>
+        </rule>
+
+        <rule id="THEY_SEEN" name="They seen" prio="9">
+            <pattern>
+                <token>They</token>
+                <token>seen</token>
+            </pattern>
+            <message>Use 'saw' for simple past.</message>
+            <suggestion>They saw</suggestion>
+        </rule>
+
+        <!-- Done/Did -->
+        <rule id="I_DONE" name="I done" prio="9">
+            <pattern>
+                <token>I</token>
+                <token>done</token>
+            </pattern>
+            <message>Use 'did' for simple past. 'Done' requires 'have'.</message>
+            <suggestion>I did</suggestion>
+        </rule>
+
+        <rule id="HE_DONE" name="He done" prio="9">
+            <pattern>
+                <token>He</token>
+                <token>done</token>
+            </pattern>
+            <message>Use 'did' for simple past.</message>
+            <suggestion>He did</suggestion>
+        </rule>
+
+        <rule id="SHE_DONE" name="She done" prio="9">
+            <pattern>
+                <token>She</token>
+                <token>done</token>
+            </pattern>
+            <message>Use 'did' for simple past.</message>
+            <suggestion>She did</suggestion>
+        </rule>
+
+        <rule id="WE_DONE" name="We done" prio="9">
+            <pattern>
+                <token>We</token>
+                <token>done</token>
+            </pattern>
+            <message>Use 'did' for simple past.</message>
+            <suggestion>We did</suggestion>
+        </rule>
+
+        <rule id="THEY_DONE" name="They done" prio="9">
+            <pattern>
+                <token>They</token>
+                <token>done</token>
+            </pattern>
+            <message>Use 'did' for simple past.</message>
+            <suggestion>They did</suggestion>
+        </rule>
+
+        <!-- Went/Gone -->
+        <rule id="I_GOED" name="I goed" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>goed</token>
+            </pattern>
+            <message>The past tense of 'go' is 'went'.</message>
+            <suggestion>I went</suggestion>
+        </rule>
+
+        <rule id="HE_GOED" name="He goed" prio="10">
+            <pattern>
+                <token>He</token>
+                <token>goed</token>
+            </pattern>
+            <message>The past tense of 'go' is 'went'.</message>
+            <suggestion>He went</suggestion>
+        </rule>
+
+        <!-- Ran/Run -->
+        <rule id="I_RUN_PAST" name="I run (past)" prio="7" tags="picky">
+            <pattern>
+                <token>I</token>
+                <token>run</token>
+                <token>yesterday</token>
+            </pattern>
+            <message>Use 'ran' for past tense.</message>
+            <suggestion>I ran yesterday</suggestion>
+        </rule>
+
+        <!-- Came/Come -->
+        <rule id="I_COME_PAST" name="I come (past)" prio="7" tags="picky">
+            <pattern>
+                <token>I</token>
+                <token>come</token>
+                <token>yesterday</token>
+            </pattern>
+            <message>Use 'came' for past tense.</message>
+            <suggestion>I came yesterday</suggestion>
+        </rule>
+
+        <!-- Gave/Give -->
+        <rule id="I_GIVE_PAST" name="I give (past)" prio="7" tags="picky">
+            <pattern>
+                <token>I</token>
+                <token>give</token>
+                <token>it</token>
+                <token>yesterday</token>
+            </pattern>
+            <message>Use 'gave' for past tense.</message>
+            <suggestion>I gave it yesterday</suggestion>
+        </rule>
+
+        <!-- Drank/Drunk -->
+        <rule id="I_DRUNK" name="I drunk (simple past)" prio="8">
+            <pattern>
+                <token>I</token>
+                <token>drunk</token>
+            </pattern>
+            <message>Use 'drank' for simple past. 'Drunk' requires 'have'.</message>
+            <suggestion>I drank</suggestion>
+        </rule>
+
+        <!-- Swam/Swum -->
+        <rule id="I_SWUM" name="I swum (simple past)" prio="8">
+            <pattern>
+                <token>I</token>
+                <token>swum</token>
+            </pattern>
+            <message>Use 'swam' for simple past. 'Swum' requires 'have'.</message>
+            <suggestion>I swam</suggestion>
+        </rule>
+
+        <!-- Sang/Sung -->
+        <rule id="I_SUNG" name="I sung (simple past)" prio="8">
+            <pattern>
+                <token>I</token>
+                <token>sung</token>
+            </pattern>
+            <message>Use 'sang' for simple past. 'Sung' requires 'have'.</message>
+            <suggestion>I sang</suggestion>
+        </rule>
+
+        <!-- Began/Begun -->
+        <rule id="I_BEGUN" name="I begun (simple past)" prio="8">
+            <pattern>
+                <token>I</token>
+                <token>begun</token>
+            </pattern>
+            <message>Use 'began' for simple past. 'Begun' requires 'have'.</message>
+            <suggestion>I began</suggestion>
+        </rule>
+
+        <!-- Drove/Drived -->
+        <rule id="I_DRIVED" name="I drived" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>drived</token>
+            </pattern>
+            <message>The past tense of 'drive' is 'drove'.</message>
+            <suggestion>I drove</suggestion>
+        </rule>
+
+        <!-- Wrote/Writed -->
+        <rule id="I_WRITED" name="I writed" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>writed</token>
+            </pattern>
+            <message>The past tense of 'write' is 'wrote'.</message>
+            <suggestion>I wrote</suggestion>
+        </rule>
+
+        <!-- Broke/Breaked -->
+        <rule id="I_BREAKED" name="I breaked" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>breaked</token>
+            </pattern>
+            <message>The past tense of 'break' is 'broke'.</message>
+            <suggestion>I broke</suggestion>
+        </rule>
+
+        <!-- Spoke/Speaked -->
+        <rule id="I_SPEAKED" name="I speaked" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>speaked</token>
+            </pattern>
+            <message>The past tense of 'speak' is 'spoke'.</message>
+            <suggestion>I spoke</suggestion>
+        </rule>
+
+        <!-- Took/Taked -->
+        <rule id="I_TAKED" name="I taked" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>taked</token>
+            </pattern>
+            <message>The past tense of 'take' is 'took'.</message>
+            <suggestion>I took</suggestion>
+        </rule>
+
+        <!-- Chose/Choosed -->
+        <rule id="I_CHOOSED" name="I choosed" prio="10">
+            <pattern>
+                <token>I</token>
+                <token>choosed</token>
+            </pattern>
+            <message>The past tense of 'choose' is 'chose'.</message>
+            <suggestion>I chose</suggestion>
+        </rule>
+
+        <!-- Froze/Freezed -->
+        <rule id="IT_FREEZED" name="It freezed" prio="10">
+            <pattern>
+                <token>It</token>
+                <token>freezed</token>
+            </pattern>
+            <message>The past tense of 'freeze' is 'froze'.</message>
+            <suggestion>It froze</suggestion>
+        </rule>
+
+    </category>
+
+    <!-- ================================================================== -->
+    <!-- BASIC: Common typos and misspellings (~50 rules)                   -->
+    <!-- ================================================================== -->
+    <category id="BASIC" name="Common Typos">
+
+        <rule id="ALOT" name="alot" prio="10">
+            <pattern>
+                <token>alot</token>
+            </pattern>
+            <message>'Alot' is not a word. Use 'a lot'.</message>
+            <suggestion>a lot</suggestion>
+        </rule>
+
+        <rule id="EVERYTIME" name="everytime" prio="9">
+            <pattern>
+                <token>everytime</token>
+            </pattern>
+            <message>'Everytime' should be two words.</message>
+            <suggestion>every time</suggestion>
+        </rule>
+
+        <rule id="ANYWAYS" name="anyways" prio="7">
+            <pattern>
+                <token>anyways</token>
+            </pattern>
+            <message>Consider 'anyway' (without 's').</message>
+            <suggestion>anyway</suggestion>
+        </rule>
+
+        <rule id="NOONE" name="noone" prio="9">
+            <pattern>
+                <token>noone</token>
+            </pattern>
+            <message>'Noone' should be two words.</message>
+            <suggestion>no one</suggestion>
+        </rule>
+
+        <rule id="INFACT" name="infact" prio="9">
+            <pattern>
+                <token>infact</token>
+            </pattern>
+            <message>'Infact' should be two words.</message>
+            <suggestion>in fact</suggestion>
+        </rule>
+
+        <rule id="AWHILE" name="awhile/a while" prio="6" tags="picky">
+            <pattern>
+                <token>for</token>
+                <token>awhile</token>
+            </pattern>
+            <message>'A while' should be two words after 'for'.</message>
+            <suggestion>for a while</suggestion>
+        </rule>
+
+        <rule id="ALRIGHT" name="alright" prio="4" tags="picky">
+            <pattern>
+                <token>alright</token>
+            </pattern>
+            <message>Consider 'all right' for formal writing.</message>
+            <suggestion>all right</suggestion>
+        </rule>
+
+        <rule id="THANKYOU" name="thankyou" prio="9">
+            <pattern>
+                <token>thankyou</token>
+            </pattern>
+            <message>'Thank you' should be two words.</message>
+            <suggestion>thank you</suggestion>
+        </rule>
+
+        <rule id="OFCOURSE" name="ofcourse" prio="9">
+            <pattern>
+                <token>ofcourse</token>
+            </pattern>
+            <message>'Of course' should be two words.</message>
+            <suggestion>of course</suggestion>
+        </rule>
+
+        <rule id="INFRONT" name="infront" prio="9">
+            <pattern>
+                <token>infront</token>
+            </pattern>
+            <message>'In front' should be two words.</message>
+            <suggestion>in front</suggestion>
+        </rule>
+
+        <rule id="EACHOTHER" name="eachother" prio="9">
+            <pattern>
+                <token>eachother</token>
+            </pattern>
+            <message>'Each other' should be two words.</message>
+            <suggestion>each other</suggestion>
+        </rule>
+
+        <rule id="ASWELL" name="aswell" prio="9">
+            <pattern>
+                <token>aswell</token>
+            </pattern>
+            <message>'As well' should be two words.</message>
+            <suggestion>as well</suggestion>
+        </rule>
+
+        <rule id="ATLEAST" name="atleast" prio="9">
+            <pattern>
+                <token>atleast</token>
+            </pattern>
+            <message>'At least' should be two words.</message>
+            <suggestion>at least</suggestion>
+        </rule>
+
+        <rule id="CANNOT" name="can not" prio="6" tags="picky">
+            <pattern>
+                <token>can</token>
+                <token>not</token>
+            </pattern>
+            <message>Consider 'cannot' as one word.</message>
+            <suggestion>cannot</suggestion>
+        </rule>
+
+        <!-- Common misspellings -->
+        <rule id="DEFINATELY" name="definately" prio="10">
+            <pattern>
+                <token>definately</token>
+            </pattern>
+            <message>Spelling error: 'definitely'.</message>
+            <suggestion>definitely</suggestion>
+        </rule>
+
+        <rule id="DEFINATLY" name="definatly" prio="10">
+            <pattern>
+                <token>definatly</token>
+            </pattern>
+            <message>Spelling error: 'definitely'.</message>
+            <suggestion>definitely</suggestion>
+        </rule>
+
+        <rule id="OCCURED" name="occured" prio="10">
+            <pattern>
+                <token>occured</token>
+            </pattern>
+            <message>Spelling error: 'occurred'.</message>
+            <suggestion>occurred</suggestion>
+        </rule>
+
+        <rule id="RECIEVE" name="recieve" prio="10">
+            <pattern>
+                <token>recieve</token>
+            </pattern>
+            <message>Spelling error: 'receive'.</message>
+            <suggestion>receive</suggestion>
+        </rule>
+
+        <rule id="SEPERATE" name="seperate" prio="10">
+            <pattern>
+                <token>seperate</token>
+            </pattern>
+            <message>Spelling error: 'separate'.</message>
+            <suggestion>separate</suggestion>
+        </rule>
+
+        <rule id="UNTILL" name="untill" prio="10">
+            <pattern>
+                <token>untill</token>
+            </pattern>
+            <message>Spelling error: 'until'.</message>
+            <suggestion>until</suggestion>
+        </rule>
+
+        <rule id="WIERD" name="wierd" prio="10">
+            <pattern>
+                <token>wierd</token>
+            </pattern>
+            <message>Spelling error: 'weird'.</message>
+            <suggestion>weird</suggestion>
+        </rule>
+
+        <rule id="BELEIVE" name="beleive" prio="10">
+            <pattern>
+                <token>beleive</token>
+            </pattern>
+            <message>Spelling error: 'believe'.</message>
+            <suggestion>believe</suggestion>
+        </rule>
+
+        <rule id="ACCOMODATE" name="accomodate" prio="10">
+            <pattern>
+                <token>accomodate</token>
+            </pattern>
+            <message>Spelling error: 'accommodate'.</message>
+            <suggestion>accommodate</suggestion>
+        </rule>
+
+        <rule id="CALENDER" name="calender" prio="10">
+            <pattern>
+                <token>calender</token>
+            </pattern>
+            <message>Spelling error: 'calendar'.</message>
+            <suggestion>calendar</suggestion>
+        </rule>
+
+        <rule id="GRAMMER" name="grammer" prio="10">
+            <pattern>
+                <token>grammer</token>
+            </pattern>
+            <message>Spelling error: 'grammar'.</message>
+            <suggestion>grammar</suggestion>
+        </rule>
+
+        <rule id="NECCESSARY" name="neccessary" prio="10">
+            <pattern>
+                <token>neccessary</token>
+            </pattern>
+            <message>Spelling error: 'necessary'.</message>
+            <suggestion>necessary</suggestion>
+        </rule>
+
+        <rule id="NECESARY" name="necesary" prio="10">
+            <pattern>
+                <token>necesary</token>
+            </pattern>
+            <message>Spelling error: 'necessary'.</message>
+            <suggestion>necessary</suggestion>
+        </rule>
+
+        <rule id="OCCASSION" name="occassion" prio="10">
+            <pattern>
+                <token>occassion</token>
+            </pattern>
+            <message>Spelling error: 'occasion'.</message>
+            <suggestion>occasion</suggestion>
+        </rule>
+
+        <rule id="RECOMEND" name="recomend" prio="10">
+            <pattern>
+                <token>recomend</token>
+            </pattern>
+            <message>Spelling error: 'recommend'.</message>
+            <suggestion>recommend</suggestion>
+        </rule>
+
+        <rule id="TOMMORROW" name="tommorrow" prio="10">
+            <pattern>
+                <token>tommorrow</token>
+            </pattern>
+            <message>Spelling error: 'tomorrow'.</message>
+            <suggestion>tomorrow</suggestion>
+        </rule>
+
+        <rule id="TOMMOROW" name="tommorow" prio="10">
+            <pattern>
+                <token>tommorow</token>
+            </pattern>
+            <message>Spelling error: 'tomorrow'.</message>
+            <suggestion>tomorrow</suggestion>
+        </rule>
+
+        <rule id="UNFORTUNATLY" name="unfortunatly" prio="10">
+            <pattern>
+                <token>unfortunatly</token>
+            </pattern>
+            <message>Spelling error: 'unfortunately'.</message>
+            <suggestion>unfortunately</suggestion>
+        </rule>
+
+    </category>
+
+    <!-- ================================================================== -->
+    <!-- PUNCTUATION: Capitalization and punctuation (~20 rules)            -->
+    <!-- ================================================================== -->
+    <category id="PUNCTUATION" name="Punctuation and Capitalization">
+
+        <!-- Lowercase 'i' -->
+        <rule id="LOWERCASE_I" name="lowercase i" prio="10">
+            <pattern>
+                <token>i</token>
+            </pattern>
+            <message>The pronoun 'I' should be capitalized.</message>
+            <suggestion>I</suggestion>
+        </rule>
+
+        <rule id="LOWERCASE_IM" name="lowercase i'm" prio="10">
+            <pattern>
+                <token>i'm</token>
+            </pattern>
+            <message>The pronoun 'I' should be capitalized.</message>
+            <suggestion>I'm</suggestion>
+        </rule>
+
+        <rule id="LOWERCASE_IVE" name="lowercase i've" prio="10">
+            <pattern>
+                <token>i've</token>
+            </pattern>
+            <message>The pronoun 'I' should be capitalized.</message>
+            <suggestion>I've</suggestion>
+        </rule>
+
+        <rule id="LOWERCASE_ILL" name="lowercase i'll" prio="10">
+            <pattern>
+                <token>i'll</token>
+            </pattern>
+            <message>The pronoun 'I' should be capitalized.</message>
+            <suggestion>I'll</suggestion>
+        </rule>
+
+        <rule id="LOWERCASE_ID" name="lowercase i'd" prio="10">
+            <pattern>
+                <token>i'd</token>
+            </pattern>
+            <message>The pronoun 'I' should be capitalized.</message>
+            <suggestion>I'd</suggestion>
+        </rule>
+
+        <!-- Double punctuation -->
+        <rule id="DOUBLE_PERIOD" name="double period" prio="8">
+            <pattern>
+                <token>..</token>
+            </pattern>
+            <message>Use a single period or ellipsis (...).</message>
+            <suggestion>.</suggestion>
+        </rule>
+
+        <rule id="DOUBLE_COMMA" name="double comma" prio="8">
+            <pattern>
+                <token>,,</token>
+            </pattern>
+            <message>Remove duplicate comma.</message>
+            <suggestion>,</suggestion>
+        </rule>
+
+        <!-- Comma followed by comma (separate tokens) -->
+        <rule id="COMMA_COMMA" name="comma comma" prio="8">
+            <pattern>
+                <token>,</token>
+                <token>,</token>
+            </pattern>
+            <message>Remove duplicate comma.</message>
+            <suggestion>,</suggestion>
+        </rule>
+
+        <!-- Comma followed by period (with antipatterns for .NET, etc.) -->
+        <rule id="COMMA_PERIOD" name="comma before period" prio="8">
+            <antipattern>
+                <token>,</token>
+                <token>,</token>
+            </antipattern>
+            <antipattern>
+                <token>,</token>
+                <token>.</token>
+                <token>NET</token>
+            </antipattern>
+            <antipattern>
+                <token>,</token>
+                <token>.</token>
+                <token>com</token>
+            </antipattern>
+            <antipattern>
+                <token>,</token>
+                <token>.</token>
+                <token>org</token>
+            </antipattern>
+            <pattern>
+                <token>,</token>
+                <token>.</token>
+            </pattern>
+            <message>Remove redundant comma before period.</message>
+            <suggestion>.</suggestion>
+        </rule>
+
+        <!-- Period followed by period (separate tokens) -->
+        <rule id="PERIOD_PERIOD" name="period period" prio="8">
+            <pattern>
+                <token>.</token>
+                <token>.</token>
+            </pattern>
+            <message>Remove duplicate period.</message>
+            <suggestion>.</suggestion>
+        </rule>
+
+        <!-- Question mark followed by period -->
+        <rule id="QUESTION_PERIOD" name="question mark period" prio="8">
+            <pattern>
+                <token>?</token>
+                <token>.</token>
+            </pattern>
+            <message>Remove redundant period after question mark.</message>
+            <suggestion>?</suggestion>
+        </rule>
+
+        <!-- Exclamation followed by period -->
+        <rule id="EXCLAMATION_PERIOD" name="exclamation period" prio="8">
+            <pattern>
+                <token>!</token>
+                <token>.</token>
+            </pattern>
+            <message>Remove redundant period after exclamation.</message>
+            <suggestion>!</suggestion>
+        </rule>
+
+        <!-- Comma at sentence start -->
+        <rule id="COMMA_AT_START" name="comma at sentence start" prio="8">
+            <pattern>
+                <token>.</token>
+                <token>,</token>
+            </pattern>
+            <message>Remove orphan comma after period.</message>
+            <suggestion>.</suggestion>
+        </rule>
+
+        <!-- Sentence-start capitalization: common words after periods -->
+        <!-- Note: General sentence-start capitalization is handled in Swift post-processing -->
+        <rule id="PERIOD_LOWERCASE_I" name="period lowercase i" prio="10">
+            <pattern>
+                <token>.</token>
+                <token>i</token>
+            </pattern>
+            <message>Capitalize 'I' after period.</message>
+            <suggestion>. I</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_THE" name="period lowercase the" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>the</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. The</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_IT" name="period lowercase it" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>it</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. It</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_THIS" name="period lowercase this" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>this</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. This</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_THAT" name="period lowercase that" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>that</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. That</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_THEY" name="period lowercase they" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>they</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. They</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_WE" name="period lowercase we" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>we</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. We</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_HE" name="period lowercase he" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>he</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. He</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_SHE" name="period lowercase she" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>she</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. She</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_YOU" name="period lowercase you" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>you</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. You</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_SO" name="period lowercase so" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>so</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. So</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_BUT" name="period lowercase but" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>but</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. But</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_AND" name="period lowercase and" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>and</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. And</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_IF" name="period lowercase if" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>if</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. If</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_WHEN" name="period lowercase when" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>when</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. When</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_WHAT" name="period lowercase what" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>what</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. What</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_HOW" name="period lowercase how" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>how</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. How</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_MY" name="period lowercase my" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>my</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. My</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_YOUR" name="period lowercase your" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>your</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. Your</suggestion>
+        </rule>
+
+        <rule id="PERIOD_LOWERCASE_THERE" name="period lowercase there" prio="9">
+            <pattern>
+                <token>.</token>
+                <token>there</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>. There</suggestion>
+        </rule>
+
+        <!-- Same rules for question marks -->
+        <rule id="QUESTION_LOWERCASE_THE" name="question lowercase the" prio="9">
+            <pattern>
+                <token>?</token>
+                <token>the</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>? The</suggestion>
+        </rule>
+
+        <rule id="QUESTION_LOWERCASE_IT" name="question lowercase it" prio="9">
+            <pattern>
+                <token>?</token>
+                <token>it</token>
+            </pattern>
+            <message>Capitalize first word of sentence.</message>
+            <suggestion>? It</suggestion>
+        </rule>
+
+        <rule id="QUESTION_LOWERCASE_I" name="question lowercase i" prio="10">
+            <pattern>
+                <token>?</token>
+                <token>i</token>
+            </pattern>
+            <message>Capitalize 'I' after question mark.</message>
+            <suggestion>? I</suggestion>
+        </rule>
+
+        <!-- Spacing -->
+        <rule id="DOUBLE_SPACE" name="double space" prio="5" tags="picky">
+            <pattern>
+                <token regexp="yes">\s\s+</token>
+            </pattern>
+            <message>Remove extra spaces.</message>
+            <suggestion> </suggestion>
+        </rule>
+
+    </category>
+
+    <!-- ================================================================== -->
+    <!-- STYLE: Redundancy and wordiness (~30 rules)                        -->
+    <!-- ================================================================== -->
+    <category id="STYLE" name="Style and Redundancy">
+
+        <rule id="VERY_UNIQUE" name="very unique" prio="5" tags="picky">
+            <pattern>
+                <token>very</token>
+                <token>unique</token>
+            </pattern>
+            <message>'Unique' means one of a kind; it doesn't need 'very'.</message>
+            <suggestion>unique</suggestion>
+        </rule>
+
+        <rule id="COMPLETELY_DESTROYED" name="completely destroyed" prio="4" tags="picky">
+            <pattern>
+                <token>completely</token>
+                <token>destroyed</token>
+            </pattern>
+            <message>'Destroyed' implies completeness.</message>
+            <suggestion>destroyed</suggestion>
+        </rule>
+
+        <rule id="ABSOLUTELY_ESSENTIAL" name="absolutely essential" prio="4" tags="picky">
+            <pattern>
+                <token>absolutely</token>
+                <token>essential</token>
+            </pattern>
+            <message>'Essential' implies absoluteness.</message>
+            <suggestion>essential</suggestion>
+        </rule>
+
+        <rule id="END_RESULT" name="end result" prio="4" tags="picky">
+            <pattern>
+                <token>end</token>
+                <token>result</token>
+            </pattern>
+            <message>'Result' implies the end.</message>
+            <suggestion>result</suggestion>
+        </rule>
+
+        <rule id="FREE_GIFT" name="free gift" prio="4" tags="picky">
+            <pattern>
+                <token>free</token>
+                <token>gift</token>
+            </pattern>
+            <message>Gifts are by definition free.</message>
+            <suggestion>gift</suggestion>
+        </rule>
+
+        <rule id="PAST_HISTORY" name="past history" prio="4" tags="picky">
+            <pattern>
+                <token>past</token>
+                <token>history</token>
+            </pattern>
+            <message>History is by definition past.</message>
+            <suggestion>history</suggestion>
+        </rule>
+
+        <rule id="ADVANCE_PLANNING" name="advance planning" prio="4" tags="picky">
+            <pattern>
+                <token>advance</token>
+                <token>planning</token>
+            </pattern>
+            <message>Planning is by definition in advance.</message>
+            <suggestion>planning</suggestion>
+        </rule>
+
+        <rule id="FINAL_OUTCOME" name="final outcome" prio="4" tags="picky">
+            <pattern>
+                <token>final</token>
+                <token>outcome</token>
+            </pattern>
+            <message>'Outcome' implies finality.</message>
+            <suggestion>outcome</suggestion>
+        </rule>
+
+        <rule id="BASIC_FUNDAMENTALS" name="basic fundamentals" prio="4" tags="picky">
+            <pattern>
+                <token>basic</token>
+                <token>fundamentals</token>
+            </pattern>
+            <message>'Fundamentals' are by definition basic.</message>
+            <suggestion>fundamentals</suggestion>
+        </rule>
+
+        <rule id="BRIEF_SUMMARY" name="brief summary" prio="4" tags="picky">
+            <pattern>
+                <token>brief</token>
+                <token>summary</token>
+            </pattern>
+            <message>A summary is by definition brief.</message>
+            <suggestion>summary</suggestion>
+        </rule>
+
+        <rule id="CLOSE_PROXIMITY" name="close proximity" prio="4" tags="picky">
+            <pattern>
+                <token>close</token>
+                <token>proximity</token>
+            </pattern>
+            <message>'Proximity' implies closeness.</message>
+            <suggestion>proximity</suggestion>
+        </rule>
+
+        <rule id="EACH_AND_EVERY" name="each and every" prio="4" tags="picky">
+            <pattern>
+                <token>each</token>
+                <token>and</token>
+                <token>every</token>
+            </pattern>
+            <message>Consider using just 'each' or 'every'.</message>
+            <suggestion>every</suggestion>
+        </rule>
+
+        <rule id="FIRST_AND_FOREMOST" name="first and foremost" prio="3" tags="picky">
+            <pattern>
+                <token>first</token>
+                <token>and</token>
+                <token>foremost</token>
+            </pattern>
+            <message>Consider using just 'first'.</message>
+            <suggestion>first</suggestion>
+        </rule>
+
+        <rule id="FUTURE_PLANS" name="future plans" prio="4" tags="picky">
+            <pattern>
+                <token>future</token>
+                <token>plans</token>
+            </pattern>
+            <message>Plans are by definition for the future.</message>
+            <suggestion>plans</suggestion>
+        </rule>
+
+        <rule id="NEW_INNOVATION" name="new innovation" prio="4" tags="picky">
+            <pattern>
+                <token>new</token>
+                <token>innovation</token>
+            </pattern>
+            <message>Innovations are by definition new.</message>
+            <suggestion>innovation</suggestion>
+        </rule>
+
+        <rule id="PERSONAL_OPINION" name="personal opinion" prio="4" tags="picky">
+            <pattern>
+                <token>personal</token>
+                <token>opinion</token>
+            </pattern>
+            <message>Opinions are by definition personal.</message>
+            <suggestion>opinion</suggestion>
+        </rule>
+
+        <rule id="REPEAT_AGAIN" name="repeat again" prio="5">
+            <pattern>
+                <token>repeat</token>
+                <token>again</token>
+            </pattern>
+            <message>'Repeat' already means to do again.</message>
+            <suggestion>repeat</suggestion>
+        </rule>
+
+        <rule id="RETURN_BACK" name="return back" prio="5">
+            <pattern>
+                <token>return</token>
+                <token>back</token>
+            </pattern>
+            <message>'Return' already means to go back.</message>
+            <suggestion>return</suggestion>
+        </rule>
+
+        <rule id="REVERT_BACK" name="revert back" prio="5">
+            <pattern>
+                <token>revert</token>
+                <token>back</token>
+            </pattern>
+            <message>'Revert' already means to go back.</message>
+            <suggestion>revert</suggestion>
+        </rule>
+
+        <rule id="STILL_REMAINS" name="still remains" prio="4" tags="picky">
+            <pattern>
+                <token>still</token>
+                <token>remains</token>
+            </pattern>
+            <message>'Remains' implies stillness.</message>
+            <suggestion>remains</suggestion>
+        </rule>
+
+    </category>
+
+    <!-- ================================================================== -->
+    <!-- ADVANCED: Complex grammar patterns (~20 rules)                     -->
+    <!-- ================================================================== -->
+    <category id="ADVANCED" name="Advanced Grammar">
+
+        <!-- Commonly confused words -->
+        <rule id="THEIR_THERE" name="their/there confusion" prio="6" tags="picky">
+            <pattern>
+                <token>their</token>
+                <token>is</token>
+            </pattern>
+            <message>Did you mean 'there is'?</message>
+            <suggestion>there is</suggestion>
+        </rule>
+
+        <rule id="THEIR_ARE" name="their are" prio="6">
+            <pattern>
+                <token>their</token>
+                <token>are</token>
+            </pattern>
+            <message>Did you mean 'there are'?</message>
+            <suggestion>there are</suggestion>
+        </rule>
+
+        <rule id="YOUR_WELCOME" name="your welcome" prio="8">
+            <pattern>
+                <token>your</token>
+                <token>welcome</token>
+            </pattern>
+            <message>Did you mean 'you're welcome'?</message>
+            <suggestion>you're welcome</suggestion>
+        </rule>
+
+        <rule id="YOUR_RIGHT" name="your right (you're)" prio="6" tags="picky">
+            <pattern>
+                <token>your</token>
+                <token>right</token>
+            </pattern>
+            <message>Did you mean 'you're right'?</message>
+            <suggestion>you're right</suggestion>
+        </rule>
+
+        <rule id="YOUR_WRONG" name="your wrong" prio="7">
+            <pattern>
+                <token>your</token>
+                <token>wrong</token>
+            </pattern>
+            <message>Did you mean 'you're wrong'?</message>
+            <suggestion>you're wrong</suggestion>
+        </rule>
+
+        <rule id="ITS_VS_ITS" name="its/it's" prio="6" tags="picky">
+            <pattern>
+                <token>its</token>
+                <token>a</token>
+            </pattern>
+            <message>Did you mean 'it's a' (it is)?</message>
+            <suggestion>it's a</suggestion>
+        </rule>
+
+        <rule id="THEN_VS_THAN" name="then/than" prio="6" tags="picky">
+            <pattern>
+                <token>better</token>
+                <token>then</token>
+            </pattern>
+            <message>Use 'than' for comparisons.</message>
+            <suggestion>better than</suggestion>
+        </rule>
+
+        <rule id="MORE_THEN" name="more then" prio="7">
+            <pattern>
+                <token>more</token>
+                <token>then</token>
+            </pattern>
+            <message>Use 'than' for comparisons.</message>
+            <suggestion>more than</suggestion>
+        </rule>
+
+        <rule id="LESS_THEN" name="less then" prio="7">
+            <pattern>
+                <token>less</token>
+                <token>then</token>
+            </pattern>
+            <message>Use 'than' for comparisons.</message>
+            <suggestion>less than</suggestion>
+        </rule>
+
+        <rule id="RATHER_THEN" name="rather then" prio="7">
+            <pattern>
+                <token>rather</token>
+                <token>then</token>
+            </pattern>
+            <message>Use 'than' for comparisons.</message>
+            <suggestion>rather than</suggestion>
+        </rule>
+
+        <rule id="AFFECT_EFFECT" name="affect/effect" prio="5" tags="picky">
+            <pattern>
+                <token>the</token>
+                <token>affect</token>
+            </pattern>
+            <message>'Effect' is usually the noun; 'affect' is the verb.</message>
+            <suggestion>the effect</suggestion>
+        </rule>
+
+        <rule id="LOOSE_LOSE" name="loose/lose" prio="7">
+            <pattern>
+                <token>don't</token>
+                <token>loose</token>
+            </pattern>
+            <message>'Lose' means to misplace; 'loose' means not tight.</message>
+            <suggestion>don't lose</suggestion>
+        </rule>
+
+        <!-- Tense consistency -->
+        <rule id="HAD_WENT" name="had went" prio="8">
+            <pattern>
+                <token>had</token>
+                <token>went</token>
+            </pattern>
+            <message>Use 'had gone' (past participle).</message>
+            <suggestion>had gone</suggestion>
+        </rule>
+
+        <rule id="HAD_SAW" name="had saw" prio="8">
+            <pattern>
+                <token>had</token>
+                <token>saw</token>
+            </pattern>
+            <message>Use 'had seen' (past participle).</message>
+            <suggestion>had seen</suggestion>
+        </rule>
+
+        <rule id="HAD_DID" name="had did" prio="8">
+            <pattern>
+                <token>had</token>
+                <token>did</token>
+            </pattern>
+            <message>Use 'had done' (past participle).</message>
+            <suggestion>had done</suggestion>
+        </rule>
+
+        <rule id="HAD_TOOK" name="had took" prio="8">
+            <pattern>
+                <token>had</token>
+                <token>took</token>
+            </pattern>
+            <message>Use 'had taken' (past participle).</message>
+            <suggestion>had taken</suggestion>
+        </rule>
+
+        <rule id="HAD_GAVE" name="had gave" prio="8">
+            <pattern>
+                <token>had</token>
+                <token>gave</token>
+            </pattern>
+            <message>Use 'had given' (past participle).</message>
+            <suggestion>had given</suggestion>
+        </rule>
+
+        <rule id="HAD_CAME" name="had came" prio="8">
+            <pattern>
+                <token>had</token>
+                <token>came</token>
+            </pattern>
+            <message>Use 'had come' (past participle).</message>
+            <suggestion>had come</suggestion>
+        </rule>
+
+        <rule id="HAD_RAN" name="had ran" prio="8">
+            <pattern>
+                <token>had</token>
+                <token>ran</token>
+            </pattern>
+            <message>Use 'had run' (past participle).</message>
+            <suggestion>had run</suggestion>
+        </rule>
+
+    </category>
+
+</rules>
