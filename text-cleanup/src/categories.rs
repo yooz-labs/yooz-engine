@@ -48,10 +48,14 @@ impl Category {
         ]
     }
 
-    /// Get free tier categories (basic grammar only)
-    /// Note: Tiering decisions are made by yooz-whisper, not stt-engine
+    /// Get free tier categories (basic grammar, articles, informal)
     pub fn free_tier() -> Vec<Category> {
-        vec![Category::Grammar]
+        vec![
+            Category::Basic,
+            Category::Grammar,
+            Category::Articles,
+            Category::Informal,
+        ]
     }
 
     /// Get pro tier categories (all rule-based corrections)
@@ -157,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_tier_categories() {
-        assert_eq!(Category::free_tier().len(), 1);  // Grammar only
+        assert_eq!(Category::free_tier().len(), 4);  // Basic, Grammar, Articles, Informal
         assert_eq!(Category::pro_tier().len(), 9);   // All categories
         assert_eq!(Category::premium_tier().len(), 9);
     }

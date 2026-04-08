@@ -2781,6 +2781,41 @@ mod tests {
     }
 
     #[test]
+    fn test_compound_hyphen_case_insensitive() {
+        let engine = ProgrammaticRuleEngine::new();
+
+        let test_cases = vec![
+            ("Self - driving car", "Self-driving car"),
+            ("NON - profit org", "NON-profit org"),
+            ("Pre - order now", "Pre-order now"),
+        ];
+
+        for (input, expected) in test_cases {
+            let tokens = tokens_from_text(input);
+            let result = engine.correct(&tokens, input);
+            assert_eq!(result, expected, "Failed case: '{}' → '{}'", input, expected);
+        }
+    }
+
+    #[test]
+    fn test_compound_hyphen_unicode_dashes() {
+        let engine = ProgrammaticRuleEngine::new();
+
+        // STT engines sometimes produce en-dash or em-dash instead of hyphen;
+        // the rule normalizes them to regular hyphens for compound words
+        let test_cases = vec![
+            ("self \u{2013} driving car", "self-driving car"),   // en-dash
+            ("co \u{2014} worker", "co-worker"),                 // em-dash
+        ];
+
+        for (input, expected) in test_cases {
+            let tokens = tokens_from_text(input);
+            let result = engine.correct(&tokens, input);
+            assert_eq!(result, expected, "Failed unicode dash: '{}' → '{}'", input, expected);
+        }
+    }
+
+    #[test]
     fn test_compound_hyphen_no_false_positives() {
         let engine = ProgrammaticRuleEngine::new();
 

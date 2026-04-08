@@ -344,15 +344,18 @@ mod tests {
         let pro = get_pro_categories();
         let premium = get_premium_categories();
 
-        // Free = Grammar only (1 category)
+        // Free = Basic, Grammar, Articles, Informal (4 categories)
         // Pro = All XML rules (9 categories)
-        // Premium = Same as Pro for stt-engine (LLM features in yooz-whisper)
-        assert_eq!(free.len(), 1);
+        // Premium = Same as Pro (LLM features at app layer)
+        assert_eq!(free.len(), 4);
         assert_eq!(pro.len(), 9);
         assert_eq!(premium.len(), 9);
 
-        // Free should contain only Grammar
+        // Free should contain these 4 categories
+        assert!(free.contains(&Category::Basic));
         assert!(free.contains(&Category::Grammar));
+        assert!(free.contains(&Category::Articles));
+        assert!(free.contains(&Category::Informal));
 
         // Free should be subset of pro
         for cat in &free {
