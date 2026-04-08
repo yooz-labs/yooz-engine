@@ -87,6 +87,8 @@ actor MLXLLMBackend: LLMBackend {
 
             isLoaded = true
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
+        } catch let error as LLMError {
+            throw error
         } catch {
             logger.error("Failed to load model: \(error.localizedDescription)")
             throw LLMError.loadFailed(error.localizedDescription)

@@ -178,8 +178,14 @@ actor FoundationModelsBackend {
                         let session = LanguageModelSession(instructions: instructions)
 
                         let stream = session.streamResponse(to: prompt)
+                        var previousLength = 0
                         for try await snapshot in stream {
-                            continuation.yield(snapshot.content)
+                            let content = snapshot.content
+                            if content.count > previousLength {
+                                let startIndex = content.index(content.startIndex, offsetBy: previousLength)
+                                continuation.yield(String(content[startIndex...]))
+                                previousLength = content.count
+                            }
                         }
                         continuation.finish()
                     } catch {

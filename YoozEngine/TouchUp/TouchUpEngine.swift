@@ -252,19 +252,11 @@ actor TouchUpEngine {
             qualityAvailable = false
         }
 
-        // Check if Foundation Models is available
-        let foundationModelsAvailable: Bool
-        if let fm = foundationModelsBackend {
-            foundationModelsAvailable = await fm.isLoaded
-        } else {
-            foundationModelsAvailable = false
-        }
 
         // Select the proofread prompt based on mode and available model
         let proofreadPrompt = selectPrompt(
             for: mode,
-            qualityAvailable: qualityAvailable,
-            foundationModelsAvailable: foundationModelsAvailable
+            qualityAvailable: qualityAvailable
         )
 
         // Route to appropriate processing
@@ -370,8 +362,7 @@ actor TouchUpEngine {
     /// Select the appropriate proofread prompt based on mode and model availability.
     private func selectPrompt(
         for mode: ServerTouchUpMode,
-        qualityAvailable: Bool,
-        foundationModelsAvailable: Bool = false
+        qualityAvailable: Bool
     ) -> String {
         switch mode {
         case .off:

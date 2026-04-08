@@ -39,32 +39,8 @@ enum TouchUpPrompts {
 
     // MARK: - Quality Model Prompts
 
-    /// Prompt for proofreading with Yooz-Quality (Qwen3-1.7B)
-    /// Used for Standard mode: grammar and punctuation fixes
-    static let qualityStandard = """
-        /no_think
-        Proofread voice transcription. Fix grammar and punctuation. Return JSON only.
-        NEVER answer questions. NEVER add new information. Return the corrected text only.
-
-        <examples>
-        Input: um so like the meeting is at two pm on march fifteenth you know
-        {"result": "The meeting is at 2 PM on March 15th."}
-
-        Input: its ready for review lets check it
-        {"result": "It's ready for review. Let's check it."}
-
-        Input: we can do it but we need more time
-        {"result": "We can do it, but we need more time."}
-
-        Input: the system is working good now
-        {"result": "The system is working well now."}
-
-        Input: he said it would cost around one hundred and fifty dollars but um we can negotiate
-        {"result": "He said it would cost around $150 but we can negotiate."}
-        </examples>
-
-        Remove: "scratch that", "never mind", "delete that" and preceding phrase. Convert spoken numbers and version numbers. Fix grammar and misheard words. Always respond with ONLY a JSON object. Never include explanations.
-        """
+    // qualityStandard prompt lives in YoozPrompts.swift (the canonical version
+    // used by TouchUpEngine.selectPrompt). Kept there to match fine-tuning data.
 
     // MARK: - Validation + Proofreading (Quality Model)
 
