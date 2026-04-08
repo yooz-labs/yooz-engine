@@ -186,16 +186,14 @@ actor VADEngine {
 
     /// Get speech probability for a single window of audio samples.
     ///
-    /// Uses the Silero CoreML model when available; falls back to energy-based
-    /// detection (RMS threshold) if the model is nil or inference fails.
+    /// Uses the Silero CoreML model for inference; falls back to energy-based
+    /// detection (RMS threshold) if inference fails at runtime.
+    /// Precondition: called only from detect() which guards on isLoaded,
+    /// so model, hiddenState, and cellState are guaranteed non-nil here.
     private func getSpeechProbability(_ samples: [Float]) -> Float {
-        guard let model = model else {
-            return getEnergyBasedProbability(samples)
-        }
-
-        guard let h = hiddenState, let c = cellState else {
-            return getEnergyBasedProbability(samples)
-        }
+        let model = model!
+        let h = hiddenState!
+        let c = cellState!
 
         do {
             let inputArray = try MLMultiArray(
@@ -269,8 +267,6 @@ struct VADSegmentResult {
 enum VADError: LocalizedError {
     case modelNotFound
     case modelNotLoaded
-    case stateNotInitialized
-    case outputExtractionFailed
 
     var errorDescription: String? {
         switch self {
@@ -278,10 +274,6 @@ enum VADError: LocalizedError {
             return "Silero VAD model not found in app bundle"
         case .modelNotLoaded:
             return "VAD model not loaded; call load() first"
-        case .stateNotInitialized:
-            return "VAD RNN state not initialized"
-        case .outputExtractionFailed:
-            return "Failed to extract output from VAD model prediction"
         }
     }
 }
