@@ -9,52 +9,57 @@ import Foundation
 
 /// Yooz LLM model types for touch-up processing
 enum LLMModelType: String, CaseIterable, Sendable {
-    case yoozLightV1 = "yooz-light-v1"      // Fast, default (Qwen2.5-0.5B-4bit, 278MB)
-    case yoozQualityV1 = "yooz-quality-v1"  // Higher quality (Qwen3-1.7B-4bit, 1.0GB)
+    case yoozLight = "yooz-light-v3"      // Fast, fine-tuned (Qwen2.5-0.5B-4bit, 276MB)
+    case yoozQuality = "yooz-quality-v3"  // High quality, fine-tuned (Qwen3-1.7B-4bit, 1037MB)
 
     var displayName: String {
         switch self {
-        case .yoozLightV1:
+        case .yoozLight:
             return "Yooz-Light"
-        case .yoozQualityV1:
+        case .yoozQuality:
             return "Yooz-Quality"
         }
     }
 
     var description: String {
         switch self {
-        case .yoozLightV1:
-            return "Fast proofreading (~120ms)"
-        case .yoozQualityV1:
-            return "High quality validation (~300ms)"
+        case .yoozLight:
+            return "Fast proofreading (~200ms)"
+        case .yoozQuality:
+            return "High quality proofreading (~490ms)"
         }
     }
 
     var estimatedSize: Int64 {
         switch self {
-        case .yoozLightV1:
-            return 278 * 1024 * 1024   // ~278 MB
-        case .yoozQualityV1:
-            return 1024 * 1024 * 1024  // ~1.0 GB
+        case .yoozLight:
+            return 276 * 1024 * 1024   // ~276 MB
+        case .yoozQuality:
+            return 1037 * 1024 * 1024  // ~1037 MB
         }
     }
 
     var isEmbedded: Bool {
         switch self {
-        case .yoozLightV1:
+        case .yoozLight:
             return true   // Bundled with app
-        case .yoozQualityV1:
+        case .yoozQuality:
             return false  // Downloaded from GHCR on-demand
         }
     }
 
     var baseModelId: String {
         switch self {
-        case .yoozLightV1:
+        case .yoozLight:
             return "qwen2.5-0.5b-instruct-4bit"
-        case .yoozQualityV1:
+        case .yoozQuality:
             return "qwen3-1.7b-instruct-ojus-4bit"
         }
+    }
+
+    /// GHCR package name for downloading
+    var packageName: String {
+        "yooz-models"
     }
 }
 
@@ -66,6 +71,7 @@ enum LLMError: Error, LocalizedError, Sendable {
     case generationFailed(String)
     case notAvailable(String)
     case downloadFailed(String)
+    case parsingFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -79,6 +85,8 @@ enum LLMError: Error, LocalizedError, Sendable {
             return "Model not available: \(reason)"
         case .downloadFailed(let reason):
             return "Download failed: \(reason)"
+        case .parsingFailed(let reason):
+            return "Failed to parse response: \(reason)"
         }
     }
 }

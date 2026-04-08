@@ -191,6 +191,15 @@ final class APIServer: ObservableObject {
                 loaded: llmInfo.quality.isLoaded,
                 sizeBytes: llmInfo.quality.type.estimatedSize
             ))
+            let fmLoaded = await TouchUpEngine.shared.isFoundationModelsLoaded
+            if fmLoaded {
+                models.append(ModelInfo(
+                    name: "foundation-models",
+                    module: "llm",
+                    loaded: true,
+                    sizeBytes: nil
+                ))
+            }
             return ModelsResponse(models: models)
         }
 
@@ -219,14 +228,14 @@ final class APIServer: ObservableObject {
                 }
                 modelType = resolved
             } else {
-                modelType = .yoozLightV1
+                modelType = .yoozLight
             }
 
             let startTime = CFAbsoluteTimeGetCurrent()
             do {
                 let result = try await TouchUpEngine.shared.generate(
                     prompt: body.prompt,
-                    systemPrompt: "",
+                    systemPrompt: body.systemPrompt ?? "",
                     modelType: modelType
                 )
                 let timeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)

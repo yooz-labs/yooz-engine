@@ -9,7 +9,7 @@ import os.log
 private let logger = Logger(subsystem: "live.yooz.engine", category: "ModelDownloader")
 
 /// Downloads LLM models from GitHub Container Registry (GHCR).
-/// Models are stored as OCI artifacts at ghcr.io/yooz-labs/yooz-engine/.
+/// Models are stored as OCI artifacts at ghcr.io/yooz-labs/yooz-models/.
 /// Falls back to GitHub Releases (tar.gz) if the OCI download fails.
 actor ModelDownloader {
 
@@ -17,7 +17,6 @@ actor ModelDownloader {
 
     private static let ghcrAPI = "https://ghcr.io/v2"
     private static let owner = "yooz-labs"
-    private static let packageName = "yooz-engine"
 
     // MARK: - Properties
 
@@ -74,11 +73,7 @@ actor ModelDownloader {
 
         try extractArchive(archiveURL, to: modelDir)
 
-        do {
-            try fileManager.removeItem(at: archiveURL)
-        } catch {
-            logger.warning("Failed to clean up archive at \(archiveURL.path): \(error.localizedDescription)")
-        }
+        try? fileManager.removeItem(at: archiveURL)
 
         logger.info("Model \(modelType.rawValue) ready at \(modelDir.path)")
         return modelDir
@@ -105,7 +100,7 @@ actor ModelDownloader {
     // MARK: - Private Methods
 
     private func getAnonymousToken(for modelType: LLMModelType) async throws -> String {
-        let scope = "repository:\(Self.owner)/\(Self.packageName)/\(modelType.rawValue):pull"
+        let scope = "repository:\(Self.owner)/\(modelType.packageName)/\(modelType.rawValue):pull"
         guard let tokenURL = URL(string: "https://ghcr.io/token?service=ghcr.io&scope=\(scope)") else {
             throw DownloadError.authFailed
         }
@@ -131,7 +126,7 @@ actor ModelDownloader {
     ) async throws -> URL {
         let token = try await getAnonymousToken(for: modelType)
 
-        guard let manifestURL = URL(string: "\(Self.ghcrAPI)/\(Self.owner)/\(Self.packageName)/\(modelType.rawValue)/manifests/latest") else {
+        guard let manifestURL = URL(string: "\(Self.ghcrAPI)/\(Self.owner)/\(modelType.packageName)/\(modelType.rawValue)/manifests/latest") else {
             throw DownloadError.invalidResponse
         }
 
@@ -160,7 +155,7 @@ actor ModelDownloader {
             throw DownloadError.noLayersInManifest
         }
 
-        guard let blobURL = URL(string: "\(Self.ghcrAPI)/\(Self.owner)/\(Self.packageName)/\(modelType.rawValue)/blobs/\(layer.digest)") else {
+        guard let blobURL = URL(string: "\(Self.ghcrAPI)/\(Self.owner)/\(modelType.packageName)/\(modelType.rawValue)/blobs/\(layer.digest)") else {
             throw DownloadError.invalidResponse
         }
 
@@ -171,7 +166,7 @@ actor ModelDownloader {
         modelType: LLMModelType,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
-        guard let releaseURL = URL(string: "https://github.com/\(Self.owner)/\(Self.packageName)/releases/latest/download/\(modelType.rawValue).tar.gz") else {
+        guard let releaseURL = URL(string: "https://github.com/\(Self.owner)/\(modelType.packageName)/releases/latest/download/\(modelType.rawValue).tar.gz") else {
             throw DownloadError.invalidResponse
         }
 
@@ -194,8 +189,8 @@ actor ModelDownloader {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        progressHandler(0.0)
-        let (downloadedURL, response) = try await session.download(for: request)
+        // Use bytes(for:) for granular progress tracking
+        let (asyncBytes, response) = try await session.bytes(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
@@ -204,11 +199,46 @@ actor ModelDownloader {
             throw DownloadError.httpError(statusCode)
         }
 
-        // Move the system temp file to our cache location
-        if fileManager.fileExists(atPath: tempFile.path) {
-            try fileManager.removeItem(at: tempFile)
+        // Get actual size from response or use expected
+        let totalSize = httpResponse.expectedContentLength > 0
+            ? httpResponse.expectedContentLength
+            : expectedSize
+
+        // Write bytes to file with progress updates
+        try? fileManager.removeItem(at: tempFile)
+        fileManager.createFile(atPath: tempFile.path, contents: nil)
+        let outputHandle = try FileHandle(forWritingTo: tempFile)
+
+        var bytesReceived: Int64 = 0
+        var lastReportedProgress = 0
+        var buffer = Data()
+        let bufferSize = 65536 // 64KB buffer
+
+        progressHandler(0.0)
+
+        for try await byte in asyncBytes {
+            buffer.append(byte)
+            bytesReceived += 1
+
+            // Write in chunks for efficiency
+            if buffer.count >= bufferSize {
+                try outputHandle.write(contentsOf: buffer)
+                buffer.removeAll(keepingCapacity: true)
+
+                // Report progress every 5%
+                let currentProgress = Int((Double(bytesReceived) / Double(totalSize)) * 100)
+                if currentProgress >= lastReportedProgress + 5 {
+                    lastReportedProgress = currentProgress
+                    progressHandler(Double(bytesReceived) / Double(totalSize))
+                }
+            }
         }
-        try fileManager.moveItem(at: downloadedURL, to: tempFile)
+
+        // Write remaining buffer
+        if !buffer.isEmpty {
+            try outputHandle.write(contentsOf: buffer)
+        }
+        try outputHandle.close()
 
         progressHandler(1.0)
         return tempFile

@@ -3,13 +3,16 @@ import Foundation
 public struct LLMGenerateRequest: Codable, Sendable {
     public let prompt: String
     public let model: String?
+    public let systemPrompt: String?
 
     public init(
         prompt: String,
-        model: String? = nil
+        model: String? = nil,
+        systemPrompt: String? = nil
     ) {
         self.prompt = prompt
         self.model = model
+        self.systemPrompt = systemPrompt
     }
 }
 

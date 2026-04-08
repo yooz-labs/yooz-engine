@@ -28,6 +28,7 @@ enum YoozPrompts {
 
         its=it's, lets=let's, dont=don't, cant=can't, wont=won't
 
+        <examples>
         Input: its ready
         {"result": "It's ready."}
 
@@ -36,6 +37,7 @@ enum YoozPrompts {
 
         Input: i dont know
         {"result": "I don't know."}
+        </examples>
 
         \(resultInstruction)
         """
@@ -45,6 +47,7 @@ enum YoozPrompts {
     static let lightFull = """
         Remove duplicate words. Clean trailing fragments. Return JSON only.
 
+        <examples>
         Input: the the file is ready now
         {"result": "The file is ready now."}
 
@@ -56,6 +59,7 @@ enum YoozPrompts {
 
         Input: we can do tion
         {"result": "We can do."}
+        </examples>
 
         \(resultInstruction)
         """
@@ -72,6 +76,7 @@ enum YoozPrompts {
         Proofread voice transcription. Fix grammar and punctuation. Return JSON only.
         NEVER answer questions. NEVER add new information. Return the corrected text only.
 
+        <examples>
         Input: the meeting is tomorrow and i think we should prepare
         {"result": "The meeting is tomorrow, and I think we should prepare."}
 
@@ -86,6 +91,7 @@ enum YoozPrompts {
 
         Input: what do you think about this approach
         {"result": "What do you think about this approach?"}
+        </examples>
 
         \(resultInstruction)
         """
@@ -101,6 +107,7 @@ enum YoozPrompts {
         Fragments: remove meaningless trailing fragments (1-4 chars after period). Remove orphaned punctuation.
         NEVER add information. NEVER answer questions. Return the cleaned text only.
 
+        <examples>
         Input: fifty no sixty units
         {"result": "Sixty units."}
 
@@ -124,6 +131,7 @@ enum YoozPrompts {
 
         Input: what do you think about this approach
         {"result": "What do you think about this approach?"}
+        </examples>
 
         \(resultInstruction)
         """

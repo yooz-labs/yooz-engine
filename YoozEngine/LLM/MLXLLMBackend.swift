@@ -7,6 +7,7 @@ import Foundation
 import os.log
 
 #if canImport(MLXLMCommon)
+import MLX
 import MLXLMCommon
 #endif
 
@@ -14,6 +15,8 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "MLXLLMBack
 
 /// MLX-Swift backend for Yooz LLM models.
 /// Supports both embedded (Yooz-Light) and downloaded (Yooz-Quality) models.
+/// Implements system prompt KV cache optimization to skip re-computing the
+/// system prompt tokens on subsequent calls with the same system prompt.
 actor MLXLLMBackend: LLMBackend {
 
     // MARK: - Properties
@@ -22,14 +25,7 @@ actor MLXLLMBackend: LLMBackend {
     let modelType: LLMModelType
 
     /// Whether a model is loaded and ready for generation.
-    /// Derived from the presence of a loaded model container.
-    var isLoaded: Bool {
-        #if canImport(MLXLMCommon)
-        return modelContainer != nil
-        #else
-        return false
-        #endif
-    }
+    private(set) var isLoaded = false
 
     /// Download progress (0.0 to 1.0) for non-embedded models
     private(set) var downloadProgress: Double = 0
@@ -40,6 +36,17 @@ actor MLXLLMBackend: LLMBackend {
 
     #if canImport(MLXLMCommon)
     private var modelContainer: ModelContainer?
+
+    /// Cached KV state containing only system prompt tokens.
+    /// After the first call with a given system prompt, we snapshot the KV cache
+    /// at the system prompt boundary so subsequent calls skip re-computing it.
+    private var cachedPromptKVState: [[MLXArray]]?
+
+    /// Number of tokens in the cached system prompt KV state
+    private var cachedPromptTokenCount: Int = 0
+
+    /// System prompt that produced the cached KV state
+    private var cachedSystemPrompt: String?
     #endif
 
     // MARK: - Initialization
@@ -63,12 +70,10 @@ actor MLXLLMBackend: LLMBackend {
         logger.info("Loading model \(self.modelType.rawValue)...")
 
         do {
-            let modelDirectory: URL
-
-            if modelType.isEmbedded {
-                modelDirectory = try getEmbeddedModelDirectory()
+            let modelDirectory: URL = if modelType.isEmbedded {
+                try getEmbeddedModelDirectory()
             } else {
-                modelDirectory = try await downloader.downloadModel(modelType) { [weak self] progress in
+                try await downloader.downloadModel(modelType) { [weak self] progress in
                     Task {
                         await self?.setDownloadProgress(progress)
                     }
@@ -80,9 +85,8 @@ actor MLXLLMBackend: LLMBackend {
             let configuration = ModelConfiguration(directory: modelDirectory)
             modelContainer = try await loadModelContainer(configuration: configuration)
 
+            isLoaded = true
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
-        } catch let error as LLMError {
-            throw error
         } catch {
             logger.error("Failed to load model: \(error.localizedDescription)")
             throw LLMError.loadFailed(error.localizedDescription)
@@ -96,9 +100,23 @@ actor MLXLLMBackend: LLMBackend {
     func unload() {
         #if canImport(MLXLMCommon)
         modelContainer = nil
+        cachedPromptKVState = nil
+        cachedPromptTokenCount = 0
+        cachedSystemPrompt = nil
         #endif
+        isLoaded = false
         downloadProgress = 0
         logger.info("Model \(self.modelType.rawValue) unloaded")
+    }
+
+    /// Clear the cached system prompt KV state, forcing re-computation on the next call.
+    func clearSession() {
+        #if canImport(MLXLMCommon)
+        cachedPromptKVState = nil
+        cachedPromptTokenCount = 0
+        cachedSystemPrompt = nil
+        #endif
+        logger.debug("Prompt cache cleared")
     }
 
     func generate(prompt: String, systemPrompt: String) async throws -> String {
@@ -112,33 +130,130 @@ actor MLXLLMBackend: LLMBackend {
         }
 
         do {
-            logger.debug("Creating chat session...")
-
-            // Rough token estimate: ~3 chars per token + 50 for JSON overhead.
-            // Floor at 100 to avoid truncating short inputs.
             let estimatedTokens = max(100, (prompt.count / 3) + 50)
 
-            let session = ChatSession(
-                container,
-                instructions: systemPrompt,
-                generateParameters: GenerateParameters(
-                    maxTokens: estimatedTokens,
-                    temperature: 0.1,
-                    topP: 0.9
-                )
+            // Invalidate cache if system prompt changed
+            if systemPrompt != cachedSystemPrompt {
+                cachedPromptKVState = nil
+                cachedPromptTokenCount = 0
+                cachedSystemPrompt = nil
+            }
+
+            // Tokenize the full [system, user] message sequence
+            let messages: [Chat.Message] = [
+                .system(systemPrompt),
+                .user(prompt)
+            ]
+            let userInput = UserInput(chat: messages)
+            let fullInput = try await container.prepare(input: userInput)
+
+            let params = GenerateParameters(
+                maxTokens: estimatedTokens,
+                temperature: 0.1,
+                topP: 0.9
             )
 
-            logger.debug("Generating for: \(prompt.prefix(50))...")
+            let savedKVState = cachedPromptKVState
+            let savedTokenCount = cachedPromptTokenCount
 
-            let response = try await session.respond(to: prompt)
+            // On the first call, find the system prompt token boundary by comparing
+            // two full sequences with different user messages. Chat templates are not
+            // additive (system-only tokenization differs from the system portion of a
+            // full sequence), so we find the common prefix of two full sequences instead.
+            var sysOnlyTokenCount = savedTokenCount
+            if savedKVState == nil {
+                let probeMessages: [Chat.Message] = [
+                    .system(systemPrompt),
+                    .user("_")
+                ]
+                let probeInput = UserInput(chat: probeMessages)
+                let probeLMInput = try await container.prepare(input: probeInput)
+
+                let fullTokens = fullInput.text.tokens
+                let probeTokens = probeLMInput.text.tokens
+                let minLen = min(fullTokens.size, probeTokens.size)
+
+                // Find where the two sequences diverge; that's the user content boundary
+                if minLen > 0 {
+                    let match = (fullTokens[..<minLen] .== probeTokens[..<minLen])
+                    let matchArray = match.asArray(Bool.self)
+                    var prefixLen = 0
+                    for v in matchArray {
+                        if v { prefixLen += 1 } else { break }
+                    }
+                    sysOnlyTokenCount = prefixLen
+                }
+            }
+            let sysCount = sysOnlyTokenCount
+
+            // If we have a cached system prompt KV state, skip the system tokens and
+            // only feed the user portion. Otherwise, feed all tokens.
+            let hasCachedState = savedKVState != nil && sysCount > 0
+            let inputForModel: LMInput
+            if hasCachedState {
+                let userTokens = fullInput.text.tokens[sysCount...]
+                inputForModel = LMInput(text: .init(tokens: userTokens))
+            } else {
+                inputForModel = fullInput
+            }
+
+            let (response, kvSnapshot): (String, [[MLXArray]]?) = try await container.perform { context in
+                // Create fresh KV cache and restore cached system prompt state if available
+                var cache = context.model.newCache(parameters: params)
+                if let savedState = savedKVState {
+                    for i in 0..<min(cache.count, savedState.count) {
+                        cache[i].state = savedState[i]
+                    }
+                    eval(cache)
+                }
+
+                // Generate using the lower-level API with our managed cache
+                let stream = try MLXLMCommon.generate(
+                    input: inputForModel,
+                    cache: cache,
+                    parameters: params,
+                    context: context
+                )
+
+                var text = ""
+                for await generation in stream {
+                    if case let .chunk(chunk) = generation {
+                        text += chunk
+                    }
+                }
+
+                // Trim the cache back to just the system prompt tokens and snapshot
+                var snapshot: [[MLXArray]]? = nil
+                if sysCount > 0 {
+                    let currentOffset = cache.first?.offset ?? 0
+                    let trimAmount = currentOffset - sysCount
+                    if trimAmount > 0 {
+                        for layer in cache {
+                            layer.trim(trimAmount)
+                        }
+                        eval(cache)
+                    }
+                    snapshot = cache.map(\.state)
+                }
+                return (text, snapshot)
+            }
+
+            // Update cached state
+            if let snapshot = kvSnapshot {
+                cachedPromptKVState = snapshot
+                cachedPromptTokenCount = sysCount
+                cachedSystemPrompt = systemPrompt
+                if savedKVState == nil {
+                    logger.info("Cached system prompt KV (\(sysCount) tokens)")
+                }
+            }
 
             logger.debug("Generation complete, got \(response.count) chars")
-
-            let cleaned = postProcessResponse(response, originalInput: prompt)
-            return cleaned
-        } catch let error as LLMError {
-            throw error
+            return postProcessResponse(response, originalInput: prompt)
         } catch {
+            cachedPromptKVState = nil
+            cachedPromptTokenCount = 0
+            cachedSystemPrompt = nil
             logger.error("Generation failed: \(error.localizedDescription)")
             throw LLMError.generationFailed(error.localizedDescription)
         }
@@ -288,10 +403,10 @@ extension MLXLLMBackend {
     }
 
     static func createLight(bundleIdentifier: String = "live.yooz.engine") -> MLXLLMBackend {
-        return create(for: .yoozLightV1, bundleIdentifier: bundleIdentifier)
+        return create(for: .yoozLight, bundleIdentifier: bundleIdentifier)
     }
 
     static func createQuality(bundleIdentifier: String = "live.yooz.engine") -> MLXLLMBackend {
-        return create(for: .yoozQualityV1, bundleIdentifier: bundleIdentifier)
+        return create(for: .yoozQuality, bundleIdentifier: bundleIdentifier)
     }
 }
