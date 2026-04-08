@@ -32,7 +32,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
     // MARK: - Version
 
-    public static let version = "0.4.1"
+    public static let version = "0.6.6"
 
     // MARK: - Singleton
 
@@ -285,11 +285,15 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         return result
     }
 
-    /// Reset the stream (start fresh)
+    /// Reset the stream (start fresh, clears all accumulated context)
     public func resetStream() {
         lock.lock()
+        let context = streamingContext
         streamingContext = nil
         lock.unlock()
+
+        // Full reset clears accumulated context
+        context?.reset()
 
         DispatchQueue.main.async {
             self.isStreaming = false
@@ -478,16 +482,16 @@ public enum YoozSTTError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .modelNotFound(let message):
-            return "Model not found: \(message)"
-        case .modelLoadFailed(let reason):
-            return "Failed to load model: \(reason)"
+        case let .modelNotFound(message):
+            "Model not found: \(message)"
+        case let .modelLoadFailed(reason):
+            "Failed to load model: \(reason)"
         case .notReady:
-            return "YoozSTTEngine is not ready. Call start() first."
-        case .streamError(let reason):
-            return "Streaming error: \(reason)"
-        case .languageNotSupported(let language):
-            return "Language not yet supported: \(language.displayName). Only \(STTLanguage.implemented.map { $0.displayName }.joined(separator: ", ")) are currently available."
+            "YoozSTTEngine is not ready. Call start() first."
+        case let .streamError(reason):
+            "Streaming error: \(reason)"
+        case let .languageNotSupported(language):
+            "Language not yet supported: \(language.displayName). Only \(STTLanguage.implemented.map(\.displayName).joined(separator: ", ")) are currently available."
         }
     }
 }

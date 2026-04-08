@@ -13,7 +13,7 @@ public class ConformerCache: KVCache {
     /// Current offset (number of frames processed)
     public var frameOffset: Int = 0
 
-    public override init() {
+    override public init() {
         super.init()
     }
 
@@ -46,13 +46,11 @@ public class ConformerCache: KVCache {
         }
 
         // Prepend cached frames to input
-        let result = concatenated([conv!, x], axis: 1)
-
-        return result
+        return concatenated([conv!, x], axis: 1)
     }
 
     /// Reset all cache state
-    public override func reset() {
+    override public func reset() {
         super.reset()
         conv = nil
         frameOffset = 0
@@ -76,7 +74,7 @@ public class RotatingConformerCache: ConformerCache {
     }
 
     /// Update KV cache with rotation to maintain bounded memory
-    public override func update(keys newKeys: MLXArray, values newValues: MLXArray) -> (MLXArray, MLXArray) {
+    override public func update(keys newKeys: MLXArray, values newValues: MLXArray) -> (MLXArray, MLXArray) {
         let (B, H, S, D) = (newKeys.dim(0), newKeys.dim(1), newKeys.dim(2), newKeys.dim(3))
 
         // Initialize cache if needed
@@ -145,7 +143,7 @@ public class RotatingConformerCache: ConformerCache {
     }
 
     /// Update convolution cache with drop size consideration
-    public override func updateAndFetchConv(_ x: MLXArray, padding: Int) -> MLXArray {
+    override public func updateAndFetchConv(_ x: MLXArray, padding: Int) -> MLXArray {
         guard padding > 0 else { return x }
 
         let (B, S, D) = (x.dim(0), x.dim(1), x.dim(2))

@@ -1,14 +1,12 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
 import Foundation
-import MLX
 
 // MARK: - STT Model Protocol
 
-/// Protocol defining the interface for all speech-to-text models
-/// All model implementations (Parakeet, FastConformer, SenseVoice) must conform
+/// Protocol defining the interface for all speech-to-text model backends
+/// Implementations: ParakeetModelAdapter, FastConformerModelAdapter
 public protocol STTModel: AnyObject, Sendable {
-
     /// The language this model instance is configured for
     var language: STTLanguage { get }
 
@@ -33,7 +31,6 @@ public protocol STTModel: AnyObject, Sendable {
 /// Protocol for streaming transcription sessions
 /// Each model family provides its own implementation
 public protocol STTStreamingSession: AnyObject, Sendable {
-
     /// Add audio samples and get current transcription state
     /// - Parameter samples: Audio samples at 16kHz
     /// - Returns: Current transcription result (finalized + draft)
@@ -47,8 +44,18 @@ public protocol STTStreamingSession: AnyObject, Sendable {
     /// - Returns: Transcription result with aligned tokens
     func finalizeWithTimestamps() -> TranscriptionResult
 
-    /// Reset the session state
+    /// Reset the session state for a new recognition pass
     func reset()
+
+    /// Full reset clearing all state including accumulated context
+    func fullReset()
+}
+
+public extension STTStreamingSession {
+    /// Default: fullReset is the same as reset
+    func fullReset() {
+        reset()
+    }
 }
 
 // MARK: - Model Loading Error
@@ -63,37 +70,16 @@ public enum STTModelError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .modelNotFound(let path):
-            return "Model not found at: \(path)"
-        case .configurationError(let message):
-            return "Configuration error: \(message)"
-        case .weightLoadingError(let message):
-            return "Failed to load weights: \(message)"
-        case .unsupportedLanguage(let language):
-            return "Language not supported: \(language.displayName)"
-        case .modelNotImplemented(let family):
-            return "Model family not yet implemented: \(family.rawValue)"
+        case let .modelNotFound(path):
+            "Model not found at: \(path)"
+        case let .configurationError(message):
+            "Configuration error: \(message)"
+        case let .weightLoadingError(message):
+            "Failed to load weights: \(message)"
+        case let .unsupportedLanguage(language):
+            "Language not supported: \(language.displayName)"
+        case let .modelNotImplemented(family):
+            "Model family not yet implemented: \(family.rawValue)"
         }
     }
-}
-
-// MARK: - Model Loading Protocol
-
-/// Protocol for model loaders that can instantiate STT models
-public protocol STTModelLoader {
-
-    /// Model family this loader handles
-    static var modelFamily: ModelFamily { get }
-
-    /// Load a model for the given language from a directory
-    /// - Parameters:
-    ///   - directory: Directory containing model files (config.json, model.safetensors)
-    ///   - language: Target language
-    ///   - dtype: Data type for weights (default: bfloat16)
-    /// - Returns: Loaded model instance
-    static func load(
-        from directory: URL,
-        language: STTLanguage,
-        dtype: DType
-    ) throws -> any STTModel
 }

@@ -61,7 +61,7 @@ public class ConformerBlock: Module {
         posEmb: MLXArray? = nil,
         mask: MLXArray? = nil
     ) -> MLXArray {
-        return callAsFunction(x, posEmb: posEmb, mask: mask, cache: nil, localContext: nil)
+        callAsFunction(x, posEmb: posEmb, mask: mask, cache: nil, localContext: nil)
     }
 
     /// Forward pass with optional cache for streaming
@@ -79,7 +79,7 @@ public class ConformerBlock: Module {
 
         // Self-attention with KV cache and optional local attention
         let xNorm = normSelfAtt(out)
-        if let posEmb = posEmb {
+        if let posEmb {
             out = out + selfAttn(
                 xNorm, k: xNorm, v: xNorm,
                 posEmb: posEmb,

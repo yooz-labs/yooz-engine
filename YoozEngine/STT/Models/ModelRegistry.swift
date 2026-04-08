@@ -126,6 +126,11 @@ public actor ModelRegistry {
 
         // Load based on model family
         switch language.modelFamily {
+        case .apple:
+            throw STTModelError.configurationError(
+                "Apple STT models are not managed by ModelRegistry"
+            )
+
         case .parakeetTDT:
             return try await loadParakeetModel(from: modelDir, language: language)
 
@@ -167,7 +172,9 @@ public actor ModelRegistry {
             }
 
             #if DEBUG
-            print("[ModelRegistry] Warning: Language-specific model not found at \(modelSubdir.path), falling back to base directory")
+                print(
+                    "[ModelRegistry] Warning: Language-specific model not found at \(modelSubdir.path), falling back to base directory"
+                )
             #endif
 
             modelPath = directory
@@ -184,28 +191,27 @@ public actor ModelRegistry {
 
 /// Adapter to make ParakeetModel conform to STTModel protocol
 final class ParakeetModelAdapter: STTModel, @unchecked Sendable {
-
     let underlyingModel: ParakeetModel
-    public let language: STTLanguage
+    let language: STTLanguage
 
     init(model: ParakeetModel, language: STTLanguage) {
         self.underlyingModel = model
         self.language = language
     }
 
-    public var modelFamily: ModelFamily {
+    var modelFamily: ModelFamily {
         .parakeetTDT
     }
 
-    public var preprocessConfig: PreprocessConfig {
+    var preprocessConfig: PreprocessConfig {
         underlyingModel.config.preprocessor
     }
 
-    public func transcribe(_ audio: [Float]) -> TranscriptionResult {
+    func transcribe(_ audio: [Float]) -> TranscriptionResult {
         underlyingModel.transcribe(audio)
     }
 
-    public func createStreamingSession() -> STTStreamingSession {
+    func createStreamingSession() -> STTStreamingSession {
         let transcriber = StreamingTranscriber(model: underlyingModel)
         return StreamingSessionAdapter(transcriber: transcriber)
     }
@@ -215,26 +221,25 @@ final class ParakeetModelAdapter: STTModel, @unchecked Sendable {
 
 /// Adapter to make StreamingTranscriber conform to STTStreamingSession
 final class StreamingSessionAdapter: STTStreamingSession, @unchecked Sendable {
-
     private let transcriber: StreamingTranscriber
 
     init(transcriber: StreamingTranscriber) {
         self.transcriber = transcriber
     }
 
-    public func addAudio(samples: [Float]) -> ParakeetResult {
+    func addAudio(samples: [Float]) -> ParakeetResult {
         transcriber.addAudio(samples: samples)
     }
 
-    public func finalize() -> ParakeetResult {
+    func finalize() -> ParakeetResult {
         transcriber.finalize()
     }
 
-    public func finalizeWithTimestamps() -> TranscriptionResult {
+    func finalizeWithTimestamps() -> TranscriptionResult {
         transcriber.finalizeWithTimestamps()
     }
 
-    public func reset() {
+    func reset() {
         transcriber.reset()
     }
 }
@@ -243,28 +248,27 @@ final class StreamingSessionAdapter: STTStreamingSession, @unchecked Sendable {
 
 /// Adapter to make FastConformerModel conform to STTModel protocol
 final class FastConformerModelAdapter: STTModel, @unchecked Sendable {
-
     let underlyingModel: FastConformerModel
-    public let language: STTLanguage
+    let language: STTLanguage
 
     init(model: FastConformerModel, language: STTLanguage) {
         self.underlyingModel = model
         self.language = language
     }
 
-    public var modelFamily: ModelFamily {
+    var modelFamily: ModelFamily {
         .fastConformer
     }
 
-    public var preprocessConfig: PreprocessConfig {
+    var preprocessConfig: PreprocessConfig {
         underlyingModel.config.preprocessor
     }
 
-    public func transcribe(_ audio: [Float]) -> TranscriptionResult {
+    func transcribe(_ audio: [Float]) -> TranscriptionResult {
         underlyingModel.transcribe(audio)
     }
 
-    public func createStreamingSession() -> STTStreamingSession {
+    func createStreamingSession() -> STTStreamingSession {
         let transcriber = FastConformerStreamingTranscriber(model: underlyingModel)
         return FastConformerStreamingSessionAdapter(transcriber: transcriber)
     }
@@ -303,7 +307,7 @@ final class FastConformerStreamingTranscriber: @unchecked Sendable {
         // Calculate minimum chunk size for encoder processing
         let subsamplingFactor = model.config.encoder.subsamplingFactor
         let hopLength = model.config.preprocessor.hopLength
-        self.minChunkSamples = subsamplingFactor * hopLength * 8  // ~8 encoder frames
+        self.minChunkSamples = subsamplingFactor * hopLength * 8 // ~8 encoder frames
     }
 
     func addAudio(samples: [Float]) -> ParakeetResult {
@@ -321,7 +325,9 @@ final class FastConformerStreamingTranscriber: @unchecked Sendable {
         // Check if we need to auto-finalize to prevent memory issues
         if let prev = previousEncoderOutput, prev.dim(1) >= maxEncoderOutputFrames {
             #if DEBUG
-            print("[FastConformerStreaming] Auto-finalizing chunk at \(maxEncoderOutputFrames) frames to prevent memory issues")
+                print(
+                    "[FastConformerStreaming] Auto-finalizing chunk at \(maxEncoderOutputFrames) frames to prevent memory issues"
+                )
             #endif
             _ = finalizeChunk()
         }
@@ -338,11 +344,13 @@ final class FastConformerStreamingTranscriber: @unchecked Sendable {
             previousEncoderOutput = concatenated([prev, newEncoderOutput], axis: 1)
 
             #if DEBUG
-            // Warn if approaching memory limit
-            if previousEncoderOutput!.dim(1) >= warnThresholdFrames &&
-               previousEncoderOutput!.dim(1) < warnThresholdFrames + 50 {
-                print("[FastConformerStreaming] Warning: Approaching memory limit. Consider calling finalizeChunk() at natural breaks.")
-            }
+                // Warn if approaching memory limit
+                if previousEncoderOutput!.dim(1) >= warnThresholdFrames,
+                   previousEncoderOutput!.dim(1) < warnThresholdFrames + 50 {
+                    print(
+                        "[FastConformerStreaming] Warning: Approaching memory limit. Consider calling finalizeChunk() at natural breaks."
+                    )
+                }
             #endif
         } else {
             previousEncoderOutput = newEncoderOutput
@@ -351,7 +359,7 @@ final class FastConformerStreamingTranscriber: @unchecked Sendable {
         lastTokens = tokens
 
         // Build result
-        let fullText = tokens.map { $0.text }.joined()
+        let fullText = tokens.map(\.text).joined()
 
         // For streaming, treat all text as draft until finalized
         return ParakeetResult(
@@ -366,7 +374,7 @@ final class FastConformerStreamingTranscriber: @unchecked Sendable {
     /// Returns the finalized text for this chunk
     func finalizeChunk() -> String {
         // Decode current buffer
-        if !audioBuffer.isEmpty && previousEncoderOutput != nil {
+        if !audioBuffer.isEmpty, previousEncoderOutput != nil {
             let (tokens, _) = model.transcribeStreaming(
                 audioBuffer,
                 encoderCache: encoderCache,
@@ -375,7 +383,7 @@ final class FastConformerStreamingTranscriber: @unchecked Sendable {
             lastTokens = tokens
         }
 
-        let chunkText = lastTokens.map { $0.text }.joined()
+        let chunkText = lastTokens.map(\.text).joined()
         finalizedText += chunkText
 
         // Reset for next chunk
@@ -426,26 +434,25 @@ final class FastConformerStreamingTranscriber: @unchecked Sendable {
 
 /// Adapter to make FastConformerStreamingTranscriber conform to STTStreamingSession
 final class FastConformerStreamingSessionAdapter: STTStreamingSession, @unchecked Sendable {
-
     private let transcriber: FastConformerStreamingTranscriber
 
     init(transcriber: FastConformerStreamingTranscriber) {
         self.transcriber = transcriber
     }
 
-    public func addAudio(samples: [Float]) -> ParakeetResult {
+    func addAudio(samples: [Float]) -> ParakeetResult {
         transcriber.addAudio(samples: samples)
     }
 
-    public func finalize() -> ParakeetResult {
+    func finalize() -> ParakeetResult {
         transcriber.finalize()
     }
 
-    public func finalizeWithTimestamps() -> TranscriptionResult {
+    func finalizeWithTimestamps() -> TranscriptionResult {
         transcriber.finalizeWithTimestamps()
     }
 
-    public func reset() {
+    func reset() {
         transcriber.reset()
     }
 }
