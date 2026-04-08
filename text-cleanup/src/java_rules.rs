@@ -1381,6 +1381,126 @@ impl ProgrammaticRule for SpokenNumberConversionRule {
 }
 
 // ============================================================================
+// Compound Hyphen Rule
+// ============================================================================
+
+/// Removes erroneous spaces around hyphens in compound words
+///
+/// STT engines often produce "self - driving" instead of "self-driving".
+/// This rule detects spaced hyphens where one side is a known compound prefix
+/// and removes the spaces.
+///
+/// Handles: self-, co-, well-, non-, pre-, post-, re-, anti-, multi-, semi-,
+///          over-, under-, ex-, cross-, counter-, inter-, intra-, mid-, out-,
+///          sub-, super-, trans-, ultra-, up-
+pub struct CompoundHyphenRule {
+    prefixes: HashSet<&'static str>,
+}
+
+impl Default for CompoundHyphenRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CompoundHyphenRule {
+    pub fn new() -> Self {
+        let prefixes = [
+            "self", "co", "well", "non", "pre", "post", "re", "anti",
+            "multi", "semi", "over", "under", "ex", "cross", "counter",
+            "inter", "intra", "mid", "out", "sub", "super", "trans",
+            "ultra", "up",
+        ].into_iter().collect();
+
+        Self { prefixes }
+    }
+
+    fn is_compound_prefix(&self, word: &str) -> bool {
+        self.prefixes.contains(word.to_lowercase().as_str())
+    }
+}
+
+impl ProgrammaticRule for CompoundHyphenRule {
+    fn id(&self) -> &str {
+        "COMPOUND_HYPHEN_SPACING"
+    }
+
+    fn description(&self) -> &str {
+        "Removes spaces around hyphens in compound words"
+    }
+
+    fn name(&self) -> &str {
+        "Compound Hyphen Spacing Rule"
+    }
+
+    fn examples(&self) -> Vec<RuleExample> {
+        vec![
+            RuleExample::incorrect("self - driving car", "self-driving car"),
+            RuleExample::incorrect("co - worker", "co-worker"),
+            RuleExample::incorrect("well - known fact", "well-known fact"),
+            RuleExample::incorrect("non - profit", "non-profit"),
+            RuleExample::correct("He went home - and never came back"),
+            RuleExample::correct("Monday - Friday schedule"),
+        ]
+    }
+
+    fn check(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
+        let mut matches = Vec::new();
+        // Use full token list (including punctuation) since we need to see dashes
+        let tokens = sentence.get_tokens();
+
+        if tokens.len() < 3 {
+            return matches;
+        }
+
+        // Collect non-empty, non-marker tokens with their indices
+        let real_tokens: Vec<&POSToken> = tokens.iter()
+            .filter(|t| !t.text.is_empty()
+                && t.tag != POSTag::SentenceStart
+                && t.tag != POSTag::SentenceEnd)
+            .collect();
+
+        let mut i = 0;
+        while i + 2 < real_tokens.len() {
+            let left = real_tokens[i];
+            let middle = real_tokens[i + 1];
+            let right = real_tokens[i + 2];
+
+            // Pattern: word - word where middle is a hyphen/dash
+            let is_dash = middle.text == "-"
+                || middle.text == "\u{2013}"
+                || middle.text == "\u{2014}";
+
+            if is_dash
+                && left.text.chars().all(|c| c.is_alphabetic())
+                && right.text.chars().all(|c| c.is_alphabetic())
+                && self.is_compound_prefix(&left.text)
+            {
+                // Replace "prefix - word" with "prefix-word"
+                let replacement = format!("{}-{}", left.text, right.text);
+                matches.push(
+                    RuleMatch::new(
+                        self.id(),
+                        left.start as usize,
+                        right.end as usize,
+                        format!("Compound word should be hyphenated: '{}'", replacement),
+                    )
+                    .with_suggestions(vec![replacement])
+                    .with_short_message("Remove spaces around hyphen")
+                    .with_auto_correct()
+                );
+                i += 3;
+                continue;
+            }
+
+            i += 1;
+        }
+
+        matches
+    }
+}
+
+// ============================================================================
 // Programmatic Rule Engine (mirrors LanguageTool's JLanguageTool)
 // ============================================================================
 
@@ -1405,6 +1525,7 @@ impl ProgrammaticRuleEngine {
         let rules: Vec<Box<dyn ProgrammaticRule>> = vec![
             Box::new(WordRepeatRule::new()),
             Box::new(SpokenNumberConversionRule::new()),
+            Box::new(CompoundHyphenRule::new()),
             // Add more rules here as we implement them:
             // Box::new(AvsAnRule::new()),
             // Box::new(EnglishWordRepeatBeginningRule::new()),
@@ -1660,7 +1781,7 @@ mod tests {
         let engine = ProgrammaticRuleEngine::new();
 
         // Verify the rule is registered
-        assert_eq!(engine.rule_count(), 2); // WordRepeatRule + SpokenNumberConversionRule
+        assert_eq!(engine.rule_count(), 3); // WordRepeatRule + SpokenNumberConversionRule + CompoundHyphenRule
 
         let ids = engine.rule_ids();
         assert!(ids.contains(&"SPOKEN_NUMBER_CONVERSION".to_string()));
@@ -2291,7 +2412,7 @@ mod tests {
         // Verify the rule is properly integrated in the engine
         let engine = ProgrammaticRuleEngine::new();
 
-        assert_eq!(engine.rule_count(), 2); // WordRepeatRule + SpokenNumberConversionRule
+        assert_eq!(engine.rule_count(), 3); // WordRepeatRule + SpokenNumberConversionRule + CompoundHyphenRule
 
         let ids = engine.rule_ids();
         assert!(ids.contains(&"SPOKEN_NUMBER_CONVERSION".to_string()));
@@ -2626,6 +2747,72 @@ mod tests {
             let tokens = tokens_from_text(input);
             let result = engine.correct(&tokens, input);
             assert_eq!(result, expected, "Failed and-connector: '{}' → '{}'", input, expected);
+        }
+    }
+
+    // ========================================================================
+    // Compound Hyphen Spacing Tests
+    // ========================================================================
+
+    #[test]
+    fn test_compound_hyphen_basic_prefixes() {
+        let engine = ProgrammaticRuleEngine::new();
+
+        let test_cases = vec![
+            ("self - driving car", "self-driving car"),
+            ("co - worker benefits", "co-worker benefits"),
+            ("well - known fact", "well-known fact"),
+            ("non - profit organization", "non-profit organization"),
+            ("pre - order the book", "pre-order the book"),
+            ("post - war economy", "post-war economy"),
+            ("anti - virus software", "anti-virus software"),
+            ("multi - tasking skills", "multi-tasking skills"),
+            ("semi - annual report", "semi-annual report"),
+            ("over - simplified view", "over-simplified view"),
+            ("under - appreciated work", "under-appreciated work"),
+            ("ex - husband called", "ex-husband called"),
+        ];
+
+        for (input, expected) in test_cases {
+            let tokens = tokens_from_text(input);
+            let result = engine.correct(&tokens, input);
+            assert_eq!(result, expected, "Failed compound: '{}' → '{}'", input, expected);
+        }
+    }
+
+    #[test]
+    fn test_compound_hyphen_no_false_positives() {
+        let engine = ProgrammaticRuleEngine::new();
+
+        let test_cases = vec![
+            // Regular words with dashes should NOT be joined
+            // (neither side is a known prefix)
+            ("Monday - Friday schedule", "Monday - Friday schedule"),
+            ("New York - Boston train", "New York - Boston train"),
+            ("red - blue gradient", "red - blue gradient"),
+        ];
+
+        for (input, expected) in test_cases {
+            let tokens = tokens_from_text(input);
+            let result = engine.correct(&tokens, input);
+            assert_eq!(result, expected, "False positive: '{}' should stay '{}'", input, expected);
+        }
+    }
+
+    #[test]
+    fn test_compound_hyphen_in_sentence() {
+        let engine = ProgrammaticRuleEngine::new();
+
+        let test_cases = vec![
+            ("the self - driving car is here", "the self-driving car is here"),
+            ("she is a well - known author", "she is a well-known author"),
+            ("this is a non - trivial problem", "this is a non-trivial problem"),
+        ];
+
+        for (input, expected) in test_cases {
+            let tokens = tokens_from_text(input);
+            let result = engine.correct(&tokens, input);
+            assert_eq!(result, expected, "Failed in-sentence: '{}' → '{}'", input, expected);
         }
     }
 }
