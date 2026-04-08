@@ -166,12 +166,11 @@ public final class ParakeetModel: Module {
         let melOffset = encoderOffset * subsamplingFactor
 
         // If cache has frames, slice mel to get only NEW frames
-        let melToEncode: MLXArray
-        if melOffset > 0 && allMel.dim(1) > melOffset {
+        let melToEncode: MLXArray = if melOffset > 0, allMel.dim(1) > melOffset {
             // Only encode new frames (after mel offset)
-            melToEncode = allMel[0..., melOffset..., 0...]
+            allMel[0..., melOffset..., 0...]
         } else {
-            melToEncode = allMel
+            allMel
         }
 
         // Encode new mel frames with cache (cache provides attention context)
@@ -179,11 +178,10 @@ public final class ParakeetModel: Module {
         eval(newEncoderOutput)
 
         // Combine with previous encoder outputs for decoding
-        let allEncoderOutput: MLXArray
-        if let prevOutput = previousEncoderOutput {
-            allEncoderOutput = concatenated([prevOutput, newEncoderOutput], axis: 1)
+        let allEncoderOutput: MLXArray = if let prevOutput = previousEncoderOutput {
+            concatenated([prevOutput, newEncoderOutput], axis: 1)
         } else {
-            allEncoderOutput = newEncoderOutput
+            newEncoderOutput
         }
 
         // Get total length
@@ -202,12 +200,12 @@ public final class ParakeetModel: Module {
 
     /// Create encoder caches for streaming
     public func createEncoderCaches() -> [ConformerCache] {
-        return encoder.createCaches()
+        encoder.createCaches()
     }
 
     /// Create rotating encoder caches for long audio streaming
     public func createRotatingEncoderCaches(capacity: Int, dropSize: Int = 0) -> [RotatingConformerCache] {
-        return encoder.createRotatingCaches(capacity: capacity, dropSize: dropSize)
+        encoder.createRotatingCaches(capacity: capacity, dropSize: dropSize)
     }
 
     /// Decode encoder features to tokens using TDT greedy search
@@ -232,7 +230,7 @@ public struct TranscriptionResult: Sendable {
 
     /// Full transcription text
     public var text: String {
-        tokens.map { $0.text }.joined().trimmingCharacters(in: .whitespaces)
+        tokens.map(\.text).joined().trimmingCharacters(in: .whitespaces)
     }
 
     /// Group tokens into sentences (by punctuation or pauses)
@@ -244,8 +242,8 @@ public struct TranscriptionResult: Sendable {
         for token in tokens {
             if let last = currentTokens.last {
                 let gap = token.start - last.end
-                if gap > 0.5 && !currentTokens.isEmpty {
-                    let text = currentTokens.map { $0.text }.joined()
+                if gap > 0.5, !currentTokens.isEmpty {
+                    let text = currentTokens.map(\.text).joined()
                     sentences.append(AlignedSentence(text: text, tokens: currentTokens))
                     currentTokens = []
                 }
@@ -254,7 +252,7 @@ public struct TranscriptionResult: Sendable {
         }
 
         if !currentTokens.isEmpty {
-            let text = currentTokens.map { $0.text }.joined()
+            let text = currentTokens.map(\.text).joined()
             sentences.append(AlignedSentence(text: text, tokens: currentTokens))
         }
 

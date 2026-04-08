@@ -53,8 +53,7 @@ public struct RNNTDecodingConfig: Codable, Sendable {
 // MARK: - FastConformer Config Parser
 
 /// Parser for FastConformer config.json files
-public struct FastConformerConfigParser {
-
+public enum FastConformerConfigParser {
     /// Parse FastConformer config from a config.json file
     /// - Parameter url: URL to the config.json file
     /// - Returns: Parsed FastConformerHybridConfig
@@ -111,16 +110,18 @@ struct FastConformerConfigWrapper: Codable {
     func toFastConformerConfig() -> FastConformerHybridConfig {
         // Log any missing sections that use defaults
         #if DEBUG
-        var defaultedSections: [String] = []
-        if preprocessor == nil { defaultedSections.append("preprocessor") }
-        if encoder == nil { defaultedSections.append("encoder") }
-        if decoder == nil { defaultedSections.append("decoder") }
-        if joint == nil { defaultedSections.append("joint") }
-        if decoding == nil { defaultedSections.append("decoding") }
+            var defaultedSections: [String] = []
+            if preprocessor == nil { defaultedSections.append("preprocessor") }
+            if encoder == nil { defaultedSections.append("encoder") }
+            if decoder == nil { defaultedSections.append("decoder") }
+            if joint == nil { defaultedSections.append("joint") }
+            if decoding == nil { defaultedSections.append("decoding") }
 
-        if !defaultedSections.isEmpty {
-            print("[FastConformerConfig] Warning: Using defaults for missing sections: \(defaultedSections.joined(separator: ", "))")
-        }
+            if !defaultedSections.isEmpty {
+                print(
+                    "[FastConformerConfig] Warning: Using defaults for missing sections: \(defaultedSections.joined(separator: ", "))"
+                )
+            }
         #endif
 
         return FastConformerHybridConfig(

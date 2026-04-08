@@ -92,8 +92,8 @@ public final class FastConformerModel: Module {
 
             // Skip BatchNorm running statistics (not trainable parameters)
             if key.contains("batch_norm.running_mean") ||
-               key.contains("batch_norm.running_var") ||
-               key.contains("batch_norm.num_batches_tracked") {
+                key.contains("batch_norm.running_var") ||
+                key.contains("batch_norm.num_batches_tracked") {
                 continue
             }
 
@@ -109,7 +109,7 @@ public final class FastConformerModel: Module {
             if newKey.contains("dec_rnn.lstm.") {
                 // Extract layer number from _lN suffix
                 if let match = newKey.range(of: "_l(\\d+)$", options: .regularExpression) {
-                    let layerStr = String(newKey[match]).dropFirst(2)  // Remove "_l"
+                    let layerStr = String(newKey[match]).dropFirst(2) // Remove "_l"
                     if let layerNum = Int(layerStr) {
                         if newKey.contains("weight_ih") {
                             // weight_ih_lN -> lstm.N.Wx
@@ -161,7 +161,7 @@ public final class FastConformerModel: Module {
                 // PyTorch Conv2d: OIHW (out_channels, in_channels, kernel_h, kernel_w)
                 // MLX-Swift Conv2d: OHWI (out_channels, kernel_h, kernel_w, in_channels)
                 // Transpose from (O, I, H, W) to (O, H, W, I) using axes (0, 2, 3, 1)
-                if newKey.contains("pre_encode.conv.") && value.ndim == 4 {
+                if newKey.contains("pre_encode.conv."), value.ndim == 4 {
                     finalValue = value.transposed(0, 2, 3, 1)
                 }
 
@@ -169,7 +169,7 @@ public final class FastConformerModel: Module {
                 // PyTorch Conv1d: OIL (out_channels, in_channels, kernel_length)
                 // MLX-Swift Conv1d: OLI (out_channels, kernel_length, in_channels)
                 // Transpose from (O, I, L) to (O, L, I) using axes (0, 2, 1)
-                if value.ndim == 3 && (newKey.contains("pointwise_conv") || newKey.contains("depthwise_conv")) {
+                if value.ndim == 3, newKey.contains("pointwise_conv") || newKey.contains("depthwise_conv") {
                     finalValue = value.transposed(0, 2, 1)
                 }
             }
@@ -223,12 +223,12 @@ public final class FastConformerModel: Module {
 
     /// Create encoder caches for streaming
     public func createEncoderCaches() -> [ConformerCache] {
-        return encoder.createCaches()
+        encoder.createCaches()
     }
 
     /// Create rotating encoder caches for long audio streaming
     public func createRotatingEncoderCaches(capacity: Int, dropSize: Int = 0) -> [RotatingConformerCache] {
-        return encoder.createRotatingCaches(capacity: capacity, dropSize: dropSize)
+        encoder.createRotatingCaches(capacity: capacity, dropSize: dropSize)
     }
 
     /// Streaming transcription with encoder cache
@@ -246,11 +246,10 @@ public final class FastConformerModel: Module {
         let melOffset = encoderOffset * subsamplingFactor
 
         // Slice mel to get only NEW frames
-        let melToEncode: MLXArray
-        if melOffset > 0 && allMel.dim(1) > melOffset {
-            melToEncode = allMel[0..., melOffset..., 0...]
+        let melToEncode: MLXArray = if melOffset > 0, allMel.dim(1) > melOffset {
+            allMel[0..., melOffset..., 0...]
         } else {
-            melToEncode = allMel
+            allMel
         }
 
         // Encode new mel frames with cache
@@ -258,11 +257,10 @@ public final class FastConformerModel: Module {
         eval(newEncoderOutput)
 
         // Combine with previous encoder outputs
-        let allEncoderOutput: MLXArray
-        if let prevOutput = previousEncoderOutput {
-            allEncoderOutput = concatenated([prevOutput, newEncoderOutput], axis: 1)
+        let allEncoderOutput: MLXArray = if let prevOutput = previousEncoderOutput {
+            concatenated([prevOutput, newEncoderOutput], axis: 1)
         } else {
-            allEncoderOutput = newEncoderOutput
+            newEncoderOutput
         }
 
         // Get total length

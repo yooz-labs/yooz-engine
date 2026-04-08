@@ -17,13 +17,13 @@ public enum WindowFunction: String, Sendable {
     public func generate(size: Int) -> MLXArray {
         switch self {
         case .hann, .hanning:
-            return hanningWindow(size: size)
+            hanningWindow(size: size)
         case .hamming:
-            return hammingWindow(size: size)
+            hammingWindow(size: size)
         case .blackman:
-            return blackmanWindow(size: size)
+            blackmanWindow(size: size)
         case .bartlett:
-            return bartlettWindow(size: size)
+            bartlettWindow(size: size)
         }
     }
 }
@@ -86,14 +86,14 @@ public func melFilterbank(
 ) -> MLXArray {
     let fMax = fMax ?? Float(sampleRate) / 2
 
-    // Hz to Mel conversion (HTK formula)
+    /// Hz to Mel conversion (HTK formula)
     func hzToMel(_ freq: Float) -> Float {
-        return 2595.0 * log10(1.0 + freq / 700.0)
+        2595.0 * log10(1.0 + freq / 700.0)
     }
 
-    // Mel to Hz conversion
+    /// Mel to Hz conversion
     func melToHz(_ mel: Float) -> Float {
-        return 700.0 * (pow(10.0, mel / 2595.0) - 1.0)
+        700.0 * (pow(10.0, mel / 2595.0) - 1.0)
     }
 
     let nFreqs = nFft / 2 + 1
@@ -124,10 +124,10 @@ public func melFilterbank(
         for k in 0..<nFreqs {
             let freq = allFreqs[k]
 
-            if freq >= fLeft && freq <= fCenter {
+            if freq >= fLeft, freq <= fCenter {
                 // Rising slope
                 filterbank[m][k] = (freq - fLeft) / (fCenter - fLeft)
-            } else if freq > fCenter && freq <= fRight {
+            } else if freq > fCenter, freq <= fRight {
                 // Falling slope
                 filterbank[m][k] = (fRight - freq) / (fRight - fCenter)
             }
@@ -162,7 +162,7 @@ public func stft(
     _ x: MLXArray,
     nFft: Int,
     hopLength: Int,
-    winLength: Int,
+    winLength _: Int,
     window: MLXArray,
     center: Bool = true
 ) -> MLXArray {
@@ -235,7 +235,7 @@ public struct AudioPreprocessor: Sendable {
         var x = audio
 
         // Optional padding
-        if config.padTo > 0 && x.dim(0) < config.padTo {
+        if config.padTo > 0, x.dim(0) < config.padTo {
             let padLength = config.padTo - x.dim(0)
             x = padded(x, widths: [.init((0, padLength))], value: MLXArray(config.padValue))
         }
@@ -291,9 +291,7 @@ public struct AudioPreprocessor: Sendable {
         }
 
         // Transpose to [time, melFeatures] and add batch dimension
-        let result = logMelSpec.T.expandedDimensions(axis: 0)
-
-        return result
+        return logMelSpec.T.expandedDimensions(axis: 0)
     }
 
     /// Convenience method to process Float array
@@ -308,7 +306,7 @@ public struct AudioPreprocessor: Sendable {
 extension MLXArray {
     /// Compute standard deviation along axis
     func std(axis: Int? = nil, keepDims: Bool = false) -> MLXArray {
-        if let axis = axis {
+        if let axis {
             let mean = self.mean(axis: axis, keepDims: true)
             let variance = ((self - mean).square()).mean(axis: axis, keepDims: keepDims)
             return MLX.sqrt(variance)
