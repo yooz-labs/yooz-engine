@@ -150,6 +150,11 @@ struct GrammarCheckServerResponse: ResponseCodable {
 
 struct VADDetectServerRequest: Decodable {
     let samples: [Float]
+
+    /// When true, resets the RNN hidden/cell state before detection.
+    /// Defaults to true. Set to false when sending consecutive chunks from
+    /// the same recording to preserve inter-frame state continuity.
+    let reset: Bool?
 }
 
 struct VADDetectServerResponse: ResponseCodable {
