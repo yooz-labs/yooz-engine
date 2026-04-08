@@ -25,3 +25,4 @@ bench/corpus/*.tsv
 bench/corpus/*.bz2
 bench/nlprule/*.bin
 bench/nlprule/*.bin.gz
+target
