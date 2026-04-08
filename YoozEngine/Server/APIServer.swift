@@ -302,22 +302,25 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            do {
-                let result = await GrammarEngine.shared.check(
-                    text: body.text,
-                    categories: body.categories
-                )
-                return try jsonResponse(GrammarCheckServerResponse(
-                    result: result.result,
-                    correctionsApplied: result.correctionsApplied
-                ))
-            } catch {
+            guard GrammarEngine.shared.isAvailable else {
                 return errorResponse(
-                    status: .internalServerError,
-                    message: error.localizedDescription,
-                    code: "grammar_check_failed"
+                    status: .serviceUnavailable,
+                    message: "Grammar rules not loaded",
+                    code: "grammar_not_available"
                 )
             }
+
+            let usePOS = body.usePOS ?? true
+            let result = await GrammarEngine.shared.check(
+                text: body.text,
+                categories: body.categories,
+                usePOS: usePOS
+            )
+            return try jsonResponse(GrammarCheckServerResponse(
+                result: result.result,
+                correctionsApplied: result.correctionsApplied,
+                ruleCount: GrammarEngine.shared.ruleCount
+            ))
         }
 
         // VAD: Detect speech segments

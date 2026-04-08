@@ -135,11 +135,14 @@ struct TouchUpServerResponse: ResponseCodable {
 struct GrammarCheckServerRequest: Decodable {
     let text: String
     let categories: [String]?
+    /// Use NLTagger POS tagging for more accurate correction. Defaults to true.
+    let usePOS: Bool?
 }
 
 struct GrammarCheckServerResponse: ResponseCodable {
     let result: String
     let correctionsApplied: Int
+    let ruleCount: Int?
 }
 
 // MARK: - VAD Types
