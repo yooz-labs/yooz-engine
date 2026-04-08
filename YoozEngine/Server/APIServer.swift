@@ -350,7 +350,11 @@ final class APIServer: ObservableObject {
             }
 
             do {
-                let segments = try await VADEngine.shared.detect(samples: body.samples)
+                let shouldReset = body.reset ?? true
+                let segments = try await VADEngine.shared.detect(
+                    samples: body.samples,
+                    resetState: shouldReset
+                )
                 let responseSegments = segments.map { seg in
                     VADSegment(startMs: seg.startMs, endMs: seg.endMs, probability: seg.probability)
                 }
