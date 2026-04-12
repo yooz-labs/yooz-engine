@@ -73,7 +73,11 @@ actor ModelDownloader {
 
         try extractArchive(archiveURL, to: modelDir)
 
-        try? fileManager.removeItem(at: archiveURL)
+        do {
+            try fileManager.removeItem(at: archiveURL)
+        } catch {
+            logger.warning("Failed to remove archive \(archiveURL.lastPathComponent): \(error.localizedDescription)")
+        }
 
         logger.info("Model \(modelType.rawValue) ready at \(modelDir.path)")
         return modelDir
@@ -209,6 +213,14 @@ actor ModelDownloader {
         fileManager.createFile(atPath: tempFile.path, contents: nil)
         let outputHandle = try FileHandle(forWritingTo: tempFile)
 
+        var success = false
+        defer {
+            if !success {
+                try? outputHandle.close()
+                try? fileManager.removeItem(at: tempFile)
+            }
+        }
+
         var bytesReceived: Int64 = 0
         var lastReportedProgress = 0
         var buffer = Data()
@@ -240,6 +252,7 @@ actor ModelDownloader {
         }
         try outputHandle.close()
 
+        success = true
         progressHandler(1.0)
         return tempFile
     }

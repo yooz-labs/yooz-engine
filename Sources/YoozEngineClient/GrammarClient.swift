@@ -15,7 +15,7 @@ public struct GrammarClient: Sendable {
         return try JSONDecoder().decode(GrammarCheckResponse.self, from: data)
     }
 
-    /// Convenience: correct text with all grammar categories and POS tagging.
+    /// Convenience: correct text with all grammar categories (server defaults to POS tagging).
     public func correct(text: String) async throws -> String {
         let request = GrammarCheckRequest(text: text)
         let response = try await check(request)

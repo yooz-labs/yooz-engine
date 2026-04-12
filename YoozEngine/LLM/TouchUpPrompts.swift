@@ -6,7 +6,7 @@
 import Foundation
 
 /// System prompts for LLM touch-up processing.
-/// These prompts must stay in sync with ai-touchup/finetune/scripts/prepare_data.py,
+/// These prompts must stay in sync with yooz-labs/ai-touchup finetune/scripts/prepare_data.py,
 /// as the fine-tuned models were trained on these exact prompts.
 enum TouchUpPrompts {
 

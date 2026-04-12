@@ -32,7 +32,7 @@ struct ProofreadOutput {
 
 private let logger = Logger(subsystem: "live.yooz.engine", category: "FoundationModelsBackend")
 
-/// Apple Foundation Models backend using the built-in 3B on-device model.
+/// Apple Foundation Models backend using the built-in on-device model.
 /// Requires macOS 26+ with Apple Intelligence enabled.
 ///
 /// Does not conform to `LLMBackend` because it lacks a fixed `modelType`
@@ -63,8 +63,7 @@ actor FoundationModelsBackend {
         if #available(macOS 26.0, *) {
             // Just verify that we can create a session (model is available)
             // We don't keep the session - we create fresh ones for each generation call
-            let testSession = LanguageModelSession()
-            _ = testSession
+            _ = LanguageModelSession()
             isLoaded = true
             logger.info("Apple Intelligence ready (single-turn mode)")
         } else {

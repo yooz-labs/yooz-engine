@@ -23,12 +23,13 @@ public struct GrammarCheckResponse: Codable, Sendable {
 
 /// Grammar tier identifiers matching engine-side tiers.
 /// Clients use these to request tier-appropriate category sets.
+/// Actual rule counts are reported by the server in GrammarCheckResponse.ruleCount.
 public enum GrammarTier: String, Codable, Sendable {
-    /// ~200 rules (basic, grammar, articles, informal)
+    /// Subset of rules (basic, grammar, articles, informal categories)
     case free
-    /// All XML + POS rules (~1,355)
+    /// All XML + POS rules (all categories)
     case pro
-    /// Pro + LLM fallback
+    /// Pro rules + LLM fallback (currently identical to pro; LLM handled at TouchUp layer)
     case premium
 }
 

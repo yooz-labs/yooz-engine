@@ -24,7 +24,7 @@ YoozEngine.app (menu bar service)
 │   ├── WebSocket: /v1/stt/stream
 │   └── Future: /v1/tts/synthesize
 ├── STT Module (Parakeet TDT, FastConformer)
-├── LLM Module (MLX: Qwen 0.5B, 1.7B)
+├── LLM Module (MLX: Qwen 0.5B, 1.7B; Apple Intelligence on macOS 26+)
 ├── TouchUp Module (full pipeline: regex + grammar + LLM)
 ├── Grammar Module (Rust text-cleanup xcframework + source)
 ├── VAD Module (Silero v6.0.0 CoreML, energy-based fallback)
@@ -104,6 +104,7 @@ Fixed port: **19920** (localhost only)
 | mlx-swift | MLX runtime for Apple Silicon |
 | mlx-swift-lm | LLM inference |
 | YoozTextCleanup.xcframework | Rust grammar rules |
+| FoundationModels | Apple Intelligence on-device LLM (macOS 26+, conditional) |
 
 ## Migration Status
 

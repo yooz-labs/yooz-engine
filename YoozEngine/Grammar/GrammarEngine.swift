@@ -15,9 +15,10 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "GrammarEng
 /// counts on init and provides tier-based correction paths.
 ///
 /// ## Tier System
-/// - **Free**: ~200 rules (basic, grammar, articles, informal categories)
-/// - **Pro**: 1,355+ rules including POS-based rules (all categories)
+/// - **Free**: Subset of rules (basic, grammar, articles, informal categories)
+/// - **Pro**: All XML + POS-based rules (all categories)
 /// - **Premium**: Pro rules + LLM fallback (handled at TouchUp layer)
+/// Actual rule counts are cached in `counts` and reported via `ruleCount`.
 ///
 /// ## Correction Paths
 /// - `check(text:categories:usePOS:)`: API-facing, category-based
@@ -32,20 +33,27 @@ actor GrammarEngine {
 
     private let tagger = NLTaggerBridge()
 
-    /// Whether grammar correction is available (FFI loaded and rules present).
-    /// Set during initialization; remains false if Rust library fails to load.
-    nonisolated private(set) var isAvailable: Bool = false
+    /// Cached rule counts from Rust FFI, set once during init.
+    private struct RuleCounts {
+        let simple: UInt32
+        let pos: UInt32
+        let total: UInt32
+        let programmatic: UInt32
+        var isAvailable: Bool { total > 0 }
+    }
 
-    /// Cached rule counts (populated on init for diagnostics and health reporting)
-    nonisolated private(set) var simpleRuleCount: UInt32 = 0
-    nonisolated private(set) var posRuleCount: UInt32 = 0
-    nonisolated private(set) var totalRuleCount: UInt32 = 0
-    nonisolated private(set) var programmaticRuleCount: UInt32 = 0
+    private nonisolated let counts: RuleCounts
+
+    /// Whether grammar correction is available (FFI loaded and rules present).
+    nonisolated var isAvailable: Bool { counts.isAvailable }
+
+    nonisolated var simpleRuleCount: UInt32 { counts.simple }
+    nonisolated var posRuleCount: UInt32 { counts.pos }
+    nonisolated var totalRuleCount: UInt32 { counts.total }
+    nonisolated var programmaticRuleCount: UInt32 { counts.programmatic }
 
     /// Number of grammar rules available (cached total).
-    nonisolated var ruleCount: Int {
-        Int(totalRuleCount)
-    }
+    nonisolated var ruleCount: Int { Int(counts.total) }
 
     /// Library version string from Rust FFI.
     nonisolated var version: String {
@@ -62,7 +70,7 @@ actor GrammarEngine {
     // MARK: - Initialization
 
     private init() {
-        loadRuleCounts()
+        counts = Self.loadRuleCounts()
 
         #if DEBUG
         if isAvailable {
@@ -71,37 +79,39 @@ actor GrammarEngine {
         #endif
     }
 
-    /// Load rule counts from the Rust FFI with error handling.
+    /// Load rule counts from the Rust FFI.
     ///
     /// IMPORTANT: UniFFI-generated functions use `try!` internally, so FFI
     /// initialization failures will crash the app. If crashes occur in
     /// production, check: corrupted binary, platform incompatibility,
     /// memory issues.
-    private nonisolated func loadRuleCounts() {
-        // Safe defaults are already set by property initializers
+    private static func loadRuleCounts() -> RuleCounts {
         logger.info("Attempting FFI initialization...")
 
         // These FFI calls use try! internally and will crash if Rust library
         // fails to load. This is a UniFFI limitation.
-        simpleRuleCount = getSimpleRuleCount(language: .english)
-        posRuleCount = getPosRuleCount(language: .english)
-        totalRuleCount = getRuleCount(language: .english)
-        programmaticRuleCount = getProgrammaticRuleCount()
+        let simple = getSimpleRuleCount(language: .english)
+        let pos = getPosRuleCount(language: .english)
+        let total = getRuleCount(language: .english)
+        let programmatic = getProgrammaticRuleCount()
 
-        if totalRuleCount > 0 {
-            isAvailable = true
+        let counts = RuleCounts(simple: simple, pos: pos, total: total, programmatic: programmatic)
+
+        if counts.isAvailable {
             logger.info(
-                "Initialized with \(self.totalRuleCount) XML rules "
-                + "(\(self.simpleRuleCount) simple + \(self.posRuleCount) POS) "
-                + "+ \(self.programmaticRuleCount) programmatic rules"
+                "Initialized with \(total) XML rules "
+                + "(\(simple) simple + \(pos) POS) "
+                + "+ \(programmatic) programmatic rules"
             )
         } else {
             logger.error(
                 "FFI succeeded but no rules loaded; grammar correction disabled. "
-                + "simple=\(self.simpleRuleCount), pos=\(self.posRuleCount), "
-                + "programmatic=\(self.programmaticRuleCount)"
+                + "simple=\(simple), pos=\(pos), "
+                + "programmatic=\(programmatic)"
             )
         }
+
+        return counts
     }
 
     // MARK: - Debug Verification
@@ -192,11 +202,11 @@ actor GrammarEngine {
     /// categories). This enum exists for internal convenience when the
     /// engine needs tier-aware defaults (e.g., TouchUp pipeline integration).
     enum Tier: String, Sendable {
-        /// ~200 rules (basic, grammar, articles, informal)
+        /// Subset of rules (basic, grammar, articles, informal)
         case free
-        /// All XML + POS rules (~1,355)
+        /// All XML + POS rules (all categories)
         case pro
-        /// Pro + LLM fallback (handled at TouchUp layer, not here)
+        /// Currently identical to pro; LLM fallback handled at TouchUp layer
         case premium
     }
 
@@ -208,7 +218,7 @@ actor GrammarEngine {
     /// - Parameters:
     ///   - text: Input text to correct.
     ///   - tier: Subscription tier controlling which rules apply.
-    ///   - usePOS: Use NLTagger POS tagging. Defaults to true for pro/premium.
+    ///   - usePOS: Use NLTagger POS tagging. Defaults to true. Ignored for free tier (always uses simple rules).
     /// - Returns: Corrected text.
     func correct(_ text: String, tier: Tier, usePOS: Bool = true) -> String {
         guard !text.isEmpty else { return text }

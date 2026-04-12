@@ -131,6 +131,7 @@ actor MLXLLMBackend: LLMBackend {
             throw LLMError.notLoaded
         }
 
+        var phase = "setup"
         do {
             let estimatedTokens = max(100, (prompt.count / 3) + 50)
 
@@ -199,6 +200,7 @@ actor MLXLLMBackend: LLMBackend {
                 inputForModel = fullInput
             }
 
+            phase = "generation"
             let (response, kvSnapshot): (String, [[MLXArray]]?) = try await container.perform { context in
                 // Create fresh KV cache and restore cached system prompt state if available
                 var cache = context.model.newCache(parameters: params)
@@ -224,7 +226,7 @@ actor MLXLLMBackend: LLMBackend {
                     }
                 }
 
-                // Trim the cache back to just the system prompt tokens and snapshot
+                // Trim the cache back to just the system prompt tokens and snapshot (cache-trim phase)
                 var snapshot: [[MLXArray]]? = nil
                 if sysCount > 0 {
                     let currentOffset = cache.first?.offset ?? 0
@@ -256,8 +258,8 @@ actor MLXLLMBackend: LLMBackend {
             cachedPromptKVState = nil
             cachedPromptTokenCount = 0
             cachedSystemPrompt = nil
-            logger.error("Generation failed: \(error.localizedDescription)")
-            throw LLMError.generationFailed(error.localizedDescription)
+            logger.error("Generation failed during \(phase): \(error.localizedDescription)")
+            throw LLMError.generationFailed("[\(phase)] \(error.localizedDescription)")
         }
         #else
         throw LLMError.notAvailable("MLX framework not linked")

@@ -131,12 +131,13 @@ actor VADEngine {
         var speechFrameCount = 0
         var silenceFrameCount = 0
         var inSpeech = false
+        var fallbackCount = 0
 
         let frameCount = samples.count / windowSize
         for frameIndex in 0..<frameCount {
             let offset = frameIndex * windowSize
             let window = Array(samples[offset..<offset + windowSize])
-            let probability = getSpeechProbability(window)
+            let probability = getSpeechProbability(window, fallbackCount: &fallbackCount)
             let rawSpeech = probability > speechThreshold
 
             if rawSpeech {
@@ -178,6 +179,9 @@ actor VADEngine {
             ))
         }
 
+        if fallbackCount > 0 {
+            logger.warning("VAD used energy-based fallback for \(fallbackCount)/\(frameCount) frames")
+        }
         logger.debug("VAD detected \(segments.count) segment(s) in \(samples.count) samples")
         return segments
     }
@@ -188,12 +192,15 @@ actor VADEngine {
     ///
     /// Uses the Silero CoreML model for inference; falls back to energy-based
     /// detection (RMS threshold) if inference fails at runtime.
-    /// Precondition: called only from detect() which guards on isLoaded,
-    /// so model, hiddenState, and cellState are guaranteed non-nil here.
-    private func getSpeechProbability(_ samples: [Float]) -> Float {
-        let model = model!
-        let h = hiddenState!
-        let c = cellState!
+    /// Called from detect() which guards on isLoaded, so model/state should be non-nil.
+    private func getSpeechProbability(_ samples: [Float], fallbackCount: inout Int) -> Float {
+        guard let model, let h = hiddenState, let c = cellState else {
+            if fallbackCount == 0 {
+                logger.error("VAD state unexpectedly nil, using energy-based fallback")
+            }
+            fallbackCount += 1
+            return getEnergyBasedProbability(samples)
+        }
 
         do {
             let inputArray = try MLMultiArray(
@@ -213,7 +220,10 @@ actor VADEngine {
             let output = try model.prediction(from: input)
 
             guard let outputArray = output.featureValue(for: "output")?.multiArrayValue else {
-                logger.warning("VAD output extraction failed, falling back to energy-based detection")
+                if fallbackCount == 0 {
+                    logger.error("VAD output extraction failed, using energy-based fallback")
+                }
+                fallbackCount += 1
                 return getEnergyBasedProbability(samples)
             }
 
@@ -227,7 +237,10 @@ actor VADEngine {
 
             return probability
         } catch {
-            logger.warning("VAD inference failed: \(error.localizedDescription), falling back to energy-based detection")
+            if fallbackCount == 0 {
+                logger.error("VAD inference failed: \(error.localizedDescription), using energy-based fallback")
+            }
+            fallbackCount += 1
             return getEnergyBasedProbability(samples)
         }
     }

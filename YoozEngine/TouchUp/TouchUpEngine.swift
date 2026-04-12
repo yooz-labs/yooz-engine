@@ -309,8 +309,16 @@ actor TouchUpEngine {
         let startTime = CFAbsoluteTimeGetCurrent()
 
         guard let backend = foundationModelsBackend, await backend.isLoaded else {
-            logger.info("Foundation Models not available, falling back to MLX")
-            return await process(text: text, mode: mode)
+            logger.warning("Foundation Models not available, falling back to MLX")
+            var result = await process(text: text, mode: mode)
+            result = TouchUpProcessor.ProcessResult(
+                text: result.text,
+                keepDecisions: result.keepDecisions,
+                modelUsed: result.modelUsed,
+                latencyMs: result.latencyMs,
+                fallbackReason: "Foundation Models not available, used MLX"
+            )
+            return result
         }
 
         let systemPrompt: String
@@ -335,9 +343,11 @@ actor TouchUpEngine {
             )
         } catch {
             logger.error("Foundation Models generation failed: \(error.localizedDescription)")
+            // Apply voice commands as minimal processing before returning
+            let processed = TouchUpProcessor.applyCommands(text)
             let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             return TouchUpProcessor.ProcessResult(
-                text: text,
+                text: processed,
                 keepDecisions: [],
                 modelUsed: .fallbackRegex,
                 latencyMs: latencyMs,

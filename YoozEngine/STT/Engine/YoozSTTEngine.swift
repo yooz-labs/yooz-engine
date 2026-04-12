@@ -32,6 +32,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
     // MARK: - Version
 
+    /// STT component version (independent of EngineConfig.version).
     public static let version = "0.6.6"
 
     // MARK: - Singleton
