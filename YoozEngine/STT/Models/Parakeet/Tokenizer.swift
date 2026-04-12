@@ -15,7 +15,7 @@ public struct Tokenizer {
     /// - Parameter token: Token ID
     /// - Returns: Decoded text with ▁ replaced by space
     public func decode(token: Int) -> String {
-        guard token >= 0 && token < vocabulary.count else {
+        guard token >= 0, token < vocabulary.count else {
             return ""
         }
         return vocabulary[token].replacingOccurrences(of: "▁", with: " ")
@@ -25,6 +25,6 @@ public struct Tokenizer {
     /// - Parameter tokens: Array of token IDs
     /// - Returns: Concatenated decoded text
     public func decode(tokens: [Int]) -> String {
-        return tokens.map { decode(token: $0) }.joined()
+        tokens.map { decode(token: $0) }.joined()
     }
 }

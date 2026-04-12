@@ -42,7 +42,7 @@ public struct RNNTDecoder {
         joint: JointNetwork
     ) -> [AlignedToken] {
         // Input validation
-        guard lengths.count > 0 else {
+        guard lengths.size > 0 else {
             #if DEBUG
             print("[RNNTDecoder] Warning: Empty lengths array, returning empty result")
             #endif

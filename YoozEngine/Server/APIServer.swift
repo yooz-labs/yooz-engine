@@ -191,6 +191,15 @@ final class APIServer: ObservableObject {
                 loaded: llmInfo.quality.isLoaded,
                 sizeBytes: llmInfo.quality.type.estimatedSize
             ))
+            let fmLoaded = await TouchUpEngine.shared.isFoundationModelsLoaded
+            if fmLoaded {
+                models.append(ModelInfo(
+                    name: "foundation-models",
+                    module: "llm",
+                    loaded: true,
+                    sizeBytes: nil
+                ))
+            }
             return ModelsResponse(models: models)
         }
 
@@ -219,14 +228,14 @@ final class APIServer: ObservableObject {
                 }
                 modelType = resolved
             } else {
-                modelType = .yoozLightV1
+                modelType = .yoozLight
             }
 
             let startTime = CFAbsoluteTimeGetCurrent()
             do {
                 let result = try await TouchUpEngine.shared.generate(
                     prompt: body.prompt,
-                    systemPrompt: "",
+                    systemPrompt: body.systemPrompt ?? "",
                     modelType: modelType
                 )
                 let timeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
@@ -302,22 +311,25 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            do {
-                let result = await GrammarEngine.shared.check(
-                    text: body.text,
-                    categories: body.categories
-                )
-                return try jsonResponse(GrammarCheckServerResponse(
-                    result: result.result,
-                    correctionsApplied: result.correctionsApplied
-                ))
-            } catch {
+            guard GrammarEngine.shared.isAvailable else {
                 return errorResponse(
-                    status: .internalServerError,
-                    message: error.localizedDescription,
-                    code: "grammar_check_failed"
+                    status: .serviceUnavailable,
+                    message: "Grammar rules not loaded",
+                    code: "grammar_not_available"
                 )
             }
+
+            let usePOS = body.usePOS ?? true
+            let result = await GrammarEngine.shared.check(
+                text: body.text,
+                categories: body.categories,
+                usePOS: usePOS
+            )
+            return try jsonResponse(GrammarCheckServerResponse(
+                result: result.result,
+                correctionsApplied: result.correctionsApplied,
+                ruleCount: GrammarEngine.shared.ruleCount
+            ))
         }
 
         // VAD: Detect speech segments
@@ -350,7 +362,11 @@ final class APIServer: ObservableObject {
             }
 
             do {
-                let segments = try await VADEngine.shared.detect(samples: body.samples)
+                let shouldReset = body.reset ?? true
+                let segments = try await VADEngine.shared.detect(
+                    samples: body.samples,
+                    resetState: shouldReset
+                )
                 let responseSegments = segments.map { seg in
                     VADSegment(startMs: seg.startMs, endMs: seg.endMs, probability: seg.probability)
                 }

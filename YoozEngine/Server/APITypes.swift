@@ -105,6 +105,7 @@ enum ServerTouchUpMode: String, Codable, Sendable {
 struct LLMGenerateServerRequest: Decodable {
     let prompt: String
     let model: String?
+    let systemPrompt: String?
 }
 
 struct LLMGenerateServerResponse: ResponseCodable {
@@ -135,17 +136,25 @@ struct TouchUpServerResponse: ResponseCodable {
 struct GrammarCheckServerRequest: Decodable {
     let text: String
     let categories: [String]?
+    /// Use NLTagger POS tagging for more accurate correction. Defaults to true.
+    let usePOS: Bool?
 }
 
 struct GrammarCheckServerResponse: ResponseCodable {
     let result: String
     let correctionsApplied: Int
+    let ruleCount: Int?
 }
 
 // MARK: - VAD Types
 
 struct VADDetectServerRequest: Decodable {
     let samples: [Float]
+
+    /// When true, resets the RNN hidden/cell state before detection.
+    /// Defaults to true. Set to false when sending consecutive chunks from
+    /// the same recording to preserve inter-frame state continuity.
+    let reset: Bool?
 }
 
 struct VADDetectServerResponse: ResponseCodable {

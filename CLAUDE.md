@@ -3,8 +3,10 @@
 ## Project Overview
 
 **Product:** Standalone macOS service providing local AI capabilities to all Yooz apps
-**Version:** 0.4.0 | **Status:** Phase 4 - Grammar + VAD
+**Version:** 0.5.0 | **Status:** Phase 5 - Thin Client Migration (ready)
 **Tech Stack:** Swift 5.9+ | SwiftUI | Hummingbird (HTTP/WebSocket) | MLX-Swift
+
+All AI modules are complete and synced. The engine is now the source of truth for STT, LLM, TouchUp, Grammar, and VAD. The Rust `text-cleanup` source lives in this repo.
 
 ## Architecture
 
@@ -13,15 +15,19 @@ Yooz Engine is a macOS menu bar app that runs a local API server. All Yooz apps 
 ```
 YoozEngine.app (menu bar service)
 ├── Local API Server (localhost:19920)
-│   ├── REST: /v1/health, /v1/models, /v1/touchup, /v1/llm/generate, /v1/grammar/check, /v1/vad/detect
+│   ├── REST: /v1/health, /v1/models
 │   ├── REST: /v1/stt/languages, /v1/stt/status, /v1/stt/load, /v1/stt/batch
+│   ├── REST: /v1/llm/generate
+│   ├── REST: /v1/touchup
+│   ├── REST: /v1/grammar/check
+│   ├── REST: /v1/vad/detect
 │   ├── WebSocket: /v1/stt/stream
 │   └── Future: /v1/tts/synthesize
 ├── STT Module (Parakeet TDT, FastConformer)
-├── LLM Module (MLX: Qwen 0.5B, 1.7B)
-├── TouchUp Module (full pipeline)
-├── Grammar Module (Rust text-cleanup)
-├── VAD Module (Silero CoreML)
+├── LLM Module (MLX: Qwen 0.5B, 1.7B; Apple Intelligence on macOS 26+)
+├── TouchUp Module (full pipeline: regex + grammar + LLM)
+├── Grammar Module (Rust text-cleanup xcframework + source)
+├── VAD Module (Silero v6.0.0 CoreML, energy-based fallback)
 └── TTS Module [future]
 
 YoozEngineClient (Swift Package)
@@ -42,14 +48,14 @@ yooz-engine/
 │   ├── STT/             # Speech-to-text (from yooz-stt-engine)
 │   ├── LLM/             # LLM inference (MLX)
 │   ├── TouchUp/         # Text cleanup pipeline
-│   ├── VAD/             # Voice activity detection
+│   ├── VAD/             # Voice activity detection (Silero v6.0.0)
 │   ├── Grammar/         # Rule-based correction (Rust bridge)
 │   ├── TTS/             # Text-to-speech [future]
 │   └── Core/            # Config, model management
 ├── Sources/YoozEngineClient/  # Swift Package (thin client SDK)
 ├── Tests/
-├── Vendor/YoozTextCleanup/    # Rust xcframework
-├── text-cleanup/              # Rust source
+├── Vendor/YoozTextCleanup/    # Rust xcframework (prebuilt)
+├── text-cleanup/              # Rust source (engine owns this)
 └── project.yml                # XcodeGen
 ```
 
@@ -73,6 +79,22 @@ curl http://localhost:19920/v1/health
 
 Fixed port: **19920** (localhost only)
 
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /v1/health | Service health; reports all module statuses |
+| GET | /v1/models | List loaded and available models |
+| GET | /v1/stt/languages | Available STT languages |
+| GET | /v1/stt/status | STT model load status |
+| POST | /v1/stt/load | Load STT model for a language |
+| POST | /v1/stt/batch | Batch transcribe audio samples |
+| WS | /v1/stt/stream | Real-time streaming STT |
+| POST | /v1/llm/generate | LLM text generation |
+| POST | /v1/touchup | Text cleanup pipeline (regex + grammar + LLM) |
+| POST | /v1/grammar/check | Rule-based grammar correction |
+| POST | /v1/vad/detect | Voice activity detection on audio samples |
+
 ## Dependencies
 
 | Package | Purpose |
@@ -82,18 +104,22 @@ Fixed port: **19920** (localhost only)
 | mlx-swift | MLX runtime for Apple Silicon |
 | mlx-swift-lm | LLM inference |
 | YoozTextCleanup.xcframework | Rust grammar rules |
+| FoundationModels | Apple Intelligence on-device LLM (macOS 26+, conditional) |
 
 ## Migration Status
 
-| Module | Source | Status |
-|--------|--------|--------|
-| Scaffold | New | [x] Done |
-| STT | yooz-stt-engine | [x] Done |
-| LLM | yooz-stt-engine/TouchUp/LLM | [x] Done |
-| TouchUp | yooz-whisper/TouchUp | [x] Done |
-| Grammar | yooz-stt-engine/text-cleanup | [x] Done |
-| VAD | yooz-whisper/Audio | [x] Done |
-| TTS | Future | Not started |
+| Phase | Module | Source | Status |
+|-------|--------|--------|--------|
+| 1 | Scaffold | New | [x] Done |
+| 2 | STT | yooz-stt-engine | [x] Done |
+| 3 | LLM | yooz-stt-engine/TouchUp/LLM | [x] Done |
+| 3 | TouchUp | yooz-whisper/TouchUp | [x] Done |
+| 4 | Grammar | yooz-stt-engine/text-cleanup | [x] Done |
+| 4 | VAD | yooz-whisper/Audio | [x] Done |
+| 4.5 | Engine sync | -- | [x] Done (v0.5.0) |
+| 5 | Thin client migration | yooz-whisper | Not started |
+| 6 | Archive yooz-stt-engine | -- | Not started |
+| 7 | TTS (Kokoro) | Future | Not started |
 
 ---
 

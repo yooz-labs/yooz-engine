@@ -32,14 +32,14 @@ struct ProofreadOutput {
 
 private let logger = Logger(subsystem: "live.yooz.engine", category: "FoundationModelsBackend")
 
-/// Apple Foundation Models backend using the built-in 3B on-device model.
+/// Apple Foundation Models backend using the built-in on-device model.
 /// Requires macOS 26+ with Apple Intelligence enabled.
 ///
 /// Does not conform to `LLMBackend` because it lacks a fixed `modelType`
 /// (Apple Intelligence is a system-provided model) and uses structured
 /// generation (`@Generable`) instead of free-form text parsing.
-/// Will be integrated into the TouchUpEngine pipeline as a third backend
-/// once macOS 26 adoption is sufficient.
+/// Integrated into the TouchUpEngine pipeline as a third backend
+/// for macOS 26+ users.
 actor FoundationModelsBackend {
 
     // MARK: - Properties
@@ -48,6 +48,12 @@ actor FoundationModelsBackend {
 
     private(set) var isLoaded = false
 
+    // Note: We create a fresh LanguageModelSession for each generation call.
+    // This is the recommended approach for single-turn interactions (like proofreading)
+    // where each request is independent and doesn't benefit from prior context.
+    // This avoids the exceededContextWindowSize error that occurs when session
+    // context accumulates across multiple calls.
+
     // MARK: - Lifecycle
 
     func load() async throws {
@@ -55,8 +61,9 @@ actor FoundationModelsBackend {
 
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            let testSession = LanguageModelSession()
-            _ = testSession
+            // Just verify that we can create a session (model is available)
+            // We don't keep the session - we create fresh ones for each generation call
+            _ = LanguageModelSession()
             isLoaded = true
             logger.info("Apple Intelligence ready (single-turn mode)")
         } else {
@@ -84,29 +91,40 @@ actor FoundationModelsBackend {
             throw LLMError.notAvailable("FoundationModels requires macOS 26+")
         }
 
+        // JSON-based approach: Format input as structured JSON
+        // This helps smaller models understand the task better
         let jsonInput = formatAsJSON(text: prompt, systemPrompt: systemPrompt)
 
+        // System instructions for JSON-based proofreading
+        // Keep it simple - the examples are in the JSON input, not the instructions
         let instructions = """
         You are a proofreader. Read the JSON input and apply the rules to correct the text.
         Output ONLY the corrected text in the correctedText field.
         The changesSummary should briefly note what was changed, or be empty if no changes.
         """
 
+        // Create a fresh session for each generation call (single-turn mode)
         let session = LanguageModelSession(instructions: instructions)
 
         do {
             logger.debug("Starting generation for: \(prompt.prefix(50))...")
 
+            // Use Guided Generation with @Generable struct to constrain output
             let response = try await session.respond(to: jsonInput, generating: ProofreadOutput.self)
 
+            // Extract the corrected text from structured response
             var result = response.content.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Log what changes were made (for debugging)
             let changes = response.content.changesSummary
             if !changes.isEmpty {
                 logger.debug("Changes: \(changes.prefix(100))...")
             }
 
+            // Sanitize output to fix character corruption
             result = sanitizeOutput(result)
 
+            // Validate output to detect instruction leakage
             if isInstructionLeakage(result, originalInput: prompt) {
                 logger.warning("Detected instruction leakage, returning original")
                 return prompt
@@ -114,14 +132,18 @@ actor FoundationModelsBackend {
 
             return result
         } catch {
+            let structuredError = error
             logger.error("Structured generation error: \(error.localizedDescription)")
 
-            // Fallback to free-form
+            // Fallback to free-form if structured generation fails
             logger.info("Falling back to free-form generation")
             do {
                 var fallbackResult = try await generateFreeForm(prompt: prompt, systemPrompt: systemPrompt)
+
+                // Sanitize output to fix character corruption
                 fallbackResult = sanitizeOutput(fallbackResult)
 
+                // Validate fallback output too
                 if isInstructionLeakage(fallbackResult, originalInput: prompt) {
                     logger.warning("Instruction leakage in fallback, returning original")
                     return prompt
@@ -130,12 +152,52 @@ actor FoundationModelsBackend {
                 return fallbackResult
             } catch {
                 logger.error("Free-form fallback also failed: \(error.localizedDescription)")
-                throw LLMError.generationFailed(error.localizedDescription)
+                throw structuredError
             }
         }
         #else
         throw LLMError.notAvailable("FoundationModels framework not available")
         #endif
+    }
+
+    // MARK: - Streaming
+
+    func streamGenerate(prompt: String, systemPrompt: String?) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                guard self.isLoaded else {
+                    continuation.finish(throwing: LLMError.notLoaded)
+                    return
+                }
+
+                #if canImport(FoundationModels)
+                if #available(macOS 26.0, *) {
+                    do {
+                        let instructions = systemPrompt ?? "Proofread this text."
+                        let session = LanguageModelSession(instructions: instructions)
+
+                        let stream = session.streamResponse(to: prompt)
+                        var previousLength = 0
+                        for try await snapshot in stream {
+                            let content = snapshot.content
+                            if content.count > previousLength {
+                                let startIndex = content.index(content.startIndex, offsetBy: previousLength)
+                                continuation.yield(String(content[startIndex...]))
+                                previousLength = content.count
+                            }
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                } else {
+                    continuation.finish(throwing: LLMError.notAvailable("FoundationModels requires macOS 26+"))
+                }
+                #else
+                continuation.finish(throwing: LLMError.notAvailable("FoundationModels framework not available"))
+                #endif
+            }
+        }
     }
 
     // MARK: - Availability
@@ -231,10 +293,12 @@ actor FoundationModelsBackend {
     }
 
     private func isInstructionLeakage(_ output: String, originalInput: String) -> Bool {
-        if output.contains("\u{2192}") {  // Arrow character
+        // Pattern 1: Contains arrow character from examples
+        if output.contains("\u{2192}") {
             return true
         }
 
+        // Pattern 2: Contains example patterns that indicate instruction echoing
         let leakagePatterns = [
             "two a.m is 2 a.m",
             "nine thirty p.m is 9:30",
@@ -257,9 +321,11 @@ actor FoundationModelsBackend {
             }
         }
 
+        // Pattern 3: Output is suspiciously longer than input
         if output.count > originalInput.count * 4 {
             let commaCount = output.filter { $0 == "," }.count
             if commaCount >= 5 {
+                logger.warning("Suspicious length ratio (\(output.count)/\(originalInput.count)) with \(commaCount) commas")
                 return true
             }
         }
@@ -267,8 +333,17 @@ actor FoundationModelsBackend {
         return false
     }
 
+    /// Sanitize output to fix common character corruption issues.
+    /// Sometimes the model outputs corrupted characters (e.g., 1/2 instead of apostrophe).
     private func sanitizeOutput(_ text: String) -> String {
         var result = text
+
+        // Fix corrupted apostrophes: fraction chars sometimes appear instead of '
+        result = result.replacingOccurrences(of: "\u{00BD}", with: "'")  // 1/2
+        result = result.replacingOccurrences(of: "\u{00BC}", with: "'")  // 1/4
+        result = result.replacingOccurrences(of: "\u{00BE}", with: "'")  // 3/4
+
+        // Normalize various quote characters to standard ASCII
         result = result.replacingOccurrences(of: "\u{2018}", with: "'")  // Left single quote
         result = result.replacingOccurrences(of: "\u{2019}", with: "'")  // Right single quote
         result = result.replacingOccurrences(of: "\u{201C}", with: "\"") // Left double quote

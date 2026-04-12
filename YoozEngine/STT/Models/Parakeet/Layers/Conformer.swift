@@ -29,7 +29,7 @@ public class Conformer: Module {
 
         // Initialize pre-encoding (subsampling)
         if config.subsamplingFactor > 1 {
-            if config.subsampling == "dw_striding" && !config.causalDownsampling {
+            if config.subsampling == "dw_striding", !config.causalDownsampling {
                 self._preEncode.wrappedValue = DwStridingSubsampling(config: config)
             } else {
                 fatalError("Only dw_striding non-causal subsampling is implemented")
@@ -49,7 +49,7 @@ public class Conformer: Module {
         _ x: MLXArray,
         lengths: MLXArray? = nil
     ) -> (MLXArray, MLXArray) {
-        return callAsFunction(x, lengths: lengths, cache: nil, localContext: nil)
+        callAsFunction(x, lengths: lengths, cache: nil, localContext: nil)
     }
 
     /// Forward pass with optional cache for streaming
@@ -84,13 +84,13 @@ public class Conformer: Module {
         // Apply positional encoding
         // Note: Use cache.offset which is computed from cached keys dimension
         var posEmb: MLXArray?
-        if let posEnc = posEnc {
+        if let posEnc {
             let offset = cache?.first?.offset ?? 0
             (out, posEmb) = posEnc(out, offset: offset)
         }
 
         // Apply conformer layers with per-layer cache and optional local attention
-        if let cache = cache {
+        if let cache {
             for (layer, c) in zip(layers, cache) {
                 out = layer(out, posEmb: posEmb, cache: c, localContext: localContext)
             }
@@ -105,12 +105,12 @@ public class Conformer: Module {
 
     /// Create caches for all layers (for streaming)
     public func createCaches() -> [ConformerCache] {
-        return (0..<layers.count).map { _ in ConformerCache() }
+        (0 ..< layers.count).map { _ in ConformerCache() }
     }
 
     /// Create rotating caches for all layers (for long audio streaming)
     public func createRotatingCaches(capacity: Int, dropSize: Int = 0) -> [RotatingConformerCache] {
-        return (0..<layers.count).map { _ in
+        (0 ..< layers.count).map { _ in
             RotatingConformerCache(capacity: capacity, dropSize: dropSize)
         }
     }

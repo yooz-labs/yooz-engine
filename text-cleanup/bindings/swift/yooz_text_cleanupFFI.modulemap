@@ -1,0 +1,4 @@
+module yooz_text_cleanupFFI {
+    header "yooz_text_cleanupFFI.h"
+    export *
+}

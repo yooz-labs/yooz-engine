@@ -6,6 +6,9 @@ import Foundation
 
 /// Model family determines which architecture and weights to use
 public enum ModelFamily: String, Codable, Sendable {
+    /// Apple's built-in SFSpeechRecognizer (on-device)
+    case apple
+
     /// Parakeet TDT - Conformer encoder with Token-and-Duration Transducer
     /// Supports English and European languages
     case parakeetTDT = "parakeet-tdt"
@@ -16,7 +19,7 @@ public enum ModelFamily: String, Codable, Sendable {
 
     /// SenseVoice or similar CJK-optimized model
     /// Supports Chinese, Japanese, Korean
-    case cjk = "cjk"
+    case cjk
 }
 
 // MARK: - STT Language
@@ -24,7 +27,6 @@ public enum ModelFamily: String, Codable, Sendable {
 /// Languages supported by the STT engine
 /// Each language maps to a specific model family and identifier
 public enum STTLanguage: String, Codable, Sendable, CaseIterable {
-
     // MARK: - Latin/European Languages (Parakeet TDT)
 
     case english = "en"
@@ -57,11 +59,11 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
     public var modelFamily: ModelFamily {
         switch self {
         case .chinese, .japanese, .korean, .cantonese:
-            return .cjk
+            .cjk
         case .arabic, .persian, .hebrew:
-            return .fastConformer
+            .fastConformer
         default:
-            return .parakeetTDT
+            .parakeetTDT
         }
     }
 
@@ -69,38 +71,38 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
     public var modelIdentifier: String {
         switch self {
         case .arabic:
-            return "fastconformer-ar"
+            "fastconformer-ar"
         case .persian:
-            return "fastconformer-fa"
+            "fastconformer-fa"
         case .hebrew:
-            return "fastconformer-he"
+            "fastconformer-he"
         case .chinese, .japanese, .korean, .cantonese:
-            return "sensevoice-cjk"
+            "sensevoice-cjk"
         default:
-            return "parakeet-tdt"
+            "parakeet-tdt"
         }
     }
 
     /// Human-readable display name
     public var displayName: String {
         switch self {
-        case .english: return "English"
-        case .spanish: return "Spanish"
-        case .french: return "French"
-        case .german: return "German"
-        case .italian: return "Italian"
-        case .portuguese: return "Portuguese"
-        case .dutch: return "Dutch"
-        case .polish: return "Polish"
-        case .russian: return "Russian"
-        case .ukrainian: return "Ukrainian"
-        case .chinese: return "Chinese (Mandarin)"
-        case .japanese: return "Japanese"
-        case .korean: return "Korean"
-        case .cantonese: return "Cantonese"
-        case .arabic: return "Arabic"
-        case .persian: return "Persian (Farsi)"
-        case .hebrew: return "Hebrew"
+        case .english: "English"
+        case .spanish: "Spanish"
+        case .french: "French"
+        case .german: "German"
+        case .italian: "Italian"
+        case .portuguese: "Portuguese"
+        case .dutch: "Dutch"
+        case .polish: "Polish"
+        case .russian: "Russian"
+        case .ukrainian: "Ukrainian"
+        case .chinese: "Chinese (Mandarin)"
+        case .japanese: "Japanese"
+        case .korean: "Korean"
+        case .cantonese: "Cantonese"
+        case .arabic: "Arabic"
+        case .persian: "Persian (Farsi)"
+        case .hebrew: "Hebrew"
         }
     }
 
@@ -113,9 +115,9 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
     public var isRTL: Bool {
         switch self {
         case .arabic, .persian, .hebrew:
-            return true
+            true
         default:
-            return false
+            false
         }
     }
 
@@ -124,9 +126,9 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
     public var isImplemented: Bool {
         switch self {
         case .arabic, .persian:
-            return true
+            true
         default:
-            return modelFamily == .parakeetTDT
+            modelFamily == .parakeetTDT
         }
     }
 
@@ -145,7 +147,7 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
 
     /// All implemented languages (ready to use)
     public static var implemented: [STTLanguage] {
-        allCases.filter { $0.isImplemented }
+        allCases.filter(\.isImplemented)
     }
 
     /// Languages grouped by model family

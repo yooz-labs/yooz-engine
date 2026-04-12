@@ -101,10 +101,10 @@ public struct PreprocessConfig: Codable, Sendable {
         self.whisperSpectralTilt = whisperSpectralTilt
     }
     
-    // Custom decoder to maintain backward compatibility
+    /// Custom decoder to maintain backward compatibility
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        
+
         sampleRate = try container.decode(Int.self, forKey: .sampleRate)
         normalize = try container.decode(String.self, forKey: .normalize)
         windowSize = try container.decode(Float.self, forKey: .windowSize)
@@ -385,7 +385,9 @@ public struct AlignedToken: Sendable, Equatable {
     public let start: Float
     public let duration: Float
 
-    public var end: Float { start + duration }
+    public var end: Float {
+        start + duration
+    }
 
     public init(id: Int, text: String, start: Float, duration: Float) {
         self.id = id
@@ -402,7 +404,9 @@ public struct AlignedSentence: Sendable, Equatable {
     public let start: Float
     public let end: Float
 
-    public var duration: Float { end - start }
+    public var duration: Float {
+        end - start
+    }
 
     public init(text: String, tokens: [AlignedToken]) {
         self.text = text

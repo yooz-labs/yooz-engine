@@ -11,9 +11,10 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpEng
 /// Main entry point for AI touch-up processing.
 ///
 /// The TouchUpEngine manages LLM models and provides smart routing
-/// for transcription cleanup. It uses two models:
-/// - **Yooz-Light** (Qwen2.5-0.5B): Fast proofreading, ~120ms latency
-/// - **Yooz-Quality** (Qwen3-1.7B): Validation + proofreading, ~300ms latency
+/// for transcription cleanup. It uses up to three backends:
+/// - **Yooz-Light** (Qwen2.5-0.5B): Fast proofreading, ~200ms latency
+/// - **Yooz-Quality** (Qwen3-1.7B): Higher quality proofreading, ~490ms latency
+/// - **Apple Intelligence** (Foundation Models 3B): macOS 26+, structured generation
 actor TouchUpEngine {
 
     // MARK: - Singleton
@@ -27,6 +28,9 @@ actor TouchUpEngine {
 
     /// The quality model backend (Yooz-Quality, Qwen3-1.7B)
     private var qualityModel: MLXLLMBackend?
+
+    /// The Apple Intelligence backend (Foundation Models, macOS 26+)
+    private var foundationModelsBackend: FoundationModelsBackend?
 
     /// Bundle identifier for model loading
     private let bundleIdentifier: String
@@ -50,6 +54,14 @@ actor TouchUpEngine {
         }
     }
 
+    /// Whether Apple Intelligence is available and loaded
+    var isFoundationModelsLoaded: Bool {
+        get async {
+            guard let backend = foundationModelsBackend else { return false }
+            return await backend.isLoaded
+        }
+    }
+
     // MARK: - Initialization
 
     init(bundleIdentifier: String = "live.yooz.engine") {
@@ -62,6 +74,7 @@ actor TouchUpEngine {
     ///
     /// This loads the light model (Yooz-Light) which is embedded in the app bundle.
     /// The quality model (Yooz-Quality) is loaded on-demand when needed.
+    /// Apple Intelligence is loaded if available (macOS 26+).
     func preload(loadQuality: Bool = false) async throws {
         logger.info("Preloading TouchUpEngine...")
 
@@ -84,6 +97,9 @@ actor TouchUpEngine {
             }
         }
 
+        // Try to load Apple Intelligence if available
+        await loadFoundationModelsIfAvailable()
+
         isPreloaded = true
         logger.info("TouchUpEngine preloaded successfully")
     }
@@ -103,6 +119,23 @@ actor TouchUpEngine {
         }
     }
 
+    /// Try to load the Foundation Models backend if available on this system.
+    private func loadFoundationModelsIfAvailable() async {
+        let backend = FoundationModelsBackend()
+        guard backend.isAvailable() else {
+            logger.info("Apple Intelligence not available on this system")
+            return
+        }
+
+        do {
+            try await backend.load()
+            foundationModelsBackend = backend
+            logger.info("Apple Intelligence backend loaded")
+        } catch {
+            logger.warning("Failed to load Apple Intelligence: \(error.localizedDescription)")
+        }
+    }
+
     /// Unload all models from memory.
     func unload() async {
         if let light = lightModel {
@@ -110,6 +143,9 @@ actor TouchUpEngine {
         }
         if let quality = qualityModel {
             await quality.unload()
+        }
+        if let fm = foundationModelsBackend {
+            await fm.unload()
         }
         isPreloaded = false
         logger.info("TouchUpEngine unloaded")
@@ -128,12 +164,12 @@ actor TouchUpEngine {
     func generate(
         prompt: String,
         systemPrompt: String,
-        modelType: LLMModelType = .yoozLightV1
+        modelType: LLMModelType = .yoozLight
     ) async throws -> String {
         let model: MLXLLMBackend
 
         switch modelType {
-        case .yoozLightV1:
+        case .yoozLight:
             if lightModel == nil {
                 lightModel = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
             }
@@ -145,7 +181,7 @@ actor TouchUpEngine {
             }
             model = light
 
-        case .yoozQualityV1:
+        case .yoozQuality:
             try await loadQualityModel()
             guard let quality = qualityModel else {
                 throw LLMError.notLoaded
@@ -154,6 +190,23 @@ actor TouchUpEngine {
         }
 
         return try await model.generate(prompt: prompt, systemPrompt: systemPrompt)
+    }
+
+    /// Generate text using Apple Intelligence (Foundation Models).
+    /// Used when the caller specifically wants the Apple backend.
+    ///
+    /// - Parameters:
+    ///   - prompt: The user prompt
+    ///   - systemPrompt: Optional system prompt
+    /// - Returns: Generated text
+    func generateWithFoundationModels(
+        prompt: String,
+        systemPrompt: String? = nil
+    ) async throws -> String {
+        guard let backend = foundationModelsBackend, await backend.isLoaded else {
+            throw LLMError.notAvailable("Apple Intelligence not available or not loaded")
+        }
+        return try await backend.generate(prompt: prompt, systemPrompt: systemPrompt)
     }
 
     // MARK: - TouchUp Processing
@@ -199,8 +252,12 @@ actor TouchUpEngine {
             qualityAvailable = false
         }
 
+
         // Select the proofread prompt based on mode and available model
-        let proofreadPrompt = selectPrompt(for: mode, qualityAvailable: qualityAvailable)
+        let proofreadPrompt = selectPrompt(
+            for: mode,
+            qualityAvailable: qualityAvailable
+        )
 
         // Route to appropriate processing
         if replacements.isEmpty || !qualityAvailable {
@@ -243,6 +300,62 @@ actor TouchUpEngine {
         }
     }
 
+    /// Process text using Apple Intelligence backend directly.
+    /// Falls back to MLX models if Foundation Models unavailable.
+    func processWithFoundationModels(
+        text: String,
+        mode: ServerTouchUpMode
+    ) async -> TouchUpProcessor.ProcessResult {
+        let startTime = CFAbsoluteTimeGetCurrent()
+
+        guard let backend = foundationModelsBackend, await backend.isLoaded else {
+            logger.warning("Foundation Models not available, falling back to MLX")
+            var result = await process(text: text, mode: mode)
+            result = TouchUpProcessor.ProcessResult(
+                text: result.text,
+                keepDecisions: result.keepDecisions,
+                modelUsed: result.modelUsed,
+                latencyMs: result.latencyMs,
+                fallbackReason: "Foundation Models not available, used MLX"
+            )
+            return result
+        }
+
+        let systemPrompt: String
+        switch mode {
+        case .off:
+            return processRegexOnly(text: text)
+        case .light, .standard:
+            systemPrompt = YoozPrompts.appleStandard
+        case .full:
+            systemPrompt = YoozPrompts.appleFull
+        }
+
+        do {
+            let result = try await backend.generate(prompt: text, systemPrompt: systemPrompt)
+            let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            return TouchUpProcessor.ProcessResult(
+                text: result,
+                keepDecisions: [],
+                modelUsed: .foundationModels,
+                latencyMs: latencyMs,
+                fallbackReason: nil
+            )
+        } catch {
+            logger.error("Foundation Models generation failed: \(error.localizedDescription)")
+            // Apply voice commands as minimal processing before returning
+            let processed = TouchUpProcessor.applyCommands(text)
+            let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            return TouchUpProcessor.ProcessResult(
+                text: processed,
+                keepDecisions: [],
+                modelUsed: .fallbackRegex,
+                latencyMs: latencyMs,
+                fallbackReason: "Foundation Models failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
     /// Process text with regex only (no LLM).
     nonisolated func processRegexOnly(
         text: String,
@@ -257,7 +370,10 @@ actor TouchUpEngine {
     // MARK: - Prompt Selection
 
     /// Select the appropriate proofread prompt based on mode and model availability.
-    private func selectPrompt(for mode: ServerTouchUpMode, qualityAvailable: Bool) -> String {
+    private func selectPrompt(
+        for mode: ServerTouchUpMode,
+        qualityAvailable: Bool
+    ) -> String {
         switch mode {
         case .off:
             // Should not reach here; off mode skips LLM entirely
@@ -300,12 +416,12 @@ actor TouchUpEngine {
 
         return (
             light: LLMModelInfo(
-                type: .yoozLightV1,
+                type: .yoozLight,
                 isLoaded: lightLoaded,
                 isCached: true  // Always embedded
             ),
             quality: LLMModelInfo(
-                type: .yoozQualityV1,
+                type: .yoozQuality,
                 isLoaded: qualityLoaded,
                 isCached: qualityCached
             )

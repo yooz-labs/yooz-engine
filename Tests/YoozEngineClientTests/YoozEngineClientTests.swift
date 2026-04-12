@@ -207,12 +207,14 @@ final class YoozEngineClientTests: XCTestCase {
     func testLLMGenerateRequestEncoding() throws {
         let request = LLMGenerateRequest(
             prompt: "hello",
-            model: "yooz-light-v1"
+            model: "yooz-light-v3",
+            systemPrompt: "Fix grammar"
         )
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
         XCTAssertEqual(decoded.prompt, "hello")
-        XCTAssertEqual(decoded.model, "yooz-light-v1")
+        XCTAssertEqual(decoded.model, "yooz-light-v3")
+        XCTAssertEqual(decoded.systemPrompt, "Fix grammar")
     }
 
     func testLLMGenerateRequestMinimal() throws {
@@ -221,13 +223,14 @@ final class YoozEngineClientTests: XCTestCase {
         let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
         XCTAssertEqual(decoded.prompt, "test")
         XCTAssertNil(decoded.model)
+        XCTAssertNil(decoded.systemPrompt)
     }
 
     func testLLMGenerateResponseDecoding() throws {
         let json = """
         {
             "text": "Hello, world!",
-            "model": "yooz-light-v1",
+            "model": "yooz-light-v3",
             "tokensGenerated": 5,
             "processingTimeMs": 120
         }
@@ -235,14 +238,14 @@ final class YoozEngineClientTests: XCTestCase {
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
         XCTAssertEqual(response.text, "Hello, world!")
-        XCTAssertEqual(response.model, "yooz-light-v1")
+        XCTAssertEqual(response.model, "yooz-light-v3")
         XCTAssertEqual(response.tokensGenerated, 5)
         XCTAssertEqual(response.processingTimeMs, 120)
     }
 
     func testLLMGenerateResponseMinimal() throws {
         let json = """
-        {"text": "result", "model": "yooz-quality-v1"}
+        {"text": "result", "model": "yooz-quality-v3"}
         """
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
@@ -318,6 +321,60 @@ final class YoozEngineClientTests: XCTestCase {
         let response = try JSONDecoder().decode(GrammarCheckResponse.self, from: data)
         XCTAssertEqual(response.result, "I am happy")
         XCTAssertEqual(response.correctionsApplied, 1)
+        XCTAssertNil(response.ruleCount)
+    }
+
+    func testGrammarCheckResponseWithRuleCount() throws {
+        let json = """
+        {"result": "I am happy", "correctionsApplied": 1, "ruleCount": 1355}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(GrammarCheckResponse.self, from: data)
+        XCTAssertEqual(response.ruleCount, 1355)
+    }
+
+    func testGrammarCheckRequestUsePOSEncoding() throws {
+        let request = GrammarCheckRequest(text: "test", categories: ["basic"], usePOS: false)
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["usePOS"] as? Bool, false)
+    }
+
+    func testGrammarCheckRequestUsePOSNilOmitted() throws {
+        let request = GrammarCheckRequest(text: "test")
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        // usePOS is nil, so it should either be absent or null
+        let usePOS = json["usePOS"]
+        XCTAssertTrue(usePOS == nil || usePOS is NSNull)
+    }
+
+    func testGrammarTierRawValues() {
+        XCTAssertEqual(GrammarTier.free.rawValue, "free")
+        XCTAssertEqual(GrammarTier.pro.rawValue, "pro")
+        XCTAssertEqual(GrammarTier.premium.rawValue, "premium")
+    }
+
+    func testGrammarFreeCategoriesContent() {
+        XCTAssertEqual(grammarFreeCategories.count, 4)
+        XCTAssertTrue(grammarFreeCategories.contains("basic"))
+        XCTAssertTrue(grammarFreeCategories.contains("grammar"))
+        XCTAssertTrue(grammarFreeCategories.contains("articles"))
+        XCTAssertTrue(grammarFreeCategories.contains("informal"))
+    }
+
+    func testGrammarAllCategoriesContent() {
+        XCTAssertEqual(grammarAllCategories.count, 9)
+        // All free categories should be in the full set
+        for cat in grammarFreeCategories {
+            XCTAssertTrue(grammarAllCategories.contains(cat), "Missing free category: \(cat)")
+        }
+        // Pro-only categories
+        XCTAssertTrue(grammarAllCategories.contains("verbs"))
+        XCTAssertTrue(grammarAllCategories.contains("numbers"))
+        XCTAssertTrue(grammarAllCategories.contains("punctuation"))
+        XCTAssertTrue(grammarAllCategories.contains("style"))
+        XCTAssertTrue(grammarAllCategories.contains("advanced"))
     }
 
     // MARK: - VAD Types
@@ -332,6 +389,21 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(response.segments[0].startMs, 100)
         XCTAssertEqual(response.segments[0].endMs, 2500)
         XCTAssertEqual(response.segments[0].probability, 0.95, accuracy: 0.01)
+    }
+
+    func testVADRequestResetEncoding() throws {
+        let request = VADRequest(samples: [0.1, 0.2], reset: false)
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["reset"] as? Bool, false)
+    }
+
+    func testVADRequestResetNilOmitted() throws {
+        let request = VADRequest(samples: [0.1], reset: nil)
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let reset = json["reset"]
+        XCTAssertTrue(reset == nil || reset is NSNull)
     }
 
     func testVADResponseEmptySegments() throws {

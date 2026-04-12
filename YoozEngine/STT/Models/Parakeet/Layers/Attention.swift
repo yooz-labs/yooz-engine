@@ -172,7 +172,7 @@ public class RelPositionMultiHeadAttention: Module {
         let p = pProj.reshaped([batch, posLen, nHead, headDim]).transposed(0, 2, 1, 3)
 
         // Update cache if present
-        if let cache = cache {
+        if let cache {
             (kProj, vProj) = cache.update(keys: kProj, values: vProj)
         }
 
@@ -183,7 +183,7 @@ public class RelPositionMultiHeadAttention: Module {
 
         // Apply mask if provided
         var effectiveMask = matrixBD
-        if let mask = mask {
+        if let mask {
             let expandedMask = mask.expandedDimensions(axis: 0)
             effectiveMask = which(expandedMask, -Float.infinity, effectiveMask)
         }

@@ -4,8 +4,7 @@ import Foundation
 
 /// Parser for NeMo-style config.json files
 /// Handles the nested structure used by Parakeet models
-public struct NeMoConfigParser {
-
+public enum NeMoConfigParser {
     /// Parse NeMo config.json into ParakeetTDTConfig
     public static func parse(from url: URL) throws -> ParakeetTDTConfig {
         let data = try Data(contentsOf: url)
@@ -38,7 +37,7 @@ public struct NeMoConfigParser {
     }
 
     private static func parsePreprocessor(_ dict: [String: Any]?) -> PreprocessConfig {
-        guard let dict = dict else { return PreprocessConfig() }
+        guard let dict else { return PreprocessConfig() }
 
         return PreprocessConfig(
             sampleRate: dict["sample_rate"] as? Int ?? 16000,
@@ -56,7 +55,7 @@ public struct NeMoConfigParser {
     }
 
     private static func parseEncoder(_ dict: [String: Any]?) -> ConformerConfig {
-        guard let dict = dict else { return ConformerConfig() }
+        guard let dict else { return ConformerConfig() }
 
         return ConformerConfig(
             featIn: dict["feat_in"] as? Int ?? 80,
@@ -100,7 +99,7 @@ public struct NeMoConfigParser {
     }
 
     private static func parseJoint(_ dict: [String: Any]?, vocabulary: [String]) -> JointConfig {
-        guard let dict = dict else {
+        guard let dict else {
             return JointConfig(vocabulary: vocabulary)
         }
 

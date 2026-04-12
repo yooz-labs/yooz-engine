@@ -138,7 +138,7 @@ final class StreamingTranscriber {
     /// Finalize transcription
     func finalize() -> ParakeetResult {
         let tokens = processAllAudio()
-        let text = tokens.map { $0.text }.joined()
+        let text = tokens.map(\.text).joined()
             .trimmingCharacters(in: .whitespaces)
 
         return ParakeetResult(
@@ -151,7 +151,7 @@ final class StreamingTranscriber {
     /// Finalize transcription with full token information including timestamps
     /// - Returns: TranscriptionResult with aligned tokens containing start/duration
     func finalizeWithTimestamps() -> TranscriptionResult {
-        return TranscriptionResult(tokens: processAllAudio())
+        TranscriptionResult(tokens: processAllAudio())
     }
 
     /// Reset all state
@@ -164,18 +164,17 @@ final class StreamingTranscriber {
     // MARK: - Private Methods
 
     private func currentResult() -> ParakeetResult {
-        let finalizedText = finalizedTokens.map { $0.text }.joined()
+        let finalizedText = finalizedTokens.map(\.text).joined()
             .trimmingCharacters(in: .whitespaces)
-        let draftText = draftTokens.map { $0.text }.joined()
+        let draftText = draftTokens.map(\.text).joined()
             .trimmingCharacters(in: .whitespaces)
 
-        let fullText: String
-        if finalizedText.isEmpty {
-            fullText = draftText
+        let fullText: String = if finalizedText.isEmpty {
+            draftText
         } else if draftText.isEmpty {
-            fullText = finalizedText
+            finalizedText
         } else {
-            fullText = finalizedText + " " + draftText
+            finalizedText + " " + draftText
         }
 
         return ParakeetResult(
