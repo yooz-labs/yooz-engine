@@ -54,6 +54,19 @@ targets:
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
+  VADModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/VAD
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.vad
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+    dependencies:
+      - target: EngineCore
+
   YoozEngine:
     type: application
     platform: macOS
@@ -61,6 +74,7 @@ targets:
       - path: YoozEngine
         excludes:
           - Grammar/**
+          - VAD/**
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine
@@ -75,6 +89,7 @@ targets:
     dependencies:
       - target: EngineCore
       - target: GrammarModule
+      - target: VADModule
       - package: hummingbird
         product: Hummingbird
       - package: hummingbird-websocket
@@ -124,4 +139,16 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: GrammarModule
+      - target: EngineCore
+
+  VADModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/VADModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: VADModule
       - target: EngineCore

@@ -5,6 +5,7 @@ import Hummingbird
 import HummingbirdWebSocket
 import Logging
 import NIOCore
+import VADModule
 
 @MainActor
 final class APIServer: ObservableObject {

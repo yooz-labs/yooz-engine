@@ -2,6 +2,9 @@ import AppKit
 import EngineCore
 import GrammarModule
 import SwiftUI
+#if canImport(VADModule)
+import VADModule
+#endif
 
 @MainActor
 final class EngineAppDelegate: NSObject, NSApplicationDelegate {
@@ -32,6 +35,9 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
     private func registerModules() async {
         #if canImport(GrammarModule)
         await ModuleRegistry.shared.register(GrammarEngine.shared)
+        #endif
+        #if canImport(VADModule)
+        await ModuleRegistry.shared.register(VADEngine.shared)
         #endif
     }
 
