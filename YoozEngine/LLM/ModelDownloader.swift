@@ -1,8 +1,9 @@
 // ModelDownloader.swift
-// YoozEngine
+// LLMModule
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 import os.log
 

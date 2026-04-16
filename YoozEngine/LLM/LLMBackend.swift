@@ -1,5 +1,5 @@
 // LLMBackend.swift
-// YoozEngine
+// LLMModule
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
@@ -7,12 +7,16 @@ import Foundation
 
 // MARK: - Model Types
 
-/// Yooz LLM model types for touch-up processing
-enum LLMModelType: String, CaseIterable, Sendable {
+/// Yooz LLM model types for touch-up processing.
+///
+/// Identifiers are stable wire values; `/v1/llm/generate` accepts the raw
+/// value as the `model` field. Order of cases matches the public model
+/// lineup (light first, quality second).
+public enum LLMModelType: String, CaseIterable, Sendable {
     case yoozLight = "yooz-light-v3"      // Fast, fine-tuned (Qwen2.5-0.5B-4bit, 276MB)
     case yoozQuality = "yooz-quality-v3"  // High quality, fine-tuned (Qwen3-1.7B-4bit, 1037MB)
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .yoozLight:
             return "Yooz-Light"
@@ -21,7 +25,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
         }
     }
 
-    var description: String {
+    public var description: String {
         switch self {
         case .yoozLight:
             return "Fast proofreading (~200ms)"
@@ -30,7 +34,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
         }
     }
 
-    var estimatedSize: Int64 {
+    public var estimatedSize: Int64 {
         switch self {
         case .yoozLight:
             return 276 * 1024 * 1024   // ~276 MB
@@ -39,7 +43,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
         }
     }
 
-    var isEmbedded: Bool {
+    public var isEmbedded: Bool {
         switch self {
         case .yoozLight:
             return true   // Bundled with app
@@ -48,7 +52,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
         }
     }
 
-    var baseModelId: String {
+    public var baseModelId: String {
         switch self {
         case .yoozLight:
             return "qwen2.5-0.5b-instruct-4bit"
@@ -58,14 +62,14 @@ enum LLMModelType: String, CaseIterable, Sendable {
     }
 
     /// GHCR package name for downloading
-    var packageName: String {
+    public var packageName: String {
         "yooz-models"
     }
 }
 
 // MARK: - Errors
 
-enum LLMError: Error, LocalizedError, Sendable {
+public enum LLMError: Error, LocalizedError, Sendable {
     case notLoaded
     case loadFailed(String)
     case generationFailed(String)
@@ -73,7 +77,7 @@ enum LLMError: Error, LocalizedError, Sendable {
     case downloadFailed(String)
     case parsingFailed(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .notLoaded:
             return "Model not loaded"
@@ -93,7 +97,10 @@ enum LLMError: Error, LocalizedError, Sendable {
 
 // MARK: - Protocol
 
-/// Protocol for LLM backends used in touch-up processing
+/// Protocol for LLM backends used in touch-up processing.
+///
+/// Kept `internal` on purpose; `TouchUpEngine` is the only out-of-module
+/// caller and it exposes its own domain API, not the backend abstraction.
 protocol LLMBackend: Actor {
     var identifier: String { get }
     var modelType: LLMModelType { get }

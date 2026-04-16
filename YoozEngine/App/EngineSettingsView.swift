@@ -1,3 +1,4 @@
+import EngineCore
 import SwiftUI
 
 struct EngineSettingsView: View {

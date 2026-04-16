@@ -1,4 +1,7 @@
 import Hummingbird
+#if canImport(LLMModule)
+import LLMModule
+#endif
 
 struct HealthResponse: ResponseCodable {
     let status: String
@@ -100,6 +103,20 @@ enum ServerTouchUpMode: String, Codable, Sendable {
     case light
     case standard
     case full
+
+    #if canImport(LLMModule)
+    /// Map the wire enum to the LLMModule domain enum. The two enums are
+    /// intentionally distinct so the module stays free of server DTOs;
+    /// mapping lives here, at the wire boundary.
+    var asDomain: TouchUpMode {
+        switch self {
+        case .off: return .off
+        case .light: return .light
+        case .standard: return .standard
+        case .full: return .full
+        }
+    }
+    #endif
 }
 
 struct LLMGenerateServerRequest: Decodable {

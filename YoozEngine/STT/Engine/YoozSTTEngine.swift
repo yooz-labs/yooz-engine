@@ -1,5 +1,6 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 import MLX
 

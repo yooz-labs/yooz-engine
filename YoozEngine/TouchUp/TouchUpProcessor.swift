@@ -1,5 +1,5 @@
 // TouchUpProcessor.swift
-// YoozEngine
+// LLMModule
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
@@ -18,11 +18,11 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpPro
 /// ```
 /// Whisper -> Fuzzy Dict -> Regex Voice Cmds -> Router -> Model(s) -> Output
 /// ```
-enum TouchUpProcessor {
+public enum TouchUpProcessor {
     // MARK: - Types
 
     /// Which model was used for processing.
-    enum ModelUsed: String, Sendable {
+    public enum ModelUsed: String, Sendable {
         case light = "yooz-light-v3"
         case quality = "yooz-quality-v3"
         case foundationModels = "foundation-models"
@@ -31,23 +31,37 @@ enum TouchUpProcessor {
     }
 
     /// A proposed fuzzy/dictionary replacement to validate.
-    struct Replacement: Sendable {
-        let original: String
-        let replacement: String
+    public struct Replacement: Sendable {
+        public let original: String
+        public let replacement: String
 
-        init(original: String, replacement: String) {
+        public init(original: String, replacement: String) {
             self.original = original
             self.replacement = replacement
         }
     }
 
     /// Result of smart processing.
-    struct ProcessResult: Sendable {
-        let text: String
-        let keepDecisions: [Bool]
-        let modelUsed: ModelUsed
-        let latencyMs: Double
-        let fallbackReason: String?
+    public struct ProcessResult: Sendable {
+        public let text: String
+        public let keepDecisions: [Bool]
+        public let modelUsed: ModelUsed
+        public let latencyMs: Double
+        public let fallbackReason: String?
+
+        public init(
+            text: String,
+            keepDecisions: [Bool],
+            modelUsed: ModelUsed,
+            latencyMs: Double,
+            fallbackReason: String?
+        ) {
+            self.text = text
+            self.keepDecisions = keepDecisions
+            self.modelUsed = modelUsed
+            self.latencyMs = latencyMs
+            self.fallbackReason = fallbackReason
+        }
     }
 
     // MARK: - Voice Commands (Regex-based)

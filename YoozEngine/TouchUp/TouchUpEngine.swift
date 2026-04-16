@@ -1,5 +1,5 @@
 // TouchUpEngine.swift
-// YoozEngine
+// LLMModule
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
@@ -15,11 +15,11 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpEng
 /// - **Yooz-Light** (Qwen2.5-0.5B): Fast proofreading, ~200ms latency
 /// - **Yooz-Quality** (Qwen3-1.7B): Higher quality proofreading, ~490ms latency
 /// - **Apple Intelligence** (Foundation Models 3B): macOS 26+, structured generation
-actor TouchUpEngine {
+public actor TouchUpEngine {
 
     // MARK: - Singleton
 
-    static let shared = TouchUpEngine()
+    public static let shared = TouchUpEngine()
 
     // MARK: - Properties
 
@@ -36,10 +36,10 @@ actor TouchUpEngine {
     private let bundleIdentifier: String
 
     /// Whether the engine has been preloaded
-    private(set) var isPreloaded: Bool = false
+    public private(set) var isPreloaded: Bool = false
 
     /// Whether the light model is loaded
-    var isLightModelLoaded: Bool {
+    public var isLightModelLoaded: Bool {
         get async {
             guard let model = lightModel else { return false }
             return await model.isLoaded
@@ -47,7 +47,7 @@ actor TouchUpEngine {
     }
 
     /// Whether the quality model is loaded
-    var isQualityModelLoaded: Bool {
+    public var isQualityModelLoaded: Bool {
         get async {
             guard let model = qualityModel else { return false }
             return await model.isLoaded
@@ -55,7 +55,7 @@ actor TouchUpEngine {
     }
 
     /// Whether Apple Intelligence is available and loaded
-    var isFoundationModelsLoaded: Bool {
+    public var isFoundationModelsLoaded: Bool {
         get async {
             guard let backend = foundationModelsBackend else { return false }
             return await backend.isLoaded
@@ -64,7 +64,10 @@ actor TouchUpEngine {
 
     // MARK: - Initialization
 
-    init(bundleIdentifier: String = "live.yooz.engine") {
+    /// Private to preserve the `.shared` singleton contract used across the
+    /// engine. Tests that need to inspect a fresh instance should do so via
+    /// the shared actor.
+    private init(bundleIdentifier: String = "live.yooz.engine") {
         self.bundleIdentifier = bundleIdentifier
     }
 
@@ -75,7 +78,7 @@ actor TouchUpEngine {
     /// This loads the light model (Yooz-Light) which is embedded in the app bundle.
     /// The quality model (Yooz-Quality) is loaded on-demand when needed.
     /// Apple Intelligence is loaded if available (macOS 26+).
-    func preload(loadQuality: Bool = false) async throws {
+    public func preload(loadQuality: Bool = false) async throws {
         logger.info("Preloading TouchUpEngine...")
 
         if lightModel == nil {
@@ -106,7 +109,7 @@ actor TouchUpEngine {
 
     /// Ensure the quality model is loaded.
     /// Downloads from GHCR if not cached.
-    func loadQualityModel() async throws {
+    public func loadQualityModel() async throws {
         if qualityModel == nil {
             qualityModel = MLXLLMBackend.createQuality(bundleIdentifier: bundleIdentifier)
         }
@@ -137,7 +140,7 @@ actor TouchUpEngine {
     }
 
     /// Unload all models from memory.
-    func unload() async {
+    public func unload() async {
         if let light = lightModel {
             await light.unload()
         }
@@ -161,7 +164,7 @@ actor TouchUpEngine {
     ///   - systemPrompt: System prompt for the model
     ///   - modelType: Which model to use (defaults to light)
     /// - Returns: Generated text
-    func generate(
+    public func generate(
         prompt: String,
         systemPrompt: String,
         modelType: LLMModelType = .yoozLight
@@ -199,7 +202,7 @@ actor TouchUpEngine {
     ///   - prompt: The user prompt
     ///   - systemPrompt: Optional system prompt
     /// - Returns: Generated text
-    func generateWithFoundationModels(
+    public func generateWithFoundationModels(
         prompt: String,
         systemPrompt: String? = nil
     ) async throws -> String {
@@ -218,9 +221,9 @@ actor TouchUpEngine {
     ///   - mode: Processing mode controlling prompt and model selection
     ///   - replacements: List of (original, replacement) tuples to validate
     /// - Returns: ProcessResult with cleaned text and metadata
-    func process(
+    public func process(
         text: String,
-        mode: ServerTouchUpMode,
+        mode: TouchUpMode,
         replacements: [(original: String, replacement: String)] = []
     ) async -> TouchUpProcessor.ProcessResult {
         let replacementStructs = replacements.map {
@@ -302,9 +305,9 @@ actor TouchUpEngine {
 
     /// Process text using Apple Intelligence backend directly.
     /// Falls back to MLX models if Foundation Models unavailable.
-    func processWithFoundationModels(
+    public func processWithFoundationModels(
         text: String,
-        mode: ServerTouchUpMode
+        mode: TouchUpMode
     ) async -> TouchUpProcessor.ProcessResult {
         let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -357,7 +360,7 @@ actor TouchUpEngine {
     }
 
     /// Process text with regex only (no LLM).
-    nonisolated func processRegexOnly(
+    public nonisolated func processRegexOnly(
         text: String,
         replacements: [(original: String, replacement: String)] = []
     ) -> TouchUpProcessor.ProcessResult {
@@ -371,7 +374,7 @@ actor TouchUpEngine {
 
     /// Select the appropriate proofread prompt based on mode and model availability.
     private func selectPrompt(
-        for mode: ServerTouchUpMode,
+        for mode: TouchUpMode,
         qualityAvailable: Bool
     ) -> String {
         switch mode {
@@ -398,7 +401,7 @@ actor TouchUpEngine {
     // MARK: - Model Info
 
     /// Check if the quality model is cached locally
-    var isQualityModelCached: Bool {
+    public var isQualityModelCached: Bool {
         get async {
             guard let quality = qualityModel else {
                 let temp = MLXLLMBackend.createQuality(bundleIdentifier: bundleIdentifier)
@@ -409,7 +412,7 @@ actor TouchUpEngine {
     }
 
     /// Get model info for display
-    func getModelInfo() async -> (light: LLMModelInfo, quality: LLMModelInfo) {
+    public func getModelInfo() async -> (light: LLMModelInfo, quality: LLMModelInfo) {
         let lightLoaded = await isLightModelLoaded
         let qualityLoaded = await isQualityModelLoaded
         let qualityCached = await isQualityModelCached
@@ -432,12 +435,12 @@ actor TouchUpEngine {
 // MARK: - LLM Model Info
 
 /// Information about a model's status (renamed from ModelInfo to avoid collision with APITypes.ModelInfo)
-struct LLMModelInfo: Sendable {
-    let type: LLMModelType
-    let isLoaded: Bool
-    let isCached: Bool
+public struct LLMModelInfo: Sendable {
+    public let type: LLMModelType
+    public let isLoaded: Bool
+    public let isCached: Bool
 
-    init(type: LLMModelType, isLoaded: Bool, isCached: Bool) {
+    public init(type: LLMModelType, isLoaded: Bool, isCached: Bool) {
         self.type = type
         self.isLoaded = isLoaded
         self.isCached = isCached

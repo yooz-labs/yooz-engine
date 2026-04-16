@@ -3,6 +3,9 @@ import Foundation
 import GrammarModule
 import Hummingbird
 import HummingbirdWebSocket
+#if canImport(LLMModule)
+import LLMModule
+#endif
 import Logging
 import NIOCore
 import VADModule
@@ -284,7 +287,7 @@ final class APIServer: ObservableObject {
 
             let result = await TouchUpEngine.shared.process(
                 text: body.text,
-                mode: body.mode
+                mode: body.mode.asDomain
             )
 
             var warnings: [String]? = nil
