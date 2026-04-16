@@ -1,4 +1,6 @@
 import AppKit
+import EngineCore
+import GrammarModule
 import SwiftUI
 
 @MainActor
@@ -7,6 +9,8 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task {
+            await registerModules()
+
             do {
                 try await server.start()
             } catch {
@@ -18,6 +22,17 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
                 alert.runModal()
             }
         }
+    }
+
+    /// Register every module compiled into this build variant.
+    ///
+    /// `#if canImport(...)` lets unlisted modules compile out silently for
+    /// slim variants (e.g. Notes may exclude STT). Today all modules ship
+    /// in every variant, but the scaffolding is in place for the split.
+    private func registerModules() async {
+        #if canImport(GrammarModule)
+        await ModuleRegistry.shared.register(GrammarEngine.shared)
+        #endif
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

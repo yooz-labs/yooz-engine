@@ -28,11 +28,39 @@ packages:
     from: "2.30.3"
 
 targets:
+  EngineCore:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/EngineCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.core
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+
+  GrammarModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/Grammar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.grammar
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+    dependencies:
+      - target: EngineCore
+      - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+        embed: false
+
   YoozEngine:
     type: application
     platform: macOS
     sources:
-      - YoozEngine
+      - path: YoozEngine
+        excludes:
+          - Grammar/**
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine
@@ -45,6 +73,8 @@ targets:
         ENABLE_HARDENED_RUNTIME: true
         LSUIElement: true
     dependencies:
+      - target: EngineCore
+      - target: GrammarModule
       - package: hummingbird
         product: Hummingbird
       - package: hummingbird-websocket
@@ -67,5 +97,31 @@ targets:
     platform: macOS
     sources:
       - Tests/YoozEngineTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: YoozEngine
+
+  EngineCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/EngineCoreTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: EngineCore
+
+  GrammarModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/GrammarModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: GrammarModule
+      - target: EngineCore
