@@ -8,6 +8,9 @@ import LLMModule
 #endif
 import Logging
 import NIOCore
+#if canImport(STTModule)
+import STTModule
+#endif
 import VADModule
 
 @MainActor

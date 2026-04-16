@@ -1,4 +1,7 @@
 import EngineCore
+#if canImport(STTModule)
+import STTModule
+#endif
 import SwiftUI
 
 struct EngineMenuView: View {

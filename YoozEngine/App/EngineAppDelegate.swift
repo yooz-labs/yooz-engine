@@ -5,6 +5,9 @@ import SwiftUI
 #if canImport(LLMModule)
 import LLMModule
 #endif
+#if canImport(STTModule)
+import STTModule
+#endif
 #if canImport(VADModule)
 import VADModule
 #endif
@@ -41,6 +44,9 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
         #endif
         #if canImport(LLMModule)
         await ModuleRegistry.shared.register(TouchUpEngine.shared)
+        #endif
+        #if canImport(STTModule)
+        await ModuleRegistry.shared.register(YoozSTTEngine.shared)
         #endif
         #if canImport(VADModule)
         await ModuleRegistry.shared.register(VADEngine.shared)

@@ -89,6 +89,25 @@ targets:
       - package: mlx-swift-lm
         product: MLXLMCommon
 
+  STTModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/STT
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.stt
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+    dependencies:
+      - target: EngineCore
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift
+        product: MLXNN
+      - package: mlx-swift
+        product: MLXRandom
+
   YoozEngine:
     type: application
     platform: macOS
@@ -97,6 +116,7 @@ targets:
         excludes:
           - Grammar/**
           - LLM/**
+          - STT/**
           - TouchUp/**
           - VAD/**
     settings:
@@ -114,17 +134,12 @@ targets:
       - target: EngineCore
       - target: GrammarModule
       - target: LLMModule
+      - target: STTModule
       - target: VADModule
       - package: hummingbird
         product: Hummingbird
       - package: hummingbird-websocket
         product: HummingbirdWebSocket
-      - package: mlx-swift
-        product: MLX
-      - package: mlx-swift
-        product: MLXNN
-      - package: mlx-swift
-        product: MLXRandom
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
@@ -172,6 +187,18 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: LLMModule
+      - target: EngineCore
+
+  STTModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/STTModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: STTModule
       - target: EngineCore
 
   VADModuleTests:

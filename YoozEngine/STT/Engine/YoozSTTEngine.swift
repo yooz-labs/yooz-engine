@@ -1,5 +1,6 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import Combine
 import EngineCore
 import Foundation
 import MLX
@@ -30,11 +31,6 @@ public struct ParakeetResult: Equatable, Sendable {
 /// Supports Parakeet TDT (English/European), FastConformer (Arabic/Persian/Hebrew), and CJK models
 /// Drop-in replacement for ParakeetMLXManager (Python bridge)
 public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
-
-    // MARK: - Version
-
-    /// STT component version (independent of EngineConfig.version).
-    public static let version = "0.6.6"
 
     // MARK: - Singleton
 
@@ -406,7 +402,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     ///
     /// Used by the API server to create per-WebSocket streaming sessions
     /// without interfering with the singleton streaming state.
-    func createBatchTranscriber(mode: AudioMode = .normal) -> StreamingTranscriber? {
+    public func createBatchTranscriber(mode: AudioMode = .normal) -> StreamingTranscriber? {
         lock.lock()
         defer { lock.unlock() }
 
