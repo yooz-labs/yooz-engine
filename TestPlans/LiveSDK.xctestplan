@@ -1,0 +1,38 @@
+{
+  "configurations" : [
+    {
+      "id" : "A8E2E2E2-0002-4E4E-9999-0E2E2E2E2E02",
+      "name" : "LiveSDK",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "YOOZ_ENGINE_LIVE_TESTS",
+            "value" : "1"
+          },
+          {
+            "key" : "YOOZ_TEST_ENGINE_URL",
+            "value" : "http://127.0.0.1:19920"
+          }
+        ]
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "environmentVariableEntries" : [
+      {
+        "key" : "YOOZ_ENGINE_LIVE_TESTS",
+        "value" : "1"
+      }
+    ]
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "YoozEngineClientTests",
+        "name" : "YoozEngineClientTests"
+      }
+    }
+  ],
+  "version" : 1
+}

@@ -1,0 +1,42 @@
+{
+  "configurations" : [
+    {
+      "id" : "A8E2E2E2-0001-4E4E-9999-0E2E2E2E2E01",
+      "name" : "Integration",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "YOOZ_INTEGRATION",
+            "value" : "1"
+          },
+          {
+            "key" : "YOOZ_ENGINE_APP_PATH",
+            "value" : "/Users/yahya/Documents/git/yooz/engine-epic-v0.6.0/.build/DerivedData/Build/Products/Debug/Yooz Engine.app"
+          }
+        ]
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "environmentVariableEntries" : [
+      {
+        "key" : "YOOZ_INTEGRATION",
+        "value" : "1"
+      },
+      {
+        "key" : "YOOZ_ENGINE_APP_PATH",
+        "value" : "/Users/yahya/Documents/git/yooz/engine-epic-v0.6.0/.build/DerivedData/Build/Products/Debug/Yooz Engine.app"
+      }
+    ]
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:YoozEngine.xcodeproj",
+        "identifier" : "IntegrationTests",
+        "name" : "IntegrationTests"
+      }
+    }
+  ],
+  "version" : 1
+}

@@ -369,3 +369,33 @@ targets:
     dependencies:
       - package: YoozEngineClient
         product: YoozEngineClient
+
+# Explicit schemes so XcodeGen emits `.xcscheme` files with test plans wired
+# in. Without this block xcodegen auto-generates schemes per target but drops
+# no `TestPlans` reference, and `xcodebuild -testPlan` fails with
+# "The test plan ... was not found". Plans live in `TestPlans/` at repo root
+# so they are not wiped by `xcodegen generate` (which recreates the .xcodeproj
+# directory, including xcshareddata/xcschemes).
+schemes:
+  YoozEngine:
+    build:
+      targets:
+        YoozEngine: all
+    test:
+      config: Debug
+      targets:
+        - YoozEngineTests
+    run:
+      config: Debug
+  IntegrationTests:
+    build:
+      targets:
+        YoozEngine: [run, test]
+        IntegrationTests: [test]
+    test:
+      config: Debug
+      testPlans:
+        - path: TestPlans/IntegrationTests.xctestplan
+          defaultPlan: true
+      targets:
+        - IntegrationTests

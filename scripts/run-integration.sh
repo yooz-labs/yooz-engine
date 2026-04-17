@@ -6,10 +6,11 @@
 #   1. Regenerate the Xcode project (needed after project.yml edits).
 #   2. Build the `YoozEngine` scheme; locate the resulting `Yooz Engine.app`
 #      inside DerivedData.
-#   3. Invoke `xcodebuild test` with `YOOZ_INTEGRATION=1` and
-#      `YOOZ_ENGINE_APP_PATH` pointing at the freshly-built bundle. The
-#      harness itself launches the subprocess — this script does NOT start
-#      the engine ahead of time.
+#   3. Invoke `xcodebuild test -testPlan IntegrationTests`. The plan sets
+#      `YOOZ_INTEGRATION=1` unconditionally and expands
+#      `YOOZ_ENGINE_APP_PATH` / `YOOZ_TEST_ENGINE_URL` from build settings
+#      passed on the command line. The harness itself launches the
+#      subprocess — this script does NOT start the engine ahead of time.
 #   4. Print per-endpoint timings (grep `[timing] ...` lines emitted by
 #      IntegrationTestCase) and an overall pass/fail summary.
 #
@@ -19,6 +20,11 @@
 #       scripts/run-integration.sh              # reuse an already-running engine
 #
 # Requirements: xcodegen, xcodebuild (Xcode command-line tools).
+#
+# History: Xcode's `-testEnvironment` flag is unsupported on recent
+# toolchains, so `YOOZ_INTEGRATION=1` never reached the xctest process and
+# every end-to-end test silently skipped. The `.xctestplan` route is the
+# supported way to pin environment variables on the test host.
 
 set -eo pipefail
 # Deliberately omit `-u` (nounset). The macOS default /bin/bash is 3.2 and
@@ -32,6 +38,7 @@ ROOT="$(pwd)"
 
 SCHEME_APP="YoozEngine"
 SCHEME_TESTS="IntegrationTests"
+TEST_PLAN="IntegrationTests"
 PROJECT="YoozEngine.xcodeproj"
 CONFIGURATION="Debug"
 LOG_DIR="$ROOT/.build/integration-logs"
@@ -48,8 +55,14 @@ fi
 xcodegen generate
 
 DERIVED_DATA_FLAGS=()
+BUILD_SETTING_FLAGS=()
 if [[ -n "${YOOZ_TEST_ENGINE_URL:-}" ]]; then
     echo "[run-integration] YOOZ_TEST_ENGINE_URL=$YOOZ_TEST_ENGINE_URL — skipping engine build"
+    BUILD_SETTING_FLAGS+=("YOOZ_TEST_ENGINE_URL=$YOOZ_TEST_ENGINE_URL")
+    # Still provide APP_PATH as an empty string so the xctestplan
+    # $(YOOZ_ENGINE_APP_PATH) expansion resolves; IntegrationTestCase only
+    # reads it when YOOZ_TEST_ENGINE_URL is unset.
+    BUILD_SETTING_FLAGS+=("YOOZ_ENGINE_APP_PATH=")
 else
     echo "[run-integration] step 2: build $SCHEME_APP ($CONFIGURATION)"
     DERIVED_DATA="$ROOT/.build/DerivedData"
@@ -74,33 +87,27 @@ else
         exit 1
     fi
     export YOOZ_ENGINE_APP_PATH="$APP_PATH"
+    BUILD_SETTING_FLAGS+=("YOOZ_ENGINE_APP_PATH=$APP_PATH")
+    BUILD_SETTING_FLAGS+=("YOOZ_TEST_ENGINE_URL=")
     echo "[run-integration] YOOZ_ENGINE_APP_PATH=$APP_PATH"
 fi
 
-echo "[run-integration] step 3: run $SCHEME_TESTS with YOOZ_INTEGRATION=1"
+echo "[run-integration] step 3: run $SCHEME_TESTS via -testPlan $TEST_PLAN"
 TEST_LOG="$LOG_DIR/test.log"
 
-# xcodebuild forwards env vars to the xctest host only via -testEnvironment.
-# Plain shell env prefix won't reach XCTest (xcodebuild spawns the test host
-# through xctestrun, which filters parent env by default). Available since
-# Xcode 13; required for our XCTSkipUnless gate to see YOOZ_INTEGRATION.
-TEST_ENV_FLAGS=(
-    -testEnvironment "YOOZ_INTEGRATION=1"
-)
-if [[ -n "${YOOZ_ENGINE_APP_PATH:-}" ]]; then
-    TEST_ENV_FLAGS+=(-testEnvironment "YOOZ_ENGINE_APP_PATH=$YOOZ_ENGINE_APP_PATH")
-fi
-if [[ -n "${YOOZ_TEST_ENGINE_URL:-}" ]]; then
-    TEST_ENV_FLAGS+=(-testEnvironment "YOOZ_TEST_ENGINE_URL=$YOOZ_TEST_ENGINE_URL")
-fi
-
+# xcodebuild forwards the IntegrationTests.xctestplan environment to the
+# xctest host. Command-line build settings (KEY=VALUE after the action) are
+# expanded into `$(KEY)` references inside the plan's
+# `environmentVariableEntries`, which is how we parameterize the app path
+# without shipping a developer-specific plan.
 xcodebuild \
     -project "$PROJECT" \
     -scheme "$SCHEME_TESTS" \
     -configuration "$CONFIGURATION" \
+    -testPlan "$TEST_PLAN" \
     "${DERIVED_DATA_FLAGS[@]}" \
     CODE_SIGNING_ALLOWED=NO \
-    "${TEST_ENV_FLAGS[@]}" \
+    "${BUILD_SETTING_FLAGS[@]}" \
     test \
     > "$TEST_LOG" 2>&1 && TEST_EXIT=0 || TEST_EXIT=$?
 
@@ -116,4 +123,4 @@ if [[ "$TEST_EXIT" -ne 0 ]]; then
     exit "$TEST_EXIT"
 fi
 
-echo "[run-integration] PASSED"
+echo "[run-integration] PASSED (log: $TEST_LOG)"
