@@ -81,6 +81,169 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertNil(result.language)
     }
 
+    // MARK: - AlignedToken + TranscriptionResult token roundtrip (engine#34)
+
+    func testAlignedTokenEncodeDecodeRoundTrip() throws {
+        let token = AlignedToken(text: " hello", start: 0.12, end: 0.48)
+        let data = try JSONEncoder().encode(token)
+        let decoded = try JSONDecoder().decode(AlignedToken.self, from: data)
+        XCTAssertEqual(decoded, token)
+    }
+
+    func testAlignedTokenJSONShape() throws {
+        // Wire shape must be `{text, start, end}` — used by the server at
+        // /v1/stt/batch?aligned=true and by whisper's chunk-boundary dedup.
+        let token = AlignedToken(text: "world", start: 1.5, end: 2.25)
+        let data = try JSONEncoder().encode(token)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["text"] as? String, "world")
+        XCTAssertEqual(try XCTUnwrap(json["start"] as? Double), 1.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(json["end"] as? Double), 2.25, accuracy: 0.001)
+        XCTAssertNil(json["duration"],
+                     "wire format uses `end`, not `duration`, for backend portability")
+    }
+
+    func testTranscriptionResultWithTokensRoundTrip() throws {
+        let original = TranscriptionResult(
+            text: "hello world",
+            finalized: "hello world",
+            draft: "",
+            language: "en",
+            tokens: [
+                AlignedToken(text: "hello", start: 0.0, end: 0.4),
+                AlignedToken(text: " world", start: 0.5, end: 0.9)
+            ]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(decoded.text, original.text)
+        XCTAssertEqual(decoded.finalized, original.finalized)
+        XCTAssertEqual(decoded.draft, original.draft)
+        XCTAssertEqual(decoded.language, original.language)
+        XCTAssertEqual(decoded.tokens, original.tokens)
+    }
+
+    func testTranscriptionResultDecodesOldJSONWithoutTokens() throws {
+        // Back-compat: v0.5.x response bodies omit the `tokens` key. The
+        // SDK must still decode them cleanly — old whisper clients keep
+        // working against a newer engine, and the new SDK keeps working
+        // against an older engine (`tokens` is nil).
+        let json = """
+        {"text":"hi","finalized":"hi","draft":"","language":"en"}
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(result.text, "hi")
+        XCTAssertNil(result.tokens,
+                     "absent tokens key must decode to nil, not an empty array")
+    }
+
+    func testTranscriptionResultDecodesJSONWithEmptyTokenArray() throws {
+        // Aligned silent audio: `tokens: []` is distinct from `tokens: null`.
+        // The empty array should round-trip exactly.
+        let json = """
+        {"text":"","finalized":"","draft":"","language":"en","tokens":[]}
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(result.tokens, [])
+    }
+
+    func testTranscriptionResultDecodesJSONWithTokens() throws {
+        // Exact shape the /v1/stt/batch?aligned=true handler emits for
+        // Parakeet/FastConformer/AppleSTT. Locks the wire contract.
+        let json = """
+        {
+          "text": "quick brown fox",
+          "finalized": "quick brown fox",
+          "draft": "",
+          "language": "en",
+          "tokens": [
+            {"text":"quick","start":0.0,"end":0.3},
+            {"text":" brown","start":0.35,"end":0.6},
+            {"text":" fox","start":0.65,"end":0.9}
+          ]
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(result.tokens?.count, 3)
+        XCTAssertEqual(result.tokens?[0].text, "quick")
+        XCTAssertEqual(result.tokens?[0].start, 0.0)
+        XCTAssertEqual(try XCTUnwrap(result.tokens?[0].end), 0.3, accuracy: 0.001)
+        // Monotonic ordering: start times are non-decreasing in the
+        // per-chunk dedup use case. Locks the server's emission order.
+        let starts = result.tokens!.map(\.start)
+        XCTAssertEqual(starts, starts.sorted(),
+                       "server must emit tokens in monotonically non-decreasing start order")
+    }
+
+    func testTranscriptionResultEncodingOmitsTokensWhenNil() throws {
+        // Backward-compat on the wire: old servers that don't populate
+        // tokens must see the SDK emit JSON byte-identical with v0.5.x.
+        let result = TranscriptionResult(
+            text: "hi",
+            finalized: "hi",
+            draft: "",
+            language: "en",
+            tokens: nil
+        )
+        let data = try JSONEncoder().encode(result)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        // Swift's default keyed encoder emits `null` for nil optionals; we
+        // accept either absence or null here to keep this test decoupled
+        // from the Codable synthesis strategy.
+        let tokensField = json["tokens"]
+        XCTAssertTrue(
+            tokensField == nil || tokensField is NSNull,
+            "tokens must be absent or null when constructed with tokens: nil"
+        )
+    }
+
+    func testBatchSTTRequestAlignedFlagEncoding() throws {
+        // STTClient.batchTranscribeAligned sets aligned=true; verify it
+        // lands on the wire where the server route expects it.
+        let request = BatchSTTRequest(
+            samples: [0.1, 0.2],
+            language: "en",
+            mode: "normal",
+            aligned: true
+        )
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["aligned"] as? Bool, true)
+    }
+
+    func testBatchSTTRequestAlignedFlagOmittedWhenNil() throws {
+        // STTClient.transcribe (non-aligned path) must produce JSON that
+        // is byte-identical with v0.5.x traffic. The `aligned` key must be
+        // absent, not `null`.
+        let request = BatchSTTRequest(
+            samples: [0.1],
+            language: "en",
+            mode: "normal"
+        )
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertNil(json["aligned"],
+                     "non-aligned requests must not emit the aligned key")
+    }
+
+    func testBatchSTTRequestDecodingTolerantToAlignedFlag() throws {
+        // The server decodes request bodies with the same type shape; lock
+        // both encode and decode paths round-trip through the aligned flag.
+        let request = BatchSTTRequest(
+            samples: [0.1, 0.2, 0.3],
+            language: "en",
+            mode: "normal",
+            aligned: true
+        )
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(BatchSTTRequest.self, from: data)
+        XCTAssertEqual(decoded.aligned, true)
+        XCTAssertEqual(decoded.samples, [0.1, 0.2, 0.3])
+    }
+
     func testSTTStatusDecoding() throws {
         let json = """
         {

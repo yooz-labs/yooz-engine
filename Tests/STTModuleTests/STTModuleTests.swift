@@ -246,4 +246,43 @@ final class STTModuleTests: XCTestCase {
         XCTAssertTrue(health.loaded)
         XCTAssertEqual(health.detail["language"], "en")
     }
+
+    // MARK: - Aligned transcription (engine#34, gated by YOOZ_STT_LOAD_MODELS)
+
+    func testBatchTranscribeAlignedReturnsMonotonicTokens() async throws {
+        try XCTSkipUnless(shouldLoadRealModels,
+                          "Set YOOZ_STT_LOAD_MODELS=1 to exercise the aligned transcription path")
+
+        // Two seconds of silence isn't a useful transcription input, so we
+        // build a deterministic sine sweep that the Parakeet preprocessor
+        // will at least chunk through the encoder. We don't assert on the
+        // text (which would be flaky); we assert the alignment invariants
+        // that whisper's chunk-boundary dedup relies on in #154.
+        let engine = YoozSTTEngine.shared
+        try await engine.start(language: .english)
+
+        let sampleRate = 16_000
+        let duration: Float = 2.0
+        var samples = [Float](repeating: 0, count: Int(Float(sampleRate) * duration))
+        for i in 0..<samples.count {
+            let t = Float(i) / Float(sampleRate)
+            samples[i] = 0.1 * sinf(2 * .pi * 440 * t)
+        }
+
+        let aligned = await engine.batchTranscribeAligned(samples: samples, mode: .normal)
+
+        // All token timestamps must be within the audio window.
+        for token in aligned.tokens {
+            XCTAssertGreaterThanOrEqual(token.start, 0)
+            XCTAssertLessThanOrEqual(token.end, duration + 1.0,
+                                     "token \(token.text) end \(token.end) exceeds audio window")
+            XCTAssertGreaterThanOrEqual(token.duration, 0)
+        }
+
+        // Monotonicity: whisper's ChunkProcessor relies on token starts being
+        // non-decreasing so `.filter { $0.end > ctx + eps }` preserves order.
+        let starts = aligned.tokens.map(\.start)
+        XCTAssertEqual(starts, starts.sorted(),
+                       "AlignedToken.start must be monotonically non-decreasing")
+    }
 }
