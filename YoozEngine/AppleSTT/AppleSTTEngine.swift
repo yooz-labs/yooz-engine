@@ -171,6 +171,22 @@ public actor AppleSTTEngine {
         return try await backend.transcribe(samples: samples)
     }
 
+    /// Transcribe with per-token alignment. Parity with
+    /// `YoozSTTEngine.batchTranscribeAligned(samples:mode:)` for the Apple
+    /// backend; each `SFTranscriptionSegment` becomes one `AppleAlignedToken`
+    /// with seconds-from-buffer-start timestamps.
+    ///
+    /// Backs `/v1/stt/batch?aligned=true` when Apple STT is the active
+    /// backend (engine#34). Returns `AppleAlignedTranscription.empty` on
+    /// recognizer-emitted "no speech detected" so callers can treat silent
+    /// audio uniformly with the text-only path.
+    public func batchTranscribeAligned(samples: [Float]) async throws -> AppleAlignedTranscription {
+        guard let backend else {
+            throw AppleSTTError.recognitionFailed("engine not started; call start(language:) first")
+        }
+        return try await backend.transcribeAligned(samples: samples)
+    }
+
     /// Streaming entry point. Not implemented in the initial deliverable; the
     /// server layer returns an error when called. `SFSpeechAudioBufferRecognitionRequest`
     /// supports `append(_:)` and partial results, so a real streaming path

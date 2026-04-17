@@ -211,4 +211,75 @@ final class AppleSTTModuleTests: XCTestCase {
             XCTFail("expected AppleSTTError; got \(error)")
         }
     }
+
+    // MARK: - Aligned transcription (engine#34)
+
+    func testAppleAlignedTokenShape() {
+        // Same shape as SDK AlignedToken (text + start + end, seconds).
+        let token = AppleAlignedToken(text: "hello", start: 0.1, end: 0.5)
+        XCTAssertEqual(token.text, "hello")
+        XCTAssertEqual(token.start, 0.1, accuracy: 0.001)
+        XCTAssertEqual(token.end, 0.5, accuracy: 0.001)
+    }
+
+    func testAppleAlignedTranscriptionEmptyState() {
+        // Empty state is what the backend returns on the "no speech detected"
+        // error path — aligned callers must be able to handle it uniformly
+        // with a successful empty recognition.
+        let empty = AppleAlignedTranscription.empty
+        XCTAssertEqual(empty.transcription, "")
+        XCTAssertTrue(empty.tokens.isEmpty)
+    }
+
+    func testBatchTranscribeAlignedBeforeStart() async throws {
+        // Mirrors the text-only batchTranscribe contract: aligned path must
+        // also throw `recognitionFailed` before start().
+        let engine = AppleSTTEngine.shared
+        let loaded = await engine.isLoaded
+        try XCTSkipIf(loaded, "shared engine already started; cannot assert not-started throw")
+
+        do {
+            _ = try await engine.batchTranscribeAligned(samples: [Float](repeating: 0, count: 1600))
+            XCTFail("expected batchTranscribeAligned to throw before start()")
+        } catch let error as AppleSTTError {
+            if case .recognitionFailed = error {
+                // expected
+            } else {
+                XCTFail("expected recognitionFailed; got \(error)")
+            }
+        } catch {
+            XCTFail("expected AppleSTTError; got \(error)")
+        }
+    }
+
+    func testBatchTranscribeAlignedReturnsMonotonicTokens() async throws {
+        try XCTSkipUnless(
+            shouldRunAuthedTests,
+            "Set YOOZ_STT_LOAD_APPLE=1 to exercise the Apple STT alignment path"
+        )
+        let status = AppleSTTEngine.authorizationStatus
+        try XCTSkipUnless(status == .authorized,
+                          "Speech recognition not authorized; cannot exercise alignment")
+
+        let engine = AppleSTTEngine.shared
+        try await engine.start(language: .english)
+
+        // Two seconds of silence: recognizer returns an empty aligned
+        // transcription (no speech detected) — the invariant we care about
+        // is that the method returns without throwing, and produces
+        // monotonically non-decreasing token starts when any are present.
+        let sampleRate = 16_000
+        let samples = [Float](repeating: 0, count: sampleRate * 2)
+        let aligned = try await engine.batchTranscribeAligned(samples: samples)
+
+        let starts = aligned.tokens.map(\.start)
+        XCTAssertEqual(
+            starts, starts.sorted(),
+            "AppleAlignedToken.start must be monotonically non-decreasing"
+        )
+        for token in aligned.tokens {
+            XCTAssertLessThanOrEqual(token.start, token.end,
+                                     "token '\(token.text)' has end before start")
+        }
+    }
 }

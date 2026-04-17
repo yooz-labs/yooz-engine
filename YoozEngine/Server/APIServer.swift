@@ -951,6 +951,33 @@ final class APIServer: ObservableObject {
                     )
                 }
                 let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
+                let wantsAligned = body.aligned ?? false
+                if wantsAligned {
+                    // Parakeet already computes aligned tokens internally for
+                    // the finalized/draft split; `batchTranscribeAligned`
+                    // surfaces them. We still derive the full text from the
+                    // token stream so the top-level `text` field stays
+                    // consistent with the alignment.
+                    let aligned = await engine.batchTranscribeAligned(
+                        samples: body.samples,
+                        mode: mode
+                    )
+                    let wireTokens = aligned.tokens.map { tok in
+                        AlignedTokenWire(
+                            text: tok.text,
+                            start: tok.start,
+                            end: tok.end
+                        )
+                    }
+                    let fullText = aligned.text
+                    return try jsonResponse(BatchSTTResponse(
+                        text: fullText,
+                        finalized: fullText,
+                        draft: "",
+                        language: language.rawValue,
+                        tokens: wireTokens
+                    ))
+                }
                 let result = await engine.batchTranscribe(samples: body.samples, mode: mode)
                 return try jsonResponse(BatchSTTResponse(
                     text: result.text,
@@ -984,7 +1011,25 @@ final class APIServer: ObservableObject {
                         code: "apple_stt_start_failed"
                     )
                 }
+                let wantsAligned = body.aligned ?? false
                 do {
+                    if wantsAligned {
+                        let aligned = try await engine.batchTranscribeAligned(samples: body.samples)
+                        let wireTokens = aligned.tokens.map { tok in
+                            AlignedTokenWire(
+                                text: tok.text,
+                                start: tok.start,
+                                end: tok.end
+                            )
+                        }
+                        return try jsonResponse(BatchSTTResponse(
+                            text: aligned.transcription,
+                            finalized: aligned.transcription,
+                            draft: "",
+                            language: language.rawValue,
+                            tokens: wireTokens
+                        ))
+                    }
                     let text = try await engine.batchTranscribe(samples: body.samples)
                     return try jsonResponse(BatchSTTResponse(
                         text: text,

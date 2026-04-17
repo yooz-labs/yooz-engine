@@ -1,16 +1,55 @@
 import Foundation
 
+/// A single token from an aligned transcription with start/end timestamps.
+///
+/// Used by callers that need word- or sub-word-level timing (e.g. chunk-
+/// boundary deduplication, subtitle rendering, word highlighting). Timestamps
+/// are in seconds from the start of the submitted audio buffer.
+///
+/// Only populated on responses from aligned transcription paths (see
+/// `STTClient.batchTranscribeAligned`). The shape `text/start/end` is
+/// intentionally backend-agnostic: Parakeet + FastConformer surface native
+/// TDT token alignments, Apple STT derives them from `SFTranscriptionSegment`
+/// (`timestamp` + `duration`).
+public struct AlignedToken: Codable, Sendable, Equatable {
+    /// Token text. May be a word, sub-word, or punctuation fragment depending
+    /// on backend tokenization; do not assume one-token-per-word.
+    public let text: String
+    /// Seconds from start of the audio buffer.
+    public let start: Float
+    /// Seconds from start of the audio buffer. `end >= start`.
+    public let end: Float
+
+    public init(text: String, start: Float, end: Float) {
+        self.text = text
+        self.start = start
+        self.end = end
+    }
+}
+
 public struct TranscriptionResult: Codable, Sendable {
     public let text: String
     public let finalized: String
     public let draft: String
     public let language: String?
+    /// Aligned tokens with timestamps. `nil` when the request did not opt into
+    /// alignment (`STTClient.transcribe`) or when the backend for the active
+    /// engine did not return alignment information. Present on every response
+    /// from `STTClient.batchTranscribeAligned` for the MLX + Apple backends.
+    public let tokens: [AlignedToken]?
 
-    public init(text: String, finalized: String, draft: String, language: String? = nil) {
+    public init(
+        text: String,
+        finalized: String,
+        draft: String,
+        language: String? = nil,
+        tokens: [AlignedToken]? = nil
+    ) {
         self.text = text
         self.finalized = finalized
         self.draft = draft
         self.language = language
+        self.tokens = tokens
     }
 }
 

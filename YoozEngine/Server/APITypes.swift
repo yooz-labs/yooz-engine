@@ -40,6 +40,14 @@ struct BatchSTTRequest: Decodable {
     let samples: [Float]
     let language: String?
     let mode: String?
+    /// Request per-token timestamps in the response.
+    ///
+    /// When `true`, the handler routes to each backend's alignment-aware
+    /// entry point (`YoozSTTEngine.batchTranscribeAligned` for MLX,
+    /// `AppleSTTEngine.batchTranscribeAligned` for Apple STT) and returns
+    /// `BatchSTTResponse.tokens`. Absent / `false` keeps today's
+    /// token-less behaviour byte-identical with v0.5.x clients.
+    let aligned: Bool?
 }
 
 struct BatchSTTResponse: ResponseCodable {
@@ -47,6 +55,51 @@ struct BatchSTTResponse: ResponseCodable {
     let finalized: String
     let draft: String
     let language: String
+    /// Non-nil iff the request set `aligned = true`. Timestamps are in
+    /// seconds from the start of the submitted audio buffer. `encodeIfPresent`
+    /// keeps the field off the wire for non-aligned responses so v0.5.x
+    /// clients see byte-identical traffic.
+    let tokens: [AlignedTokenWire]?
+
+    init(
+        text: String,
+        finalized: String,
+        draft: String,
+        language: String,
+        tokens: [AlignedTokenWire]? = nil
+    ) {
+        self.text = text
+        self.finalized = finalized
+        self.draft = draft
+        self.language = language
+        self.tokens = tokens
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case text, finalized, draft, language, tokens
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(text, forKey: .text)
+        try container.encode(finalized, forKey: .finalized)
+        try container.encode(draft, forKey: .draft)
+        try container.encode(language, forKey: .language)
+        try container.encodeIfPresent(tokens, forKey: .tokens)
+    }
+}
+
+/// Wire-level aligned-token shape for `/v1/stt/batch` with `aligned=true`.
+///
+/// Mirrors `YoozEngineClient.AlignedToken` exactly (text + start + end as
+/// seconds). Engine-side `AlignedToken` types from STTModule
+/// (`start + duration`) and AppleSTTModule (derived from
+/// `SFTranscriptionSegment`) are both mapped into this shape at the route
+/// boundary so the SDK surface stays backend-agnostic.
+struct AlignedTokenWire: Codable, Sendable {
+    let text: String
+    let start: Float
+    let end: Float
 }
 
 struct STTLanguagesResponse: ResponseCodable {

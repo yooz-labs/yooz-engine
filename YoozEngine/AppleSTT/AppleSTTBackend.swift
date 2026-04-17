@@ -24,6 +24,43 @@ public enum AppleSTTBackendKind: String, Sendable {
     case speechAnalyzer = "speech_analyzer"
 }
 
+/// A single token with start/end timestamps in seconds, emitted by the
+/// Apple STT alignment path. Derived from `SFTranscriptionSegment` on the
+/// legacy recognizer; SpeechAnalyzer on macOS 26+ exposes equivalent timing
+/// via the same shape so the public type stays stable across OS paths.
+///
+/// Shape mirrors SDK `AlignedToken` (text + start + end, both in seconds)
+/// so the server can map directly at the `/v1/stt/batch` boundary without
+/// loss. Wiring tracked in engine#34.
+public struct AppleAlignedToken: Sendable, Equatable {
+    public let text: String
+    public let start: Float
+    public let end: Float
+
+    public init(text: String, start: Float, end: Float) {
+        self.text = text
+        self.start = start
+        self.end = end
+    }
+}
+
+/// Transcription result with aligned tokens for the Apple STT backend.
+///
+/// `transcription` is the full best-guess text (identical to
+/// `AppleSTTBackend.transcribe`'s return). `tokens` is the per-segment
+/// alignment list; empty on "no speech detected" results.
+public struct AppleAlignedTranscription: Sendable, Equatable {
+    public let transcription: String
+    public let tokens: [AppleAlignedToken]
+
+    public init(transcription: String, tokens: [AppleAlignedToken]) {
+        self.transcription = transcription
+        self.tokens = tokens
+    }
+
+    public static let empty = AppleAlignedTranscription(transcription: "", tokens: [])
+}
+
 /// Authorization status reported by the OS for speech recognition.
 ///
 /// Mirrors `SFSpeechRecognizerAuthorizationStatus` but exposed as a Swift enum
@@ -148,30 +185,46 @@ public struct AppleSTTBackend: Sendable {
     /// path end-to-end, and returns the best hypothesis.
     ///
     /// - Note: Per-token timestamps from
-    ///   `SFTranscriptionSegment.timestamp` / `.duration` are available on
-    ///   the returned `SFSpeechRecognitionResult`. Wiring them into the
-    ///   engine's `AlignedToken` surface is tracked in engine#34; the hook
-    ///   intentionally stays unimplemented in this deliverable.
-    ///
-    /// - TODO(engine#34): expose a second transcription entry point that
-    ///   returns aligned tokens. Map each `SFTranscriptionSegment` to an
-    ///   `AlignedToken(id: idx, text: segment.substring, start:
-    ///   Float(segment.timestamp), duration: Float(segment.duration))`.
-    ///   The hook intentionally lives on the server-side `TranscriptionResult`
-    ///   in `YoozEngine/STT/Models/Parakeet/ParakeetModel.swift` — not the
-    ///   SDK's `TranscriptionResult` in `Sources/YoozEngineClient/Types/`.
+    ///   `SFTranscriptionSegment.timestamp` / `.duration` are surfaced through
+    ///   `transcribeAligned(samples:sampleRate:)`; this entry point keeps the
+    ///   simpler text-only contract for callers that don't need alignment.
     public func transcribe(samples: [Float], sampleRate: Double = 16_000) async throws -> String {
+        let result = try await recognize(samples: samples, sampleRate: sampleRate)
+        return result.transcription
+    }
+
+    /// Run a single-shot transcription and return aligned tokens alongside
+    /// the text. Each `SFTranscriptionSegment` maps to one
+    /// `AppleAlignedToken` with `start = segment.timestamp` and
+    /// `end = segment.timestamp + segment.duration` (both in seconds from
+    /// the start of the submitted buffer).
+    ///
+    /// Backs `/v1/stt/batch?aligned=true` for the Apple backend (engine#34).
+    /// SpeechAnalyzer on macOS 26+ exposes equivalent per-token timing; this
+    /// entry point stays stable when the 26+ path lands behind `#available`.
+    public func transcribeAligned(
+        samples: [Float],
+        sampleRate: Double = 16_000
+    ) async throws -> AppleAlignedTranscription {
+        try await recognize(samples: samples, sampleRate: sampleRate)
+    }
+
+    private func recognize(
+        samples: [Float],
+        sampleRate: Double
+    ) async throws -> AppleAlignedTranscription {
         // Only legacy path for now. The SpeechAnalyzer path follows the same
-        // [Float] -> single-string contract; we keep the branch explicit so the
-        // 26+ wiring can land behind `#available` without disturbing callers.
+        // `SFSpeechRecognitionResult`-shaped contract; we keep the branch
+        // explicit so the 26+ wiring can land behind `#available` without
+        // disturbing callers.
         if #available(macOS 26, *) {
-            return try await transcribeViaSFRecognizer(samples: samples, sampleRate: sampleRate)
+            return try await recognizeViaSFRecognizer(samples: samples, sampleRate: sampleRate)
         } else {
-            return try await transcribeViaSFRecognizer(samples: samples, sampleRate: sampleRate)
+            return try await recognizeViaSFRecognizer(samples: samples, sampleRate: sampleRate)
         }
     }
 
-    private func transcribeViaSFRecognizer(samples: [Float], sampleRate: Double) async throws -> String {
+    private func recognizeViaSFRecognizer(samples: [Float], sampleRate: Double) async throws -> AppleAlignedTranscription {
         let status = Self.authorizationStatus
         guard status == .authorized else {
             throw AppleSTTError.authorizationDenied(status: status)
@@ -213,7 +266,7 @@ public struct AppleSTTBackend: Sendable {
                     // empty audio on some locales. Treat as empty transcript.
                     if nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 1110 {
                         didResume = true
-                        continuation.resume(returning: "")
+                        continuation.resume(returning: AppleAlignedTranscription.empty)
                         return
                     }
                     didResume = true
@@ -222,7 +275,19 @@ public struct AppleSTTBackend: Sendable {
                 }
                 guard let result = result, result.isFinal else { return }
                 didResume = true
-                continuation.resume(returning: result.bestTranscription.formattedString)
+                let tokens = result.bestTranscription.segments.map { segment in
+                    AppleAlignedToken(
+                        text: segment.substring,
+                        start: Float(segment.timestamp),
+                        end: Float(segment.timestamp + segment.duration)
+                    )
+                }
+                continuation.resume(
+                    returning: AppleAlignedTranscription(
+                        transcription: result.bestTranscription.formattedString,
+                        tokens: tokens
+                    )
+                )
             }
             // Retain the task for the lifetime of the continuation — if the
             // recognizer ever dropped it before callback we'd deadlock.
