@@ -15,14 +15,24 @@ import YoozEngineClient
 
 final class EndToEndTests: IntegrationTestCase {
 
+    /// Safe accessor for the shared client. `IntegrationTestCase.client` is
+    /// an implicitly-unwrapped optional; force-unwrapping it inside a test
+    /// body turns any setup failure into a runtime crash that kills the
+    /// whole xctest host mid-run (#37). `XCTUnwrap` converts a nil client
+    /// into a normal test failure instead.
+    private func requireClient() throws -> YoozEngineClient {
+        try XCTUnwrap(client, "IntegrationTestCase.client was not initialised")
+    }
+
     // MARK: - /v1/health
 
     /// Health reports the engine's build variant + module presence. For the
     /// full variant (the only one this harness launches today) we expect
     /// grammar + vad available.
     func testHealthModulesPresentForFullVariant() async throws {
+        let client = try requireClient()
         let health = try await measureEndpoint("GET /v1/health") {
-            try await self.client.health()
+            try await client.health()
         }
         XCTAssertEqual(health.status, "ok")
         XCTAssertFalse(health.version.isEmpty)
@@ -39,8 +49,9 @@ final class EndToEndTests: IntegrationTestCase {
     /// The manifest reflects registered modules and a well-formed
     /// build-variant string. See A3 (#31).
     func testModulesManifestContainsBundledModules() async throws {
+        let client = try requireClient()
         let manifest = try await measureEndpoint("GET /v1/modules") {
-            try await self.client.modules()
+            try await client.modules()
         }
 
         XCTAssertFalse(manifest.engineVersion.isEmpty)
@@ -68,9 +79,10 @@ final class EndToEndTests: IntegrationTestCase {
     /// The exact corrected string varies with rule mode (POS vs simple);
     /// we assert on the count, not the output, to keep the test stable.
     func testGrammarCheckAppliesCorrection() async throws {
+        let client = try requireClient()
         let request = GrammarCheckRequest(text: "I are happy")
         let response = try await measureEndpoint("POST /v1/grammar/check") {
-            try await self.client.grammar.check(request)
+            try await client.grammar.check(request)
         }
         XCTAssertGreaterThanOrEqual(
             response.correctionsApplied, 1,
@@ -84,9 +96,10 @@ final class EndToEndTests: IntegrationTestCase {
     /// (`TouchUpEngine.processRegexOnly`). Deterministic, does not require
     /// any loaded model — exactly the "degraded" path the task asks for.
     func testTouchUpRegexOnlyPath() async throws {
+        let client = try requireClient()
         let request = TouchUpRequest(text: "hello  world ", mode: .off)
         let response = try await measureEndpoint("POST /v1/touchup") {
-            try await self.client.touchUp.process(request)
+            try await client.touchUp.process(request)
         }
         XCTAssertEqual(response.mode, .off)
         XCTAssertFalse(response.result.isEmpty,
@@ -98,8 +111,9 @@ final class EndToEndTests: IntegrationTestCase {
     /// Shape check only: the STT engine may or may not be pre-loaded on a
     /// cold start, but the status payload must always be parseable.
     func testSTTStatusShape() async throws {
+        let client = try requireClient()
         let status = try await measureEndpoint("GET /v1/stt/status") {
-            try await self.client.stt.status()
+            try await client.stt.status()
         }
         _ = status.loaded
         _ = status.streaming
@@ -115,6 +129,7 @@ final class EndToEndTests: IntegrationTestCase {
     /// produce no speech segments. 16000 > VADEngine.windowSize (512) so
     /// the server will not reject us with `samples_too_short`.
     func testVADSilenceProducesNoSpeech() async throws {
+        let client = try requireClient()
         // Gate: VAD must be loaded, else we'd be asserting on a 503
         // "vad_not_loaded" error instead of the silence semantics.
         let health = try await client.health()
@@ -125,7 +140,7 @@ final class EndToEndTests: IntegrationTestCase {
 
         let samples = [Float](repeating: 0.0, count: 16_000)
         let response = try await measureEndpoint("POST /v1/vad/detect") {
-            try await self.client.vad.detect(audioSamples: samples, reset: true)
+            try await client.vad.detect(audioSamples: samples, reset: true)
         }
         XCTAssertTrue(
             response.segments.isEmpty,
