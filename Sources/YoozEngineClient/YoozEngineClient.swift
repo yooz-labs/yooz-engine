@@ -73,6 +73,15 @@ public final class YoozEngineClient: Sendable {
         return try JSONDecoder().decode(HealthStatus.self, from: data)
     }
 
+    /// Get the full module manifest: build variant, engine version, and every
+    /// registered module with its current health. Thin clients read this to
+    /// render "About" panels and to decide which endpoints are served by the
+    /// running build variant. See `Types/ModulesResponse.swift`.
+    public func modules() async throws -> ModulesResponse {
+        let data = try await get("/v1/modules")
+        return try JSONDecoder().decode(ModulesResponse.self, from: data)
+    }
+
     // MARK: - Service clients
 
     /// STT (speech-to-text) service client.

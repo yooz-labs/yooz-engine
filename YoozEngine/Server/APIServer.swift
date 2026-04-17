@@ -132,6 +132,26 @@ final class APIServer: ObservableObject {
         )
     }
 
+    /// HTTP 501 response for routes whose backing module isn't linked into
+    /// this build variant. See A4 / #28.
+    ///
+    /// The body follows `ModuleNotBundledResponse`: `error`, `code`, `module`.
+    /// Clients switch on `code == "module_not_bundled"` and use `module` to
+    /// identify which capability is missing; the `error` string carries the
+    /// build-variant name for humans.
+    nonisolated func moduleNotBundled(_ module: String) -> Response {
+        let payload = ModuleNotBundledResponse(
+            module: module,
+            buildVariant: BuildVariant.current.rawValue
+        )
+        let body = (try? JSONEncoder().encode(payload)) ?? Data()
+        return Response(
+            status: .notImplemented,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: ByteBuffer(data: body))
+        )
+    }
+
     private nonisolated func jsonResponse<T: Encodable>(
         _ value: T,
         status: HTTPResponse.Status = .ok
@@ -243,6 +263,9 @@ final class APIServer: ObservableObject {
 
         // LLM: Generate
         router.post("/v1/llm/generate") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
             let body: LLMGenerateServerRequest
             do {
                 body = try await request.decode(as: LLMGenerateServerRequest.self, context: context)
@@ -294,6 +317,10 @@ final class APIServer: ObservableObject {
 
         // TouchUp: Process text
         router.post("/v1/touchup") { [self] request, context in
+            // TouchUp lives in LLMModule; gate by the LLM registry entry.
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
             let body: TouchUpServerRequest
             do {
                 body = try await request.decode(as: TouchUpServerRequest.self, context: context)
@@ -338,6 +365,9 @@ final class APIServer: ObservableObject {
 
         // Grammar: Check text
         router.post("/v1/grammar/check") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("grammar") else {
+                return moduleNotBundled("grammar")
+            }
             let body: GrammarCheckServerRequest
             do {
                 body = try await request.decode(as: GrammarCheckServerRequest.self, context: context)
@@ -372,12 +402,19 @@ final class APIServer: ObservableObject {
 
         // VAD: Detect speech segments
         //
-        // Only registered when VADModule is linked into this build variant.
-        // Slim variants that embed their own VAD locally (e.g. whisper)
-        // don't ship this route; A4 (#28) adds a uniform 501 "module_not_bundled"
-        // response for unbundled modules. Until then, the route is simply absent.
-        #if canImport(VADModule)
+        // The route itself is always registered so that in slim variants
+        // (e.g. whisper, which embeds its own local VAD) clients get a
+        // uniform HTTP 501 `module_not_bundled` response from A4 / #28
+        // rather than Hummingbird's default 404. The type-level references
+        // to `VADEngine` / `VADDetectServerRequest` are still compile-time
+        // gated — the latter lives in the app target, but `VADEngine` only
+        // exists when `VADModule` is linked, so the handler body needs the
+        // `#if canImport(VADModule)` gate around the VAD-type call sites.
         router.post("/v1/vad/detect") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("vad") else {
+                return moduleNotBundled("vad")
+            }
+            #if canImport(VADModule)
             let body: VADDetectServerRequest
             do {
                 body = try await request.decode(as: VADDetectServerRequest.self, context: context)
@@ -422,12 +459,20 @@ final class APIServer: ObservableObject {
                     code: "vad_detection_failed"
                 )
             }
+            #else
+            // Unreachable: the registry guard above returns before we get
+            // here in a variant that omits VADModule. Kept for exhaustive
+            // compilation in the slim variant.
+            return moduleNotBundled("vad")
+            #endif
         }
-        #endif
 
         // STT: Available languages
-        router.get("/v1/stt/languages") { _, _ in
-            STTLanguagesResponse(languages: STTLanguage.allCases.map { lang in
+        router.get("/v1/stt/languages") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("stt") else {
+                return moduleNotBundled("stt")
+            }
+            let payload = STTLanguagesResponse(languages: STTLanguage.allCases.map { lang in
                 STTLanguageInfo(
                     code: lang.rawValue,
                     name: lang.displayName,
@@ -435,20 +480,28 @@ final class APIServer: ObservableObject {
                     family: lang.modelFamily.rawValue
                 )
             })
+            return try jsonResponse(payload)
         }
 
         // STT: Status
-        router.get("/v1/stt/status") { _, _ in
+        router.get("/v1/stt/status") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("stt") else {
+                return moduleNotBundled("stt")
+            }
             let running = sttEngine.isRunning
-            return STTStatusResponse(
+            let payload = STTStatusResponse(
                 loaded: running,
                 language: running ? sttEngine.currentLanguage.rawValue : nil,
                 streaming: sttEngine.isStreaming
             )
+            return try jsonResponse(payload)
         }
 
         // STT: Load model
         router.post("/v1/stt/load") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("stt") else {
+                return moduleNotBundled("stt")
+            }
             let body = try await request.decode(as: STTLoadRequest.self, context: context)
 
             let language: STTLanguage
@@ -480,6 +533,9 @@ final class APIServer: ObservableObject {
 
         // STT: Batch transcribe
         router.post("/v1/stt/batch") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("stt") else {
+                return moduleNotBundled("stt")
+            }
             let body = try await request.decode(as: BatchSTTRequest.self, context: context)
 
             let language: STTLanguage
