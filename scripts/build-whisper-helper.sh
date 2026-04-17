@@ -36,6 +36,19 @@ log() { printf "[build-whisper-helper] %s\n" "$*"; }
 fail() { printf "[build-whisper-helper] ERROR: %s\n" "$*" >&2; exit 1; }
 
 # -----------------------------------------------------------------------------
+# 0. Config warning
+# -----------------------------------------------------------------------------
+# Default CONFIG is Debug because issue #38 (Release SPM embed transitive deps
+# broken) has not shipped a fix yet. Surface this loudly so fresh contributors
+# don't unknowingly ship a Debug-signed helper past a developer workflow.
+if [[ "$CONFIG" == "Debug" ]]; then
+    log "WARNING: building with CONFIG=Debug (see #38 workaround)."
+    log "         Debug binaries carry -Onone, debug symbols, and -enable-testing."
+    log "         Do NOT ship this to users; override once #38 lands with:"
+    log "         export YOOZ_HELPER_CONFIG=Release"
+fi
+
+# -----------------------------------------------------------------------------
 # 1. Preflight
 # -----------------------------------------------------------------------------
 command -v xcodegen >/dev/null 2>&1 || fail "xcodegen not on PATH (brew install xcodegen)"

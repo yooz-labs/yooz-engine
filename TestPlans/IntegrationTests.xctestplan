@@ -11,7 +11,7 @@
           },
           {
             "key" : "YOOZ_ENGINE_APP_PATH",
-            "value" : "/Users/yahya/Documents/git/yooz/engine-epic-v0.6.0/.build/DerivedData/Build/Products/Debug/Yooz Engine.app"
+            "value" : "$(YOOZ_ENGINE_APP_PATH)"
           }
         ]
       }
@@ -25,7 +25,7 @@
       },
       {
         "key" : "YOOZ_ENGINE_APP_PATH",
-        "value" : "/Users/yahya/Documents/git/yooz/engine-epic-v0.6.0/.build/DerivedData/Build/Products/Debug/Yooz Engine.app"
+        "value" : "$(YOOZ_ENGINE_APP_PATH)"
       }
     ]
   },

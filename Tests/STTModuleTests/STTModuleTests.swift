@@ -214,6 +214,28 @@ final class STTModuleTests: XCTestCase {
         XCTAssertNil(engine.createBatchTranscriber(mode: .normal))
     }
 
+    func testBatchTranscribeAlignedThrowsWhenModelNotLoaded() async throws {
+        // Regression guard for I2 in .context/pr_review_engine_block.md:
+        // the aligned entry point used to return an empty
+        // TranscriptionResult(tokens: []) when no model was loaded, which
+        // APIServer turned into a 200 OK with empty text/tokens —
+        // indistinguishable from silent input. It must now throw
+        // YoozSTTError.notReady so the server can return 503 stt_not_loaded.
+        let engine = YoozSTTEngine.shared
+        try XCTSkipIf(engine.isRunning,
+                      "shared engine already loaded; cannot assert not-ready throw path")
+
+        let samples = [Float](repeating: 0, count: 1600)
+        do {
+            _ = try await engine.batchTranscribeAligned(samples: samples, mode: .normal)
+            XCTFail("batchTranscribeAligned must throw when no model is loaded")
+        } catch YoozSTTError.notReady {
+            // expected
+        } catch {
+            XCTFail("expected YoozSTTError.notReady; got \(error)")
+        }
+    }
+
     func testAvailableLanguagesMatchesImplemented() {
         XCTAssertEqual(
             Set(YoozSTTEngine.shared.availableLanguages),
@@ -269,7 +291,7 @@ final class STTModuleTests: XCTestCase {
             samples[i] = 0.1 * sinf(2 * .pi * 440 * t)
         }
 
-        let aligned = await engine.batchTranscribeAligned(samples: samples, mode: .normal)
+        let aligned = try await engine.batchTranscribeAligned(samples: samples, mode: .normal)
 
         // All token timestamps must be within the audio window.
         for token in aligned.tokens {

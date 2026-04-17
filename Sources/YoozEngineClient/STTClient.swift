@@ -37,9 +37,10 @@ public struct STTClient: Sendable {
     /// per-word highlighting.
     ///
     /// Supported backends: Parakeet (TDT token alignment), FastConformer, and
-    /// Apple STT (derived from `SFTranscriptionSegment`). `tokens` is only
-    /// `nil` if the server returns an empty alignment (e.g. silent audio) —
-    /// the aligned route always includes the `tokens` key.
+    /// Apple STT (derived from `SFTranscriptionSegment`). `tokens` is non-nil
+    /// (possibly empty) on every response from this method — the server ships
+    /// `"tokens": []` on silent audio rather than omitting the key. Only the
+    /// text-only `transcribe(...)` path ever returns `nil` tokens.
     public func batchTranscribeAligned(
         audioSamples: [Float],
         language: STTLanguage = .english,

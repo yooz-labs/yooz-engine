@@ -382,10 +382,15 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     ///
     /// - Parameter samples: Audio samples at 16kHz
     /// - Returns: TranscriptionResult with aligned tokens containing timestamps
-    public func batchTranscribeAligned(samples: [Float], mode: AudioMode = .normal) async -> TranscriptionResult {
+    /// - Throws: `YoozSTTError.notReady` when no model is loaded. The text-only
+    ///   `batchTranscribe` path preserves legacy empty-return behaviour, but the
+    ///   aligned path (engine#34) refuses to silently impersonate a silent
+    ///   transcription — callers get an explicit error instead of a 200 OK with
+    ///   empty tokens that would be indistinguishable from genuine silence.
+    public func batchTranscribeAligned(samples: [Float], mode: AudioMode = .normal) async throws -> TranscriptionResult {
         guard let transcriber = createBatchTranscriber(mode: mode) else {
             print("YoozSTTEngine: Cannot batch transcribe - model not loaded")
-            return TranscriptionResult(tokens: [])
+            throw YoozSTTError.notReady
         }
 
         // Process all audio at once
