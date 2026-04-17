@@ -14,6 +14,9 @@ build/
 .swiftpm/
 Package.resolved
 
+# Release artifacts (built locally by scripts/release-engine.sh)
+dist/
+
 # Models (large binary files)
 YoozEngine/Resources/Models/*.mlpackage
 YoozEngine/Resources/Models/*.safetensors
