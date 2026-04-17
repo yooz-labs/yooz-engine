@@ -182,6 +182,11 @@ targets:
   # `#if canImport(VADModule)` so it compiles out cleanly here. The remaining
   # differentiation today is the VARIANT_WHISPER compile condition and bundle
   # identity; downstream slim variants (Notes, Voice) will drop more modules.
+  #
+  # A5 (#29): CODE_SIGN_ENTITLEMENTS points at the whisper-specific file so
+  # future permission tightening (e.g. dropping network.server once the host
+  # app proxies) doesn't churn the full engine's entitlements. The file is
+  # a verbatim copy of YoozEngine.entitlements today.
   YoozEngineWhisper:
     type: application
     platform: macOS
@@ -200,7 +205,7 @@ targets:
         PRODUCT_NAME: Yooz Engine (Whisper)
         INFOPLIST_FILE: YoozEngine/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
+        CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngineWhisper.entitlements
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
         ENABLE_HARDENED_RUNTIME: true
