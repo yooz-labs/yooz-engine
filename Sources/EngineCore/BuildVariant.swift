@@ -13,10 +13,13 @@ import Foundation
 public enum BuildVariant: String, Sendable, Codable {
     case full
     case whisper
+    case lite
 
     public static let current: BuildVariant = {
         #if VARIANT_WHISPER
         return .whisper
+        #elseif VARIANT_LITE
+        return .lite
         #else
         return .full
         #endif

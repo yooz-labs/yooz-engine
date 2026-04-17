@@ -11,7 +11,7 @@ struct EngineMenuView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Circle()
-                    .fill(server.isRunning ? .green : .red)
+                    .fill(statusColor)
                     .frame(width: 8, height: 8)
                 Text(statusText)
                     .font(.caption)
@@ -64,6 +64,16 @@ struct EngineMenuView: View {
                     }
                 }
             }
+        } else if server.state == .crashed {
+            Button("Restart Engine") {
+                Task {
+                    do {
+                        try await server.restart()
+                    } catch {
+                        server.logger.error("Failed to restart: \(error)")
+                    }
+                }
+            }
         } else {
             Text(server.state == .starting ? "Starting..." : "Stopping...")
                 .font(.caption)
@@ -83,12 +93,22 @@ struct EngineMenuView: View {
         .keyboardShortcut("q", modifiers: .command)
     }
 
+    private var statusColor: Color {
+        switch server.state {
+        case .running: return .green
+        case .crashed: return .orange
+        case .starting, .stopping: return .yellow
+        case .stopped: return .red
+        }
+    }
+
     private var statusText: String {
         switch server.state {
         case .running: return "Running on port \(EngineConfig.port)"
         case .starting: return "Starting..."
         case .stopping: return "Stopping..."
         case .stopped: return "Stopped"
+        case .crashed: return "Crashed — restart required"
         }
     }
 }

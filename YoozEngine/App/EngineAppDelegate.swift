@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(AppleSTTModule)
+import AppleSTTModule
+#endif
 import EngineCore
 import GrammarModule
 import SwiftUI
@@ -15,8 +18,25 @@ import VADModule
 @MainActor
 final class EngineAppDelegate: NSObject, NSApplicationDelegate {
     let server = APIServer()
+    private var crashObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Surface server crashes in the UI. The APIServer posts the
+        // notification from its crash watcher; we log it here so ops
+        // can see it in Console.app independent of the menu bar view.
+        let serverRef = server
+        crashObserver = NotificationCenter.default.addObserver(
+            forName: APIServer.crashedNotification,
+            object: server,
+            queue: .main
+        ) { note in
+            let reason = (note.userInfo?[APIServer.crashErrorKey] as? String) ?? "unknown"
+            // serverRef is captured by value (class reference). Its
+            // logger is a swift-log Logger — safe to call from any
+            // thread; swift-log synchronises internally.
+            serverRef.logger.error("Engine server crashed: \(reason)")
+        }
+
         Task {
             await registerModules()
 
@@ -33,6 +53,10 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // The app delegate lives for the app's lifetime; we do not need to
+    // remove the crash observer in deinit. Keeping the token reference
+    // alive until process exit is sufficient.
+
     /// Register every module compiled into this build variant.
     ///
     /// `#if canImport(...)` lets unlisted modules compile out silently for
@@ -47,6 +71,9 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
         #endif
         #if canImport(STTModule)
         await ModuleRegistry.shared.register(YoozSTTEngine.shared)
+        #endif
+        #if canImport(AppleSTTModule)
+        await ModuleRegistry.shared.register(AppleSTTEngine.shared)
         #endif
         #if canImport(VADModule)
         await ModuleRegistry.shared.register(VADEngine.shared)

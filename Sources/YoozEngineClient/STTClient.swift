@@ -49,6 +49,45 @@ public struct STTClient: Sendable {
         return response.languages
     }
 
+    // MARK: - Engine picker
+
+    /// The STT backend currently serving `/v1/stt/batch` + `/v1/stt/stream`.
+    public func currentEngineType() async throws -> STTEngineType {
+        try await engineInfo().current
+    }
+
+    /// All STT backends linked into the running build variant. Lite variants
+    /// return `[.appleSTT]`; full/whisper variants return all three.
+    public func availableEngineTypes() async throws -> [STTEngineType] {
+        try await engineInfo().available
+    }
+
+    /// Whether the currently selected backend performs its own endpointing
+    /// (voice activity detection). True for Apple STT; false for the MLX
+    /// backends. Clients use this to decide whether to run their own VAD.
+    public func hasBuiltInVAD() async throws -> Bool {
+        try await engineInfo().hasBuiltInVAD
+    }
+
+    /// Switch the active STT backend. Cancels any in-flight stream; the new
+    /// backend will load the current language on its next request.
+    ///
+    /// Throws `YoozEngineError.httpError(statusCode: 501)` when the requested
+    /// engine type isn't bundled in this build variant.
+    public func setEngineType(_ type: STTEngineType) async throws {
+        let body = try JSONEncoder().encode(STTEngineSwitchRequest(engine: type))
+        _ = try await engine.post("/v1/stt/engine", body: body)
+    }
+
+    /// Fetch the full engine-picker response in one round trip.
+    ///
+    /// Prefer this when you need `current` + `available` + capability bits;
+    /// the three `current/available/hasBuiltInVAD` helpers wrap this.
+    public func engineInfo() async throws -> STTEngineResponse {
+        let data = try await engine.get("/v1/stt/engine")
+        return try JSONDecoder().decode(STTEngineResponse.self, from: data)
+    }
+
     // MARK: - WebSocket Streaming
 
     /// Open a streaming STT session over WebSocket.

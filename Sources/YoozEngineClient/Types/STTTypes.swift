@@ -33,3 +33,55 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
     case korean = "ko"
     case cantonese = "yue"
 }
+
+// MARK: - Engine-picker wire types
+
+/// Identifies which STT backend the engine should route to.
+///
+/// Yooz Engine exposes three speech backends:
+/// - `.parakeet` — MLX Parakeet TDT (Latin/European languages, high accuracy,
+///    ~600 MB runtime)
+/// - `.fastConformer` — MLX FastConformer (Arabic, Persian; RTL scripts)
+/// - `.appleSTT` — Apple's built-in STT (`SFSpeechRecognizer` on macOS 14-25,
+///    `SpeechAnalyzer` on macOS 26+). Zero MLX footprint; the only backend
+///    linked into `YoozEngineLite`.
+///
+/// Picker lives server-side; clients consult `STTClient.availableEngineTypes()`
+/// to discover which are linked into the running build variant. Requesting an
+/// unbundled engine returns HTTP 501 `module_not_bundled`.
+public enum STTEngineType: String, Codable, Sendable, CaseIterable {
+    case parakeet
+    case fastConformer = "fast_conformer"
+    case appleSTT = "apple_stt"
+}
+
+/// Response body for `GET /v1/stt/engine`.
+///
+/// Advertises the currently active backend, every backend linked into the
+/// build variant, and capability flags clients need for dispatch (e.g.
+/// `hasBuiltInVAD` lets a client skip its own VAD pipeline when Apple STT
+/// is selected).
+public struct STTEngineResponse: Codable, Sendable, Equatable {
+    public let current: STTEngineType
+    public let available: [STTEngineType]
+    public let hasBuiltInVAD: Bool
+
+    public init(current: STTEngineType, available: [STTEngineType], hasBuiltInVAD: Bool) {
+        self.current = current
+        self.available = available
+        self.hasBuiltInVAD = hasBuiltInVAD
+    }
+}
+
+/// Request body for `POST /v1/stt/engine`.
+///
+/// Switching cancels any in-flight WebSocket stream for the session but does
+/// not reset the chosen language — the new engine will load the same language
+/// on its next transcribe call.
+public struct STTEngineSwitchRequest: Codable, Sendable, Equatable {
+    public let engine: STTEngineType
+
+    public init(engine: STTEngineType) {
+        self.engine = engine
+    }
+}
