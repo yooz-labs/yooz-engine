@@ -38,6 +38,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.core
         DEFINES_MODULE: "YES"
         SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
 
   GrammarModule:
     type: framework
@@ -49,6 +50,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.grammar
         DEFINES_MODULE: "YES"
         SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
@@ -64,6 +66,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.vad
         DEFINES_MODULE: "YES"
         SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
 
@@ -78,6 +81,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.llm
         DEFINES_MODULE: "YES"
         SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
       - package: mlx-swift
@@ -99,6 +103,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.stt
         DEFINES_MODULE: "YES"
         SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
       - package: mlx-swift
@@ -143,6 +148,48 @@ targets:
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
+  # Slim build variant: bundled into yooz-whisper.app as an embedded helper.
+  # Identical sources to the full YoozEngine target, but deliberately omits
+  # VADModule — whisper keeps VAD embedded locally in the client (A1 design §4).
+  # VAD-dependent code in APIServer/EngineAppDelegate is gated by
+  # `#if canImport(VADModule)` so it compiles out cleanly here. The remaining
+  # differentiation today is the VARIANT_WHISPER compile condition and bundle
+  # identity; downstream slim variants (Notes, Voice) will drop more modules.
+  YoozEngineWhisper:
+    type: application
+    platform: macOS
+    sources:
+      - path: YoozEngine
+        excludes:
+          - Grammar/**
+          - LLM/**
+          - STT/**
+          - TouchUp/**
+          - VAD/**
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.whisper
+        PRODUCT_NAME: Yooz Engine (Whisper)
+        INFOPLIST_FILE: YoozEngine/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        ENABLE_HARDENED_RUNTIME: true
+        LSUIElement: true
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "VARIANT_WHISPER"
+    dependencies:
+      - target: EngineCore
+      - target: GrammarModule
+      - target: LLMModule
+      - target: STTModule
+      - package: hummingbird
+        product: Hummingbird
+      - package: hummingbird-websocket
+        product: HummingbirdWebSocket
+      - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+        embed: false
+
   YoozEngineTests:
     type: bundle.unit-test
     platform: macOS
@@ -153,6 +200,13 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: YoozEngine
+      # Explicit module deps let tests `import` modules directly instead of
+      # relying on transitive framework search paths from the app target.
+      # ModulesEndpointTests uses real singletons (GrammarEngine, VADEngine)
+      # without mocks, per yooz-engine policy.
+      - target: EngineCore
+      - target: GrammarModule
+      - target: VADModule
 
   EngineCoreTests:
     type: bundle.unit-test

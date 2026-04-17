@@ -5,6 +5,13 @@ public struct TranscriptionResult: Codable, Sendable {
     public let finalized: String
     public let draft: String
     public let language: String?
+
+    public init(text: String, finalized: String, draft: String, language: String? = nil) {
+        self.text = text
+        self.finalized = finalized
+        self.draft = draft
+        self.language = language
+    }
 }
 
 public enum STTLanguage: String, Codable, Sendable, CaseIterable {

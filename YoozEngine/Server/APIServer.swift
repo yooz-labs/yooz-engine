@@ -11,7 +11,9 @@ import NIOCore
 #if canImport(STTModule)
 import STTModule
 #endif
+#if canImport(VADModule)
 import VADModule
+#endif
 
 @MainActor
 final class APIServer: ObservableObject {
@@ -98,11 +100,13 @@ final class APIServer: ObservableObject {
         await TouchUpEngine.shared.unload()
 
         // Reset VAD hidden/cell state to free memory
+        #if canImport(VADModule)
         do {
             try await VADEngine.shared.reset()
         } catch {
             logger.error("Failed to reset VAD state: \(error)")
         }
+        #endif
 
         serverTask?.cancel()
         _ = await serverTask?.result
@@ -161,7 +165,11 @@ final class APIServer: ObservableObject {
         router.get("/v1/health") { _, _ in
             let llmLoaded = await TouchUpEngine.shared.isLightModelLoaded
             let touchupReady = await TouchUpEngine.shared.isPreloaded
+            #if canImport(VADModule)
             let vadLoaded = await VADEngine.shared.isLoaded
+            #else
+            let vadLoaded = false
+            #endif
             return HealthResponse(
                 status: "ok",
                 version: EngineConfig.version,
@@ -173,6 +181,27 @@ final class APIServer: ObservableObject {
                     vad: vadLoaded,
                     tts: false
                 )
+            )
+        }
+
+        // Modules manifest: full per-module health + build variant.
+        // Uses a local sorted-keys encoder so `detail` dictionaries (and all
+        // JSON field names) come out in stable order for deterministic client
+        // consumption. `/v1/health` stays unchanged.
+        router.get("/v1/modules") { _, _ in
+            let modules = await ModuleRegistry.shared.all()
+            let response = await ModulesResponse.build(
+                from: modules,
+                engineVersion: EngineConfig.version,
+                buildVariant: BuildVariant.current.rawValue
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            let data = try encoder.encode(response)
+            return Response(
+                status: .ok,
+                headers: [.contentType: "application/json"],
+                body: .init(byteBuffer: ByteBuffer(data: data))
             )
         }
 
@@ -342,6 +371,12 @@ final class APIServer: ObservableObject {
         }
 
         // VAD: Detect speech segments
+        //
+        // Only registered when VADModule is linked into this build variant.
+        // Slim variants that embed their own VAD locally (e.g. whisper)
+        // don't ship this route; A4 (#28) adds a uniform 501 "module_not_bundled"
+        // response for unbundled modules. Until then, the route is simply absent.
+        #if canImport(VADModule)
         router.post("/v1/vad/detect") { [self] request, context in
             let body: VADDetectServerRequest
             do {
@@ -388,6 +423,7 @@ final class APIServer: ObservableObject {
                 )
             }
         }
+        #endif
 
         // STT: Available languages
         router.get("/v1/stt/languages") { _, _ in
