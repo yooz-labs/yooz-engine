@@ -1,0 +1,95 @@
+name: Release Notes
+
+# Triggered on tag push (v*). GitHub Actions has no macOS runners for Yooz
+# (per engine#23), so this workflow does NOT build the .app. Instead it:
+#   1. Validates the tag format (vMAJOR.MINOR.PATCH[-suffix]).
+#   2. Creates a draft GitHub release.
+#   3. Posts a release-body reminder that macOS .app artifacts must be
+#      built locally and uploaded via `gh release upload`.
+#
+# A6 (#30) local-only pipeline: see scripts/release-engine.sh and
+# docs/RELEASE.md for the manual build + sign + upload steps.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-notes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  draft-release:
+    name: Draft release + upload reminder
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag format
+        id: validate
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.\-]+)?$ ]]; then
+            echo "ERROR: tag '$tag' does not match vMAJOR.MINOR.PATCH[-suffix]" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.validate.outputs.tag }}
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          body_file="$(mktemp)"
+          # Unindented heredoc body so leading spaces do not turn the
+          # whole message into a markdown code block.
+          cat > "$body_file" <<EOF
+          # Yooz Engine ${VERSION}
+
+          _Draft created automatically from tag \`${TAG}\`._
+
+          ## macOS .app artifacts (manual upload)
+
+          GitHub Actions has no macOS runners for this repository (see
+          [#23](https://github.com/yooz-labs/yooz-engine/issues/23)). Build
+          and sign the artifacts locally, then upload them to this release:
+
+          \`\`\`bash
+          bash scripts/release-engine.sh
+          gh release upload ${TAG} \\
+              dist/YoozEngine.app.zip \\
+              dist/YoozEngineLite.app.zip \\
+              dist/YoozEngineWhisper.app.zip \\
+              dist/RELEASE.md
+          \`\`\`
+
+          Then edit this draft to paste the contents of \`dist/RELEASE.md\`
+          as the final release notes and publish.
+
+          See \`docs/RELEASE.md\` for the full runbook.
+          EOF
+          # Strip the YAML-script common indent (10 spaces) from every line.
+          sed -i.bak -E 's/^          //' "$body_file" && rm -f "${body_file}.bak"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $TAG already exists; updating draft body."
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+                  --draft \
+                  --notes-file "$body_file"
+          else
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                  --draft \
+                  --title "Yooz Engine ${VERSION}" \
+                  --notes-file "$body_file"
+          fi
