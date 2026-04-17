@@ -958,10 +958,27 @@ final class APIServer: ObservableObject {
                     // surfaces them. We still derive the full text from the
                     // token stream so the top-level `text` field stays
                     // consistent with the alignment.
-                    let aligned = await engine.batchTranscribeAligned(
-                        samples: body.samples,
-                        mode: mode
-                    )
+                    let aligned: TranscriptionResult
+                    do {
+                        aligned = try await engine.batchTranscribeAligned(
+                            samples: body.samples,
+                            mode: mode
+                        )
+                    } catch YoozSTTError.notReady {
+                        // Distinguishable from silent-input 200s: callers
+                        // get an explicit 503 when the model never came up.
+                        return errorResponse(
+                            status: .serviceUnavailable,
+                            message: "STT model is not loaded; call /v1/stt/load first",
+                            code: "stt_not_loaded"
+                        )
+                    } catch {
+                        return errorResponse(
+                            status: .internalServerError,
+                            message: error.localizedDescription,
+                            code: "stt_aligned_failed"
+                        )
+                    }
                     let wireTokens = aligned.tokens.map { tok in
                         AlignedTokenWire(
                             text: tok.text,

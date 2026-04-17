@@ -32,10 +32,11 @@ public struct TranscriptionResult: Codable, Sendable {
     public let finalized: String
     public let draft: String
     public let language: String?
-    /// Aligned tokens with timestamps. `nil` when the request did not opt into
-    /// alignment (`STTClient.transcribe`) or when the backend for the active
-    /// engine did not return alignment information. Present on every response
-    /// from `STTClient.batchTranscribeAligned` for the MLX + Apple backends.
+    /// Aligned tokens with timestamps. Non-nil (possibly empty) on every
+    /// response from `STTClient.batchTranscribeAligned` for the MLX + Apple
+    /// backends — the server ships `"tokens": []` on silent audio rather than
+    /// omitting the key. `nil` only on responses from `STTClient.transcribe`,
+    /// which never opts into the aligned path.
     public let tokens: [AlignedToken]?
 
     public init(
