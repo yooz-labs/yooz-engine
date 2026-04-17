@@ -42,12 +42,12 @@ log "engine version: $VERSION"
 TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 CONFIG="${YOOZ_ENGINE_CONFIG:-Debug}"
 
-# Keep the whisper-helper build aligned with the engine/lite configs. The
-# A5 script reads `YOOZ_HELPER_CONFIG` (its own legacy env); propagate
-# `YOOZ_ENGINE_CONFIG` unless the operator pinned `YOOZ_HELPER_CONFIG`.
-if [[ -n "${YOOZ_ENGINE_CONFIG:-}" && -z "${YOOZ_HELPER_CONFIG:-}" ]]; then
-    export YOOZ_HELPER_CONFIG="$YOOZ_ENGINE_CONFIG"
-fi
+# Force the whisper-helper build to the same config as the engine/lite
+# builds. The A5 script reads its own `YOOZ_HELPER_CONFIG` env var;
+# exporting `$CONFIG` here unconditionally prevents the manifest's
+# `- **Config:** <value>` row from drifting from the config each sub-build
+# actually used (I1 in the A6 review).
+export YOOZ_HELPER_CONFIG="$CONFIG"
 
 # -----------------------------------------------------------------------------
 # 1. Run the three build scripts. Each is independent; fail fast on error.
@@ -99,6 +99,11 @@ done
 # -----------------------------------------------------------------------------
 log "generating manifest: $MANIFEST"
 
+# Track any variant that ended up unsigned (codesign failure upstream would
+# already have aborted, but an unsigned bundle reaching this point means
+# something slipped through). Populated inside the manifest block below.
+UNSIGNED_VARIANTS=()
+
 {
     printf "# Yooz Engine Release %s\n\n" "$VERSION"
     printf "- **Built:** %s\n" "$TIMESTAMP"
@@ -123,10 +128,20 @@ log "generating manifest: $MANIFEST"
         zip_size="$(du -sh "$zip_path" 2>/dev/null | awk '{print $1}')"
         bin_sha="$(shasum -a 256 "$bin_path" | awk '{print $1}')"
         zip_sha="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
-        identity="$(codesign --display --verbose=2 "$app_path" 2>&1 \
+        codesign_out="$(codesign --display --verbose=2 "$app_path" 2>&1 || true)"
+        identity="$(printf '%s\n' "$codesign_out" \
             | grep -E '^Authority=' | head -1 \
             | sed -E 's/^Authority=//' || true)"
-        [[ -z "$identity" ]] && identity="(ad-hoc)"
+        sig_line="$(printf '%s\n' "$codesign_out" \
+            | grep -E '^Signature=' | head -1 || true)"
+        if [[ -n "$identity" ]]; then
+            :  # Developer ID / Apple Development / etc. — use identity as-is.
+        elif [[ "$sig_line" == "Signature=adhoc" ]]; then
+            identity="ad-hoc"
+        else
+            identity="unsigned (WARN)"
+            UNSIGNED_VARIANTS+=("$name")
+        fi
 
         printf "| \`%s\` | \`%s\` | %s | \`%s\` | %s |\n" \
             "$name" "$name" "$app_size" "$bin_sha" "$identity"
@@ -155,6 +170,22 @@ log "generating manifest: $MANIFEST"
     printf "shasum -a 256 \"YoozEngine.app/Contents/MacOS/Yooz Engine\"\n"
     printf '```\n'
 } > "$MANIFEST"
+
+# -----------------------------------------------------------------------------
+# 4b. Hard-fail if any variant reached the manifest unsigned. The manifest
+#     is still written so operators can see which variant slipped; a
+#     non-zero exit prevents the release from being published (I2 in the
+#     A6 review).
+# -----------------------------------------------------------------------------
+if (( ${#UNSIGNED_VARIANTS[@]} > 0 )); then
+    printf "\n"
+    printf "[release-engine] WARN: unsigned bundle(s) detected in manifest:\n" >&2
+    for v in "${UNSIGNED_VARIANTS[@]}"; do
+        printf "[release-engine] WARN:   - %s\n" "$v" >&2
+    done
+    printf "[release-engine] WARN: refusing to exit clean; inspect build logs under %s\n" "$BUILD_DIR" >&2
+    exit 1
+fi
 
 # -----------------------------------------------------------------------------
 # 5. Summary

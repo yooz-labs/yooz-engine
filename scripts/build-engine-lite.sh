@@ -27,8 +27,11 @@ DIST_APP="$DIST_DIR/YoozEngineLite.app"
 DERIVED_DATA="$ROOT/.build/DerivedData-EngineLite"
 BUILD_LOG="$ROOT/.build/engine-lite-build.log"
 IDENTITY="${YOOZ_SIGNING_IDENTITY:-}"
-# Lite shares the full engine's entitlements today (see project.yml).
-ENTITLEMENTS="$ROOT/YoozEngine/YoozEngine.entitlements"
+# Prefer a Lite-specific entitlements file if one ever lands; fall back to
+# the full engine's entitlements (current state per project.yml). Mirrors
+# the pattern in build-whisper-helper.sh:147-149.
+ENTITLEMENTS="$ROOT/YoozEngine/YoozEngineLite.entitlements"
+[[ -f "$ENTITLEMENTS" ]] || ENTITLEMENTS="$ROOT/YoozEngine/YoozEngine.entitlements"
 
 log() { printf "[build-engine-lite] %s\n" "$*"; }
 fail() { printf "[build-engine-lite] ERROR: %s\n" "$*" >&2; exit 1; }
