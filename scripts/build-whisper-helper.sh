@@ -24,7 +24,7 @@ ROOT="$(pwd)"
 
 PROJECT="YoozEngine.xcodeproj"
 SCHEME="YoozEngineWhisper"
-CONFIG="Release"
+CONFIG="${YOOZ_HELPER_CONFIG:-Debug}"  # #38: Release SPM embed transitive deps broken; Debug embeds via rpath chain
 APP_NAME="Yooz Engine (Whisper).app"
 DIST_DIR="$ROOT/dist"
 DIST_APP="$DIST_DIR/YoozEngineWhisper.app"
@@ -104,6 +104,26 @@ BUILT_APP="$DERIVED_DATA/Build/Products/$CONFIG/$APP_NAME"
 log "staging → $DIST_APP"
 rm -rf "$DIST_APP"
 cp -R "$BUILT_APP" "$DIST_APP"
+
+# -----------------------------------------------------------------------------
+# 5b. Copy SPM PackageFrameworks that xcodebuild linked but did not embed.
+#     Transitive deps from STTModule/LLMModule (MLX, MLXNN, MLXLLM, etc.)
+#     aren't auto-embedded even when the products are direct app-target deps
+#     (tried; SPM resolution fails in Release — see #38). Post-build copy is
+#     the pragmatic workaround until the SPM graph is flattened.
+# -----------------------------------------------------------------------------
+PKG_FRAMEWORKS_SRC="$DERIVED_DATA/Build/Products/$CONFIG/PackageFrameworks"
+DIST_FRAMEWORKS="$DIST_APP/Contents/Frameworks"
+if [[ -d "$PKG_FRAMEWORKS_SRC" ]]; then
+    log "copying PackageFrameworks → Contents/Frameworks"
+    for fw in "$PKG_FRAMEWORKS_SRC"/*.framework; do
+        [[ -d "$fw" ]] || continue
+        name="$(basename "$fw")"
+        [[ -d "$DIST_FRAMEWORKS/$name" ]] && continue  # already embedded by Xcode
+        log "  copy: $name"
+        cp -R "$fw" "$DIST_FRAMEWORKS/"
+    done
+fi
 
 # -----------------------------------------------------------------------------
 # 6. Sign every embedded framework and dylib, then the app itself.
