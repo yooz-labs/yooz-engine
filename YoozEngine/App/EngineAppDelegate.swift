@@ -21,6 +21,14 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
     private var crashObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Helper mode: remove any UI presence. `MenuBarExtra(isInserted:)`
+        // with a constant-false binding leaves a ghost slot in some macOS
+        // versions; `.prohibited` activation policy guarantees no menu-bar
+        // icon, no dock tile, no ⌘-Tab entry.
+        if EngineConfig.isHelper {
+            NSApp.setActivationPolicy(.prohibited)
+        }
+
         // Surface server crashes in the UI. The APIServer posts the
         // notification from its crash watcher; we log it here so ops
         // can see it in Console.app independent of the menu bar view.
