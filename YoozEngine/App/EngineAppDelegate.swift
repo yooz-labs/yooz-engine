@@ -44,11 +44,28 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
                 try await server.start()
             } catch {
                 server.logger.error("Failed to start server: \(error)")
-                let alert = NSAlert()
-                alert.messageText = "Yooz Engine Failed to Start"
-                alert.informativeText = error.localizedDescription
-                alert.alertStyle = .critical
-                alert.runModal()
+                // In helper mode the host app owns user-facing UI; a modal
+                // alert from an embedded helper is very bad UX (and can hang
+                // if the helper's NSApplication has no key window). Log-only
+                // when headless; exit nonzero so the host app's launch
+                // sequence can detect the failure via process termination.
+                if EngineConfig.isHelper {
+                    // Shut any partially-initialised Hummingbird resources
+                    // down cleanly before exiting. `NSApplication.terminate(_:)`
+                    // posts an async event and does not guarantee the exit
+                    // code, which would make whisper's crash observer see a
+                    // clean (zero-status) shutdown. `exit(EX_SOFTWARE)` is a
+                    // synchronous non-zero exit whisper can distinguish from a
+                    // normal termination.
+                    await server.stop()
+                    exit(EX_SOFTWARE)
+                } else {
+                    let alert = NSAlert()
+                    alert.messageText = "Yooz Engine Failed to Start"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .critical
+                    alert.runModal()
+                }
             }
         }
     }

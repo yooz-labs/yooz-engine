@@ -179,6 +179,12 @@ actor ModelDownloader {
         return try await downloadFile(from: releaseURL, expectedSize: modelType.estimatedSize, progressHandler: progressHandler)
     }
 
+    /// Downloads a blob to a temp file using
+    /// `URLSession.download(for:delegate:)`. Progress is streamed via a
+    /// per-task `URLSessionDownloadDelegate`; the system writes directly
+    /// to a temp file — no per-byte Swift loop and no in-memory
+    /// accumulation. See `STTModelDownloader.downloadFile` for the same
+    /// pattern in the STT module.
     private func downloadFile(
         from url: URL,
         expectedSize: Int64,
@@ -194,66 +200,27 @@ actor ModelDownloader {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        // Use bytes(for:) for granular progress tracking
-        let (asyncBytes, response) = try await session.bytes(for: request)
+        let progressDelegate = LLMDownloadProgressDelegate(
+            expectedSize: expectedSize,
+            progressHandler: progressHandler
+        )
+
+        progressHandler(0.0)
+        let (tempDownloadURL, response) = try await session.download(
+            for: request,
+            delegate: progressDelegate
+        )
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             logger.error("Download failed with status \(statusCode)")
+            try? fileManager.removeItem(at: tempDownloadURL)
             throw DownloadError.httpError(statusCode)
         }
 
-        // Get actual size from response or use expected
-        let totalSize = httpResponse.expectedContentLength > 0
-            ? httpResponse.expectedContentLength
-            : expectedSize
-
-        // Write bytes to file with progress updates
         try? fileManager.removeItem(at: tempFile)
-        fileManager.createFile(atPath: tempFile.path, contents: nil)
-        let outputHandle = try FileHandle(forWritingTo: tempFile)
-
-        var success = false
-        defer {
-            if !success {
-                try? outputHandle.close()
-                try? fileManager.removeItem(at: tempFile)
-            }
-        }
-
-        var bytesReceived: Int64 = 0
-        var lastReportedProgress = 0
-        var buffer = Data()
-        let bufferSize = 65536 // 64KB buffer
-
-        progressHandler(0.0)
-
-        for try await byte in asyncBytes {
-            buffer.append(byte)
-            bytesReceived += 1
-
-            // Write in chunks for efficiency
-            if buffer.count >= bufferSize {
-                try outputHandle.write(contentsOf: buffer)
-                buffer.removeAll(keepingCapacity: true)
-
-                // Report progress every 5%
-                let currentProgress = Int((Double(bytesReceived) / Double(totalSize)) * 100)
-                if currentProgress >= lastReportedProgress + 5 {
-                    lastReportedProgress = currentProgress
-                    progressHandler(Double(bytesReceived) / Double(totalSize))
-                }
-            }
-        }
-
-        // Write remaining buffer
-        if !buffer.isEmpty {
-            try outputHandle.write(contentsOf: buffer)
-        }
-        try outputHandle.close()
-
-        success = true
+        try fileManager.moveItem(at: tempDownloadURL, to: tempFile)
         progressHandler(1.0)
         return tempFile
     }
@@ -291,6 +258,52 @@ actor ModelDownloader {
             }
         }
         return size
+    }
+}
+
+// MARK: - URLSession download progress delegate
+
+/// Streams progress from `URLSession.download(for:delegate:)` to a
+/// Sendable handler. Mirrors `DownloadProgressDelegate` in the STT
+/// module — kept separate so each module owns its own progress
+/// translation without cross-module imports.
+private final class LLMDownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let expectedSize: Int64
+    private let progressHandler: @Sendable (Double) -> Void
+    private let lock = NSLock()
+    private var lastReportedPercent: Int = 0
+
+    init(expectedSize: Int64, progressHandler: @escaping @Sendable (Double) -> Void) {
+        self.expectedSize = expectedSize
+        self.progressHandler = progressHandler
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : expectedSize
+        guard total > 0 else { return }
+        let ratio = Double(totalBytesWritten) / Double(total)
+        let pct = Int(ratio * 100)
+        lock.lock()
+        let shouldReport = pct >= lastReportedPercent + 5
+        if shouldReport { lastReportedPercent = pct }
+        lock.unlock()
+        if shouldReport {
+            progressHandler(min(max(ratio, 0.0), 1.0))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        // `download(for:delegate:)` returns the temp URL to the caller; no work needed here.
     }
 }
 

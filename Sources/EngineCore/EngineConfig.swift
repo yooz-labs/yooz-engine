@@ -15,6 +15,22 @@ public enum EngineConfig {
     public static let host: String = "127.0.0.1"
     public static let version: String = "0.6.0"
 
+    /// Environment variable host apps set when launching the engine as an
+    /// embedded helper. When `YOOZ_ENGINE_HEADLESS=1` the app suppresses its
+    /// menu-bar UI and Settings scene, but still starts the API server and
+    /// writes to the same OSLog subsystem. This contract is consumed by
+    /// `YoozEngineApp` and `EngineAppDelegate`; host apps (e.g. yooz-whisper's
+    /// `EngineHelperController`) must pass the variable through
+    /// `NSWorkspace.OpenConfiguration.environment` when spawning the helper.
+    public static let headlessEnvVar = "YOOZ_ENGINE_HEADLESS"
+
+    /// `true` when the engine process was launched with
+    /// `YOOZ_ENGINE_HEADLESS=1`. Used to gate menu-bar/Settings UI, modal
+    /// alerts, and any other host-app-inappropriate behaviour.
+    public static var isHelper: Bool {
+        ProcessInfo.processInfo.environment[headlessEnvVar] == "1"
+    }
+
     /// `~/Library/Application Support/YoozEngine/Models` — long-lived model
     /// artifacts keyed by `LLMModelType.rawValue` or STT model identifier.
     public static let modelsDirectory: URL = {
