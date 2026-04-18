@@ -307,4 +307,160 @@ final class STTModuleTests: XCTestCase {
         XCTAssertEqual(starts, starts.sorted(),
                        "AlignedToken.start must be monotonically non-decreasing")
     }
+
+    // MARK: - Legacy whisper path resolution (always runs, tmp fixture)
+
+    /// Build a tmp Application Support fixture with a whisper variant that
+    /// holds a minimal "model" (config.json + empty .safetensors).
+    /// Returns the root so tests can point `resolveLegacyPaths` at it
+    /// without touching the real user ~/Library.
+    private func makeLegacyFixture(
+        variants: [String],
+        slug: String
+    ) throws -> URL {
+        let root = FileManager.default
+            .temporaryDirectory
+            .appendingPathComponent("yooz-stt-legacy-\(UUID().uuidString)", isDirectory: true)
+        for variant in variants {
+            let dir = root
+                .appendingPathComponent(variant, isDirectory: true)
+                .appendingPathComponent(slug, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: dir.appendingPathComponent("config.json"))
+            try Data().write(to: dir.appendingPathComponent("model.safetensors"))
+        }
+        return root
+    }
+
+    func testResolveLegacyPathsFindsDevVariant() throws {
+        // Regression for the dev whisper build: fresh machine, only the
+        // `.dev` variant is installed, the engine must still adopt the
+        // model from Application Support rather than attempting a
+        // 700MB GHCR download.
+        let descriptor = STTModelDescriptor.parakeetTDT06B
+        let slug = try XCTUnwrap(descriptor.legacyWhisperSlug)
+        let root = try makeLegacyFixture(
+            variants: ["live.yooz.whisper.dev"],
+            slug: slug
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let found = descriptor.resolveLegacyPaths(appSupportRoot: root)
+        let expected = root
+            .appendingPathComponent("live.yooz.whisper.dev")
+            .appendingPathComponent(slug)
+        XCTAssertTrue(
+            found.contains { $0.standardizedFileURL.path == expected.standardizedFileURL.path },
+            "dev variant path must be in the resolved candidate list; got \(found.map(\.path))"
+        )
+    }
+
+    func testResolveLegacyPathsOrdersStableDevBeta() throws {
+        // All three fixed variants present. Priority order is
+        // stable → dev → beta because if a stable build is installed
+        // we assume it's the user's "real" model; the dev/beta entries
+        // are fallbacks for machines that never had the stable build.
+        let descriptor = STTModelDescriptor.parakeetTDT06B
+        let slug = try XCTUnwrap(descriptor.legacyWhisperSlug)
+        let root = try makeLegacyFixture(
+            variants: [
+                "live.yooz.whisper",
+                "live.yooz.whisper.dev",
+                "live.yooz.whisper.beta"
+            ],
+            slug: slug
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let found = descriptor.resolveLegacyPaths(appSupportRoot: root)
+        // Substring match is slug-independent: any change to the slug
+        // (single- vs multi-component) keeps the test meaningful.
+        let topThree = found.prefix(3).map(\.path)
+        XCTAssertEqual(topThree.count, 3)
+        XCTAssertTrue(topThree[0].contains("/live.yooz.whisper/"),
+                      "first fixed candidate must be stable whisper; got \(topThree[0])")
+        XCTAssertTrue(topThree[1].contains("/live.yooz.whisper.dev/"),
+                      "second fixed candidate must be dev whisper; got \(topThree[1])")
+        XCTAssertTrue(topThree[2].contains("/live.yooz.whisper.beta/"),
+                      "third fixed candidate must be beta whisper; got \(topThree[2])")
+    }
+
+    func testResolveLegacyPathsPicksUpUnknownLiveYoozVariant() throws {
+        // Future variant discovery: a `live.yooz.whisper.internal` build
+        // should be found via the wildcard scan without a code change.
+        let descriptor = STTModelDescriptor.parakeetTDT06B
+        let slug = try XCTUnwrap(descriptor.legacyWhisperSlug)
+        let root = try makeLegacyFixture(
+            variants: ["live.yooz.whisper.internal"],
+            slug: slug
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let found = descriptor.resolveLegacyPaths(appSupportRoot: root)
+        let expected = root
+            .appendingPathComponent("live.yooz.whisper.internal")
+            .appendingPathComponent(slug)
+        XCTAssertTrue(
+            found.contains { $0.standardizedFileURL.path == expected.standardizedFileURL.path },
+            "wildcard scan must surface future live.yooz.* variants; got \(found.map(\.path))"
+        )
+    }
+
+    func testResolveLegacyPathsSkipsEngineOwnDir() throws {
+        // Defensive: the engine's own app-support dir must never be
+        // treated as a legacy whisper candidate, even if someone
+        // accidentally creates a `Models/parakeet-tdt-0.6b-en` tree
+        // under `live.yooz.engine` (which would otherwise be picked up
+        // by the `live.yooz.*` wildcard scan).
+        let descriptor = STTModelDescriptor.parakeetTDT06B
+        let slug = try XCTUnwrap(descriptor.legacyWhisperSlug)
+        let root = try makeLegacyFixture(
+            variants: ["live.yooz.engine"],
+            slug: slug
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let found = descriptor.resolveLegacyPaths(appSupportRoot: root)
+        for url in found {
+            XCTAssertFalse(
+                url.path.contains("live.yooz.engine"),
+                "resolver must never return the engine's own app-support dir; got \(url.path)"
+            )
+        }
+    }
+
+    func testResolveLegacyPathsEmptyWhenSlugNil() {
+        // A descriptor without a legacy slug must return an empty list,
+        // not the three fixed URLs with a trailing nil path component.
+        let descriptor = STTModelDescriptor(
+            identifier: "no-legacy",
+            ghcrPackage: "yooz-models",
+            ghcrArtifact: "no-legacy",
+            estimatedSize: 0,
+            legacyWhisperSlug: nil
+        )
+        let root = FileManager.default.temporaryDirectory
+        XCTAssertTrue(descriptor.resolveLegacyPaths(appSupportRoot: root).isEmpty)
+    }
+
+    func testLegacyCandidateIsCompleteRequiresConfigAndWeights() throws {
+        // Config without weights should not be adopted (torn download).
+        let root = FileManager.default
+            .temporaryDirectory
+            .appendingPathComponent("yooz-stt-torn-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data("{}".utf8).write(to: root.appendingPathComponent("config.json"))
+        XCTAssertFalse(
+            STTModelDownloader.legacyCandidateIsComplete(root),
+            "config-only directory must not be treated as a valid legacy candidate"
+        )
+
+        try Data().write(to: root.appendingPathComponent("model.safetensors"))
+        XCTAssertTrue(
+            STTModelDownloader.legacyCandidateIsComplete(root),
+            "config + .safetensors must count as a valid legacy candidate"
+        )
+    }
 }

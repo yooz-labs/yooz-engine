@@ -38,6 +38,16 @@ public actor TouchUpEngine {
     /// Whether the engine has been preloaded
     public private(set) var isPreloaded: Bool = false
 
+    /// User-preferred LLM for touch-up. Routing inside `process()` remains
+    /// mode-based (light-fast path, quality when replacements warrant it);
+    /// this property exists so thin clients can round-trip a dropdown
+    /// selection through the server. Held for the engine process lifetime
+    /// only — clients that need cross-session persistence must cache
+    /// their own selection and re-apply via `POST /v1/llm/model` on
+    /// reconnect. Wire contract: `LLMModelType.rawValue` surfaced by
+    /// `GET /v1/llm/models.current` and set by `POST /v1/llm/model`.
+    public private(set) var preferredModel: LLMModelType = .yoozLight
+
     /// Whether the light model is loaded
     public var isLightModelLoaded: Bool {
         get async {
@@ -152,6 +162,54 @@ public actor TouchUpEngine {
         }
         isPreloaded = false
         logger.info("TouchUpEngine unloaded")
+    }
+
+    /// Unload a single model's weights from memory. Used by whisper's
+    /// AI tab when the user switches to "touch-up off" or picks a
+    /// different model — reclaims GPU memory without tearing down the
+    /// whole engine. Idempotent: unloading an already-unloaded model
+    /// is a no-op.
+    public func unload(_ modelType: LLMModelType) async {
+        switch modelType {
+        case .yoozLight:
+            if let light = lightModel {
+                await light.unload()
+            }
+        case .yoozQuality:
+            if let quality = qualityModel {
+                await quality.unload()
+            }
+        }
+    }
+
+    /// Record the user-preferred LLM. Does not load weights — call
+    /// `preloadModel(_:)` (or the /v1/llm/preload route) to warm
+    /// the model after switching.
+    public func setPreferredModel(_ modelType: LLMModelType) {
+        preferredModel = modelType
+        logger.info("TouchUpEngine preferredModel set to \(modelType.rawValue, privacy: .public)")
+    }
+
+    /// Ensure a specific model's weights are resident. Idempotent;
+    /// loads the light model in-place (it is embedded in the app
+    /// bundle) and triggers a GHCR download for the quality model on
+    /// first use. Invoked by `POST /v1/llm/preload`.
+    public func preloadModel(_ modelType: LLMModelType) async throws {
+        switch modelType {
+        case .yoozLight:
+            if lightModel == nil {
+                lightModel = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
+            }
+            guard let light = lightModel else {
+                throw LLMError.notLoaded
+            }
+            if await !light.isLoaded {
+                try await light.load()
+                logger.info("Yooz-Light model preloaded on demand")
+            }
+        case .yoozQuality:
+            try await loadQualityModel()
+        }
     }
 
     // MARK: - Raw LLM Generation

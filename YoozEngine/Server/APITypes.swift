@@ -185,6 +185,31 @@ struct LLMGenerateServerResponse: ResponseCodable {
     let processingTimeMs: Int?
 }
 
+// MARK: - LLM Model Management Types
+
+/// Wire body for `GET /v1/llm/models` response. Field set mirrors the
+/// SDK's `LLMModelInfo` exactly so JSON round-trips through the thin
+/// client without custom CodingKeys.
+struct LLMModelInfoServer: ResponseCodable {
+    let id: String
+    let displayName: String
+    let sizeBytes: Int64?
+    let loaded: Bool
+    let latencyHintMs: Int?
+}
+
+struct LLMModelsServerResponse: ResponseCodable {
+    let current: String
+    let available: [LLMModelInfoServer]
+}
+
+/// Shared body for `POST /v1/llm/model`, `POST /v1/llm/preload`, and
+/// `POST /v1/llm/unload`. Single field so new options can be added
+/// without breaking existing clients.
+struct LLMModelSelectionRequest: Decodable {
+    let model: String
+}
+
 // MARK: - TouchUp Types
 
 struct TouchUpServerRequest: Decodable {

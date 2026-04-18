@@ -22,3 +22,57 @@ public struct TouchUpClient: Sendable {
         return response.result
     }
 }
+
+// MARK: - LLM model management
+//
+// These helpers target the LLM routes (`/v1/llm/*`) but live on
+// `TouchUpClient` intentionally: the whisper AI settings surface the
+// selection under "Touch-up Model", so the thin client's UI code binds
+// it next to `process(...)`. Routing is still mode-based inside the
+// engine — `setModel` records a user preference that clients can read
+// back via `currentModel()` and that whisper uses to restore dropdown
+// state on relaunch. Actual load/unload of model weights happens via
+// `preloadModel` / `unloadModel`, which call through to TouchUpEngine.
+
+extension TouchUpClient {
+    /// Fetch the catalogue of LLM models the engine knows about, including
+    /// per-model load state and the currently selected model id.
+    public func availableModels() async throws -> LLMModelsResponse {
+        let data = try await engine.get("/v1/llm/models")
+        return try JSONDecoder().decode(LLMModelsResponse.self, from: data)
+    }
+
+    /// Convenience: return just the id of the currently selected model
+    /// (process-lifetime preference held by the engine). Equivalent to
+    /// `availableModels().current` but saves a round of field decoding
+    /// on the caller side.
+    public func currentModel() async throws -> String {
+        try await availableModels().current
+    }
+
+    /// Record `id` as the preferred model. The engine holds this for
+    /// the lifetime of its process; clients that need cross-session
+    /// persistence should cache their own selection and re-apply via
+    /// `setModel(_:)` after reconnect. Does not load weights — use
+    /// `preloadModel(_:)` when the UI wants the model warm before the
+    /// first request.
+    public func setModel(_ id: String) async throws {
+        let body = try JSONEncoder().encode(LLMModelSelection(model: id))
+        _ = try await engine.post("/v1/llm/model", body: body)
+    }
+
+    /// Ensure the named model is loaded and resident. Idempotent:
+    /// already-loaded models return immediately. Used by whisper to
+    /// warm the model when the user opens the AI tab.
+    public func preloadModel(_ id: String) async throws {
+        let body = try JSONEncoder().encode(LLMModelSelection(model: id))
+        _ = try await engine.post("/v1/llm/preload", body: body)
+    }
+
+    /// Free the named model's weights from memory. Whisper uses this to
+    /// reclaim GPU memory when the user toggles touch-up off.
+    public func unloadModel(_ id: String) async throws {
+        let body = try JSONEncoder().encode(LLMModelSelection(model: id))
+        _ = try await engine.post("/v1/llm/unload", body: body)
+    }
+}

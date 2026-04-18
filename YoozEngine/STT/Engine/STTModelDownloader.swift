@@ -16,28 +16,33 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "STTModelDo
 /// The identifier is the on-disk directory name under
 /// `EngineConfig.modelsDirectory` (which is what `YoozSTTEngine.getModelDirectory`
 /// already searches). `ghcrPackage` is the GHCR OCI package name; `ghcrArtifact`
-/// is the tag/artifact within that package. `legacyWhisperPath` is a concrete
-/// absolute path on disk that the old yooz-whisper app wrote to, used as a
-/// transient fallback while GHCR artifacts are being published.
+/// is the tag/artifact within that package.
+///
+/// `legacyWhisperSlug` is the per-model subpath (e.g.
+/// `Models/parakeet-tdt-0.6b-en`) that stable/dev/beta whisper variants
+/// wrote under their Application Support directories. It's paired with a
+/// per-descriptor resolver that scans every `live.yooz.*` app support dir
+/// for that slug, so a dev whisper install (`live.yooz.whisper.dev`) gets
+/// picked up automatically. See `STTModelDescriptor.resolveLegacyPaths`.
 public struct STTModelDescriptor: Sendable, Equatable {
     public let identifier: String
     public let ghcrPackage: String
     public let ghcrArtifact: String
     public let estimatedSize: Int64
-    public let legacyWhisperPath: URL?
+    public let legacyWhisperSlug: String?
 
     public init(
         identifier: String,
         ghcrPackage: String,
         ghcrArtifact: String,
         estimatedSize: Int64,
-        legacyWhisperPath: URL? = nil
+        legacyWhisperSlug: String? = nil
     ) {
         self.identifier = identifier
         self.ghcrPackage = ghcrPackage
         self.ghcrArtifact = ghcrArtifact
         self.estimatedSize = estimatedSize
-        self.legacyWhisperPath = legacyWhisperPath
+        self.legacyWhisperSlug = legacyWhisperSlug
     }
 }
 
@@ -49,21 +54,87 @@ extension STTModelDescriptor {
     ///
     /// NOTE: GHCR and GitHub Releases artifacts for this package are not yet
     /// published (tracked as engine#41). Until that ships, resolution on a
-    /// fresh machine relies on `legacyWhisperPath`; the GHCR/Releases paths
-    /// exist so the code is ready the moment the publish pipeline lands.
+    /// fresh machine relies on the legacy whisper path resolver; the
+    /// GHCR/Releases paths exist so the code is ready the moment the publish
+    /// pipeline lands.
     public static let parakeetTDT06B: STTModelDescriptor = {
-        let legacy = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent("live.yooz.whisper/Models/parakeet-tdt-0.6b-en")
-        return STTModelDescriptor(
+        STTModelDescriptor(
             identifier: "parakeet-tdt",
             ghcrPackage: "yooz-models",
             ghcrArtifact: "stt-parakeet-tdt-0.6b",
             estimatedSize: 700 * 1024 * 1024, // ~700 MB packed
-            legacyWhisperPath: legacy
+            legacyWhisperSlug: "Models/parakeet-tdt-0.6b-en"
         )
     }()
+
+    /// All candidate legacy whisper directories for this descriptor, in
+    /// priority order. Pure; takes the Application Support root as a
+    /// parameter so it can be unit-tested against a tmp fixture without
+    /// touching the user's real `~/Library/Application Support`.
+    ///
+    /// Search scope (broadened in the v0.6.0 epic after a dev whisper
+    /// build came up on a fresh machine and the engine couldn't find the
+    /// `.dev` Application Support copy):
+    ///   1. `live.yooz.whisper/<slug>`           — stable whisper
+    ///   2. `live.yooz.whisper.dev/<slug>`       — dev whisper
+    ///   3. `live.yooz.whisper.beta/<slug>`      — beta whisper
+    ///   4. Any `live.yooz.*` directory with the slug under it — catches
+    ///      future variants (e.g. `live.yooz.whisper.internal`) without
+    ///      needing a code change.
+    ///
+    /// Entries are deduplicated while preserving first-seen order so an
+    /// explicit `.dev` entry from the fixed list isn't shadowed by the
+    /// wildcard scan.
+    ///
+    /// Returns `[]` when `legacyWhisperSlug` is nil, meaning this model
+    /// has no legacy fallback.
+    public func resolveLegacyPaths(appSupportRoot: URL) -> [URL] {
+        guard let slug = legacyWhisperSlug else { return [] }
+
+        var seen: Set<String> = []
+        var out: [URL] = []
+
+        func addIfNew(_ url: URL) {
+            let key = url.standardizedFileURL.path
+            if seen.insert(key).inserted {
+                out.append(url)
+            }
+        }
+
+        // Fixed, high-priority candidates.
+        for suffix in ["live.yooz.whisper",
+                       "live.yooz.whisper.dev",
+                       "live.yooz.whisper.beta"] {
+            addIfNew(
+                appSupportRoot
+                    .appendingPathComponent(suffix, isDirectory: true)
+                    .appendingPathComponent(slug)
+            )
+        }
+
+        // Wildcard: enumerate every `live.yooz.*` app support dir that
+        // holds this slug. Non-throwing; we just skip if the root dir is
+        // unreadable (fresh account, enumerator failure, sandbox).
+        if let entries = try? FileManager.default.contentsOfDirectory(
+            at: appSupportRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for entry in entries {
+                let name = entry.lastPathComponent
+                guard name.hasPrefix("live.yooz.") else { continue }
+                // Defensive: skip the engine's own dir so we never try to
+                // "import" models from ourselves.
+                if name == "YoozEngine" || name.hasPrefix("live.yooz.engine") {
+                    continue
+                }
+                let candidate = entry.appendingPathComponent(slug)
+                addIfNew(candidate)
+            }
+        }
+
+        return out
+    }
 }
 
 // MARK: - STT Model Downloader
@@ -157,13 +228,25 @@ public actor STTModelDownloader {
             withIntermediateDirectories: true
         )
 
-        // 1. Legacy yooz-whisper location — copy/symlink without network.
-        if let legacy = descriptor.legacyWhisperPath,
-           fileManager.fileExists(atPath: legacy.appendingPathComponent("config.json").path) {
-            logger.info("Importing STT model from legacy whisper path: \(legacy.path, privacy: .public)")
-            try adoptLegacyModel(from: legacy, to: modelDir)
-            progressHandler(1.0)
-            return modelDir
+        // 1. Legacy yooz-whisper location(s) — copy (not symlink) without
+        //    network. v0.6.0 broadens this from a single
+        //    `live.yooz.whisper` path to also include `.dev`, `.beta`,
+        //    and any `live.yooz.*` app-support dir that holds the slug.
+        //    See `STTModelDescriptor.resolveLegacyPaths`.
+        let appSupport = fileManager
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first
+        if let appSupport = appSupport {
+            let candidates = descriptor.resolveLegacyPaths(appSupportRoot: appSupport)
+            for legacy in candidates {
+                guard Self.legacyCandidateIsComplete(legacy) else { continue }
+                logger.info(
+                    "Importing STT model from legacy whisper path: \(legacy.path, privacy: .public)"
+                )
+                try adoptLegacyModel(from: legacy, to: modelDir)
+                progressHandler(1.0)
+                return modelDir
+            }
         }
 
         // 2/3. Network path — OCI with GitHub Releases fallback.
@@ -193,6 +276,33 @@ public actor STTModelDownloader {
     }
 
     // MARK: - Legacy adoption
+
+    /// Verify a legacy candidate directory holds a usable model: a
+    /// `config.json` at the root plus at least one weights file
+    /// (`.safetensors` or `.npz`) anywhere in the tree. Mirrors the
+    /// `isCached` contract so a torn legacy download (config landed,
+    /// weights didn't) isn't adopted and then misdiagnosed as a cache
+    /// hit on the next launch.
+    static func legacyCandidateIsComplete(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
+            return false
+        }
+        guard let enumerator = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        for case let url as URL in enumerator {
+            let ext = url.pathExtension.lowercased()
+            if ext == "safetensors" || ext == "npz" {
+                return true
+            }
+        }
+        return false
+    }
 
     /// Copy the weights from the old yooz-whisper location into the engine's
     /// models directory. We copy rather than symlink so that if the host

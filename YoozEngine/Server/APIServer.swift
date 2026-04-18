@@ -590,6 +590,115 @@ final class APIServer: ObservableObject {
             }
         }
 
+        // LLM: List + manage models (catalogue + preferred model +
+        // per-model preload / unload). Added for whisper's AI tab
+        // dropdown; see `.context/llm_sdk_handoff.md`. All routes guard
+        // on the `llm` module registry entry so slim variants return a
+        // uniform 501 instead of 404.
+
+        router.get("/v1/llm/models") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
+            let response = await Self.buildLLMModelsResponse()
+            return try jsonResponse(response)
+        }
+
+        router.post("/v1/llm/model") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
+            let body: LLMModelSelectionRequest
+            do {
+                body = try await request.decode(
+                    as: LLMModelSelectionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+            guard let modelType = LLMModelType(rawValue: body.model) else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown model: \(body.model). Available: \(LLMModelType.allCases.map(\.rawValue).joined(separator: ", "))",
+                    code: "invalid_model"
+                )
+            }
+            await TouchUpEngine.shared.setPreferredModel(modelType)
+            // Mirror GET's shape so whisper can reuse the decoder; the
+            // `current` field reflects the new selection.
+            let response = await Self.buildLLMModelsResponse()
+            return try jsonResponse(response)
+        }
+
+        router.post("/v1/llm/preload") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
+            let body: LLMModelSelectionRequest
+            do {
+                body = try await request.decode(
+                    as: LLMModelSelectionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+            guard let modelType = LLMModelType(rawValue: body.model) else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown model: \(body.model)",
+                    code: "invalid_model"
+                )
+            }
+            do {
+                try await TouchUpEngine.shared.preloadModel(modelType)
+            } catch {
+                return errorResponse(
+                    status: .internalServerError,
+                    message: error.localizedDescription,
+                    code: "preload_failed"
+                )
+            }
+            return try jsonResponse(Self.infoEntry(for: modelType, loaded: true))
+        }
+
+        router.post("/v1/llm/unload") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
+            let body: LLMModelSelectionRequest
+            do {
+                body = try await request.decode(
+                    as: LLMModelSelectionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+            guard let modelType = LLMModelType(rawValue: body.model) else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown model: \(body.model)",
+                    code: "invalid_model"
+                )
+            }
+            await TouchUpEngine.shared.unload(modelType)
+            return try jsonResponse(Self.infoEntry(for: modelType, loaded: false))
+        }
+
         // TouchUp: Process text
         router.post("/v1/touchup") { [self] request, context in
             // TouchUp lives in LLMModule; gate by the LLM registry entry.
@@ -1348,4 +1457,41 @@ extension APIServer {
         return out
     }
 
+    #if canImport(LLMModule)
+    /// Build a single-model entry for the `/v1/llm/*` responses.
+    /// `latencyHintMs` is a best-effort per-model baseline drawn from
+    /// LLMModelType.description (e.g. "~200ms"). Keeps the JSON wire
+    /// shape homogeneous across GET + preload + unload responses.
+    nonisolated static func infoEntry(
+        for modelType: LLMModelType,
+        loaded: Bool
+    ) -> LLMModelInfoServer {
+        let hint: Int
+        switch modelType {
+        case .yoozLight: hint = 200
+        case .yoozQuality: hint = 490
+        }
+        return LLMModelInfoServer(
+            id: modelType.rawValue,
+            displayName: modelType.displayName,
+            sizeBytes: modelType.estimatedSize,
+            loaded: loaded,
+            latencyHintMs: hint
+        )
+    }
+
+    /// Build the full `GET /v1/llm/models` body. Async because the load
+    /// state + preferred-model flag live inside the TouchUpEngine actor.
+    nonisolated static func buildLLMModelsResponse() async -> LLMModelsServerResponse {
+        let info = await TouchUpEngine.shared.getModelInfo()
+        let current = await TouchUpEngine.shared.preferredModel.rawValue
+        return LLMModelsServerResponse(
+            current: current,
+            available: [
+                infoEntry(for: .yoozLight, loaded: info.light.isLoaded),
+                infoEntry(for: .yoozQuality, loaded: info.quality.isLoaded)
+            ]
+        )
+    }
+    #endif
 }

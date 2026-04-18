@@ -417,6 +417,104 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertNil(response.processingTimeMs)
     }
 
+    // MARK: - LLM Model Management Types
+
+    func testLLMModelInfoFullRoundTrip() throws {
+        // Full field set — exercises encode + decode of the SDK type the
+        // whisper dropdown binds against. Equality on the Codable
+        // Equatable conformance guards against silent field drift.
+        let info = LLMModelInfo(
+            id: "yooz-light-v3",
+            displayName: "Yooz-Light",
+            sizeBytes: 276 * 1024 * 1024,
+            loaded: true,
+            latencyHintMs: 200
+        )
+        let data = try JSONEncoder().encode(info)
+        let decoded = try JSONDecoder().decode(LLMModelInfo.self, from: data)
+        XCTAssertEqual(decoded, info)
+    }
+
+    func testLLMModelInfoOptionalFieldsDecode() throws {
+        // Wire shape emitted by `GET /v1/llm/models` for backends that
+        // don't publish size or latency (e.g. Foundation Models). The
+        // decoder must accept an absent `sizeBytes` + `latencyHintMs`
+        // and return nil rather than throwing.
+        let json = """
+        {"id":"apple-intelligence","displayName":"Apple Intelligence","loaded":false}
+        """
+        let data = json.data(using: .utf8)!
+        let info = try JSONDecoder().decode(LLMModelInfo.self, from: data)
+        XCTAssertEqual(info.id, "apple-intelligence")
+        XCTAssertEqual(info.displayName, "Apple Intelligence")
+        XCTAssertFalse(info.loaded)
+        XCTAssertNil(info.sizeBytes)
+        XCTAssertNil(info.latencyHintMs)
+    }
+
+    func testLLMModelsResponseRoundTrip() throws {
+        // Full server response shape: current id + catalogue. Used by
+        // whisper's AI > Touch-up Model dropdown to populate options
+        // and highlight the selected entry.
+        let response = LLMModelsResponse(
+            current: "yooz-light-v3",
+            available: [
+                LLMModelInfo(
+                    id: "yooz-light-v3",
+                    displayName: "Yooz-Light",
+                    sizeBytes: 289_406_976,
+                    loaded: true,
+                    latencyHintMs: 200
+                ),
+                LLMModelInfo(
+                    id: "yooz-quality-v3",
+                    displayName: "Yooz-Quality",
+                    sizeBytes: 1_087_963_136,
+                    loaded: false,
+                    latencyHintMs: 490
+                )
+            ]
+        )
+        let data = try JSONEncoder().encode(response)
+        let decoded = try JSONDecoder().decode(LLMModelsResponse.self, from: data)
+        XCTAssertEqual(decoded, response)
+    }
+
+    func testLLMModelsResponseDecodesServerJSON() throws {
+        // Byte-for-byte shape emitted by the engine's `GET /v1/llm/models`
+        // route. Locks the wire contract so a server-side rename is
+        // caught by this test rather than by whisper in production.
+        let json = """
+        {
+          "current": "yooz-light-v3",
+          "available": [
+            {"id":"yooz-light-v3","displayName":"Yooz-Light","sizeBytes":289406976,"loaded":true,"latencyHintMs":200},
+            {"id":"yooz-quality-v3","displayName":"Yooz-Quality","sizeBytes":1087963136,"loaded":false,"latencyHintMs":490}
+          ]
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(LLMModelsResponse.self, from: data)
+        XCTAssertEqual(response.current, "yooz-light-v3")
+        XCTAssertEqual(response.available.count, 2)
+        XCTAssertEqual(response.available[0].id, "yooz-light-v3")
+        XCTAssertTrue(response.available[0].loaded)
+        XCTAssertEqual(response.available[1].id, "yooz-quality-v3")
+        XCTAssertFalse(response.available[1].loaded)
+    }
+
+    func testLLMModelSelectionEncoding() throws {
+        // `setModel` / `preloadModel` / `unloadModel` all share this
+        // request body; verify the on-the-wire shape is exactly
+        // `{"model": "..."}` so a server-side decoder change breaks
+        // here instead of in whisper traffic.
+        let selection = LLMModelSelection(model: "yooz-quality-v3")
+        let data = try JSONEncoder().encode(selection)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["model"] as? String, "yooz-quality-v3")
+        XCTAssertEqual(json.count, 1, "selection body must carry only the model key")
+    }
+
     // MARK: - TouchUp Types
 
     func testTouchUpModeEnum() {
