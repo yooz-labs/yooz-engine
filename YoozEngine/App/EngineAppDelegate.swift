@@ -50,7 +50,15 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
                 // when headless; exit nonzero so the host app's launch
                 // sequence can detect the failure via process termination.
                 if EngineConfig.isHelper {
-                    NSApplication.shared.terminate(nil)
+                    // Shut any partially-initialised Hummingbird resources
+                    // down cleanly before exiting. `NSApplication.terminate(_:)`
+                    // posts an async event and does not guarantee the exit
+                    // code, which would make whisper's crash observer see a
+                    // clean (zero-status) shutdown. `exit(EX_SOFTWARE)` is a
+                    // synchronous non-zero exit whisper can distinguish from a
+                    // normal termination.
+                    await server.stop()
+                    exit(EX_SOFTWARE)
                 } else {
                     let alert = NSAlert()
                     alert.messageText = "Yooz Engine Failed to Start"

@@ -46,6 +46,11 @@ extension STTModelDescriptor {
     /// languages. Other model families (FastConformer, CJK) will get their
     /// own descriptors when they wire in; keeping this table small until the
     /// GHCR publish story is confirmed avoids faking URLs that don't exist.
+    ///
+    /// NOTE: GHCR and GitHub Releases artifacts for this package are not yet
+    /// published (tracked as engine#41). Until that ships, resolution on a
+    /// fresh machine relies on `legacyWhisperPath`; the GHCR/Releases paths
+    /// exist so the code is ready the moment the publish pipeline lands.
     public static let parakeetTDT06B: STTModelDescriptor = {
         let legacy = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -106,24 +111,25 @@ public actor STTModelDownloader {
 
     /// A model is considered cached only when its directory contains both
     /// `config.json` **and** at least one weights file (`.safetensors` or
-    /// `.npz`). Requiring a weights file prevents a torn download (where
-    /// the config lands but the network drops before the blob finishes)
-    /// from being treated as a hit on the next launch — Parakeet would
-    /// otherwise raise a cryptic runtime error deep inside MLX.
+    /// `.npz`) at depth 1. Requiring a weights file prevents a torn
+    /// download (where the config lands but the network drops before the
+    /// blob finishes) from being treated as a hit on the next launch —
+    /// Parakeet would otherwise raise a cryptic runtime error deep inside
+    /// MLX.
+    ///
+    /// This check is on the hot path of every model load, so it does a
+    /// single `fileExists` for `config.json` + a single non-recursive
+    /// `contentsOfDirectory` scan for weights. No full tree walk.
     public nonisolated func isCached(_ descriptor: STTModelDescriptor) -> Bool {
         let dir = modelDirectory(for: descriptor)
         guard fileManager.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
             return false
         }
-        guard let enumerator = fileManager.enumerator(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else {
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: dir.path) else {
             return false
         }
-        for case let url as URL in enumerator {
-            let ext = url.pathExtension.lowercased()
+        for entry in entries {
+            let ext = (entry as NSString).pathExtension.lowercased()
             if ext == "safetensors" || ext == "npz" {
                 return true
             }
@@ -170,6 +176,15 @@ public actor STTModelDownloader {
         try extractArchive(archive, to: modelDir)
 
         guard isCached(descriptor) else {
+            // Leaving a half-extracted modelDir on disk would make the next
+            // launch look like "cached" to anything less strict than
+            // isCached, and would waste the next download attempt's
+            // chance to succeed. Log what we found before removing so ops
+            // can correlate with the failing archive.
+            let contents = (try? fileManager.contentsOfDirectory(atPath: modelDir.path)) ?? []
+            let contentsSummary = contents.joined(separator: ",")
+            logger.error("STT archive extracted but verification failed for \(descriptor.identifier, privacy: .public); contents=[\(contentsSummary, privacy: .public)]; cleaning up \(modelDir.path, privacy: .public)")
+            try? fileManager.removeItem(at: modelDir)
             throw STTDownloadError.archiveMissingConfig
         }
 
@@ -208,50 +223,72 @@ public actor STTModelDownloader {
         for descriptor: STTModelDescriptor,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
-        let token = try await getAnonymousToken(for: descriptor)
+        // Any failure whose root cause is "GHCR manifest unreachable"
+        // (DNS, TLS, timeout, 404, 5xx, transient token-endpoint failure)
+        // should fall through to the GitHub Releases tarball. Only
+        // 401/403 short-circuits — those mean package visibility or
+        // scope is wrong, which is an auth bug the Releases path won't
+        // fix.
+        do {
+            let token = try await getAnonymousToken(for: descriptor)
 
-        guard let manifestURL = URL(
-            string: "\(Self.ghcrAPI)/\(Self.owner)/\(descriptor.ghcrPackage)/\(descriptor.ghcrArtifact)/manifests/latest"
-        ) else {
-            throw STTDownloadError.invalidURL
-        }
+            guard let manifestURL = URL(
+                string: "\(Self.ghcrAPI)/\(Self.owner)/\(descriptor.ghcrPackage)/\(descriptor.ghcrArtifact)/manifests/latest"
+            ) else {
+                throw STTDownloadError.invalidURL
+            }
 
-        var manifestRequest = URLRequest(url: manifestURL)
-        manifestRequest.setValue(
-            "application/vnd.oci.image.manifest.v1+json",
-            forHTTPHeaderField: "Accept"
-        )
-        manifestRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            var manifestRequest = URLRequest(url: manifestURL)
+            manifestRequest.setValue(
+                "application/vnd.oci.image.manifest.v1+json",
+                forHTTPHeaderField: "Accept"
+            )
+            manifestRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        let (manifestData, manifestResponse) = try await session.data(for: manifestRequest)
-        guard let http = manifestResponse as? HTTPURLResponse else {
-            throw STTDownloadError.invalidResponse
-        }
-        if http.statusCode == 404 {
+            let (manifestData, manifestResponse) = try await session.data(for: manifestRequest)
+            guard let http = manifestResponse as? HTTPURLResponse else {
+                throw STTDownloadError.invalidResponse
+            }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw STTDownloadError.httpError(http.statusCode)
+            }
+            if !(200...299).contains(http.statusCode) {
+                logger.warning(
+                    "GHCR manifest HTTP \(http.statusCode, privacy: .public) for \(descriptor.identifier, privacy: .public); falling back to Releases"
+                )
+                return try await downloadFromGitHubReleases(
+                    descriptor: descriptor,
+                    progressHandler: progressHandler
+                )
+            }
+
+            let manifest = try JSONDecoder().decode(OCIManifest.self, from: manifestData)
+            guard let layer = manifest.layers.first else {
+                throw STTDownloadError.noLayersInManifest
+            }
+            guard let blobURL = URL(
+                string: "\(Self.ghcrAPI)/\(Self.owner)/\(descriptor.ghcrPackage)/\(descriptor.ghcrArtifact)/blobs/\(layer.digest)"
+            ) else {
+                throw STTDownloadError.invalidURL
+            }
+            return try await downloadFile(
+                from: blobURL,
+                expectedSize: layer.size,
+                token: token,
+                progressHandler: progressHandler
+            )
+        } catch STTDownloadError.httpError(let code) where code == 401 || code == 403 {
+            // Auth bug — let it surface.
+            throw STTDownloadError.httpError(code)
+        } catch {
+            logger.warning(
+                "GHCR manifest resolution failed for \(descriptor.identifier, privacy: .public) (\(error.localizedDescription, privacy: .public)); falling back to Releases"
+            )
             return try await downloadFromGitHubReleases(
                 descriptor: descriptor,
                 progressHandler: progressHandler
             )
         }
-        guard http.statusCode == 200 else {
-            throw STTDownloadError.httpError(http.statusCode)
-        }
-
-        let manifest = try JSONDecoder().decode(OCIManifest.self, from: manifestData)
-        guard let layer = manifest.layers.first else {
-            throw STTDownloadError.noLayersInManifest
-        }
-        guard let blobURL = URL(
-            string: "\(Self.ghcrAPI)/\(Self.owner)/\(descriptor.ghcrPackage)/\(descriptor.ghcrArtifact)/blobs/\(layer.digest)"
-        ) else {
-            throw STTDownloadError.invalidURL
-        }
-        return try await downloadFile(
-            from: blobURL,
-            expectedSize: layer.size,
-            token: token,
-            progressHandler: progressHandler
-        )
     }
 
     private func downloadFromGitHubReleases(
@@ -271,6 +308,13 @@ public actor STTModelDownloader {
         )
     }
 
+    /// Downloads a blob to a temp file using
+    /// `URLSession.download(for:delegate:)`. Progress is streamed via a
+    /// per-task `URLSessionDownloadDelegate` which the system fills from
+    /// a dedicated I/O thread — no per-byte Swift loop, no in-memory
+    /// accumulation, no O(n) `Data.append` for a 700 MB blob.
+    ///
+    /// The 5%-threshold progress contract is preserved for callers.
     private func downloadFile(
         from url: URL,
         expectedSize: Int64,
@@ -289,64 +333,54 @@ public actor STTModelDownloader {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let (asyncBytes, response) = try await session.bytes(for: request)
+        let progressDelegate = DownloadProgressDelegate(
+            expectedSize: expectedSize,
+            progressHandler: progressHandler
+        )
+
+        progressHandler(0.0)
+        // `URLSession.download(for:delegate:)` (macOS 12+) accepts a
+        // per-task delegate for progress without needing a separate
+        // session instance. The returned URL is a system temp file we
+        // must move before the call site returns.
+        let (tempDownloadURL, response) = try await session.download(
+            for: request,
+            delegate: progressDelegate
+        )
+
         guard let http = response as? HTTPURLResponse,
               (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            try? fileManager.removeItem(at: tempDownloadURL)
             throw STTDownloadError.httpError(code)
         }
 
-        let totalSize = http.expectedContentLength > 0 ? http.expectedContentLength : expectedSize
-
         try? fileManager.removeItem(at: tempFile)
-        fileManager.createFile(atPath: tempFile.path, contents: nil)
-        let outputHandle = try FileHandle(forWritingTo: tempFile)
-
-        var success = false
-        defer {
-            if !success {
-                try? outputHandle.close()
-                try? fileManager.removeItem(at: tempFile)
-            }
-        }
-
-        var bytesReceived: Int64 = 0
-        var lastReported = 0
-        var buffer = Data()
-        let bufferSize = 65536
-
-        progressHandler(0.0)
-        for try await byte in asyncBytes {
-            buffer.append(byte)
-            bytesReceived += 1
-            if buffer.count >= bufferSize {
-                try outputHandle.write(contentsOf: buffer)
-                buffer.removeAll(keepingCapacity: true)
-                let pct = Int((Double(bytesReceived) / Double(max(totalSize, 1))) * 100)
-                if pct >= lastReported + 5 {
-                    lastReported = pct
-                    progressHandler(Double(bytesReceived) / Double(max(totalSize, 1)))
-                }
-            }
-        }
-        if !buffer.isEmpty {
-            try outputHandle.write(contentsOf: buffer)
-        }
-        try outputHandle.close()
-        success = true
+        try fileManager.moveItem(at: tempDownloadURL, to: tempFile)
         progressHandler(1.0)
         return tempFile
     }
 
+    /// Extract a tarball into `destination`. The engine's packaging
+    /// contract is that the archive contains exactly one top-level
+    /// directory whose contents are the model tree; we verify this
+    /// explicitly rather than trusting a blind `--strip-components=1`.
+    ///
+    /// On a contract violation, the staging directory is preserved so
+    /// ops can inspect what the publisher actually produced; on
+    /// success, the staging directory is cleaned up.
     private func extractArchive(_ archive: URL, to destination: URL) throws {
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
         }
-        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        let stagingDir = EngineConfig.cacheDirectory
+            .appendingPathComponent("stt-stage-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: stagingDir, withIntermediateDirectories: true)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = ["-xzf", archive.path, "-C", destination.path, "--strip-components=1"]
+        process.arguments = ["-xzf", archive.path, "-C", stagingDir.path]
         let stderr = Pipe()
         process.standardError = stderr
         try process.run()
@@ -354,8 +388,77 @@ public actor STTModelDownloader {
         guard process.terminationStatus == 0 else {
             let data = stderr.fileHandleForReading.readDataToEndOfFile()
             let msg = String(data: data, encoding: .utf8) ?? "unknown error"
+            // tar failed outright — staging is empty / garbage; safe to clean.
+            try? fileManager.removeItem(at: stagingDir)
             throw STTDownloadError.extractionFailed("tar exit \(process.terminationStatus): \(msg)")
         }
+
+        // Enforce the single-top-level-directory contract.
+        let entries = try fileManager.contentsOfDirectory(atPath: stagingDir.path)
+            .filter { !$0.hasPrefix(".") }
+        guard entries.count == 1 else {
+            // Preserve staging dir for debugging.
+            throw STTDownloadError.extractionFailed(
+                "archive layout violation: expected 1 top-level entry, found \(entries.count): \(entries); preserved at \(stagingDir.path)"
+            )
+        }
+        let topLevel = stagingDir.appendingPathComponent(entries[0])
+        var isDir: ObjCBool = false
+        guard fileManager.fileExists(atPath: topLevel.path, isDirectory: &isDir), isDir.boolValue else {
+            throw STTDownloadError.extractionFailed(
+                "archive layout violation: top-level entry \(entries[0]) is not a directory; preserved at \(stagingDir.path)"
+            )
+        }
+
+        // Move the single top-level directory into place as `destination`.
+        try fileManager.moveItem(at: topLevel, to: destination)
+        try? fileManager.removeItem(at: stagingDir)
+    }
+}
+
+// MARK: - URLSession download progress delegate
+
+/// Streams progress from `URLSession.download(for:)` to a Sendable
+/// handler. Kept non-actor and thread-safe via a serial lock so
+/// `URLSession`'s I/O-thread callbacks can drive the 5%-threshold
+/// contract without an actor hop per chunk.
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let expectedSize: Int64
+    private let progressHandler: @Sendable (Double) -> Void
+    private let lock = NSLock()
+    private var lastReportedPercent: Int = 0
+
+    init(expectedSize: Int64, progressHandler: @escaping @Sendable (Double) -> Void) {
+        self.expectedSize = expectedSize
+        self.progressHandler = progressHandler
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : expectedSize
+        guard total > 0 else { return }
+        let ratio = Double(totalBytesWritten) / Double(total)
+        let pct = Int(ratio * 100)
+        lock.lock()
+        let shouldReport = pct >= lastReportedPercent + 5
+        if shouldReport { lastReportedPercent = pct }
+        lock.unlock()
+        if shouldReport {
+            progressHandler(min(max(ratio, 0.0), 1.0))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        // The caller receives the temp URL via `download(for:)`. No work here.
     }
 }
 
