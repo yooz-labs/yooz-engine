@@ -7,21 +7,45 @@ import Foundation
 
 /// Which flavor of `YoozEngine.app` is currently running.
 ///
-/// Set at build time via `SWIFT_ACTIVE_COMPILATION_CONDITIONS`. The standalone
-/// menu-bar app is `.full` (all modules); apps that embed a slim engine
-/// helper use dedicated variants (`.whisper`, future `.notes`, `.voice`).
+/// Read at runtime from `Bundle.main`'s `YoozBuildVariant` Info.plist key,
+/// which is set per app target in `project.yml` via `INFOPLIST_KEY_*`.
+///
+/// **Why Info.plist instead of `SWIFT_ACTIVE_COMPILATION_CONDITIONS`:**
+/// `BuildVariant` lives in the `EngineCore` framework, which is built once
+/// and linked by all three app variants. Per-target compile conditions set
+/// on `YoozEngine`, `YoozEngineWhisper`, or `YoozEngineLite` therefore never
+/// reach `EngineCore.framework`'s compilation, and the static `#if` below
+/// would always fall through to `.full`. Reading the host bundle's Info.plist
+/// at runtime lets the same framework binary report the correct variant for
+/// whichever app is linking it today.
+///
+/// The fallback is `.full` so unit-test bundles (which load EngineCore but
+/// have no `YoozBuildVariant` key in `xctest`'s bundle) still behave as the
+/// canonical "everything is present" variant.
 public enum BuildVariant: String, Sendable, Codable {
     case full
     case whisper
     case lite
 
-    public static let current: BuildVariant = {
-        #if VARIANT_WHISPER
-        return .whisper
-        #elseif VARIANT_LITE
-        return .lite
-        #else
-        return .full
-        #endif
-    }()
+    /// Info.plist key written by `project.yml` per app target.
+    public static let infoPlistKey = "YoozBuildVariant"
+
+    /// Evaluated lazily (not at static init) so that tests injecting a custom
+    /// `Bundle.main` override via swizzling see the new value. In production
+    /// this is effectively a constant for the process lifetime.
+    public static var current: BuildVariant {
+        resolved(from: Bundle.main)
+    }
+
+    /// Seam for tests — resolves a variant from any bundle. Falls back to
+    /// `.full` when the key is absent or unrecognised.
+    public static func resolved(from bundle: Bundle) -> BuildVariant {
+        guard
+            let raw = bundle.object(forInfoDictionaryKey: infoPlistKey) as? String,
+            let variant = BuildVariant(rawValue: raw)
+        else {
+            return .full
+        }
+        return variant
+    }
 }

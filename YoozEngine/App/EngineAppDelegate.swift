@@ -44,11 +44,20 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
                 try await server.start()
             } catch {
                 server.logger.error("Failed to start server: \(error)")
-                let alert = NSAlert()
-                alert.messageText = "Yooz Engine Failed to Start"
-                alert.informativeText = error.localizedDescription
-                alert.alertStyle = .critical
-                alert.runModal()
+                // In helper mode the host app owns user-facing UI; a modal
+                // alert from an embedded helper is very bad UX (and can hang
+                // if the helper's NSApplication has no key window). Log-only
+                // when headless; exit nonzero so the host app's launch
+                // sequence can detect the failure via process termination.
+                if EngineConfig.isHelper {
+                    NSApplication.shared.terminate(nil)
+                } else {
+                    let alert = NSAlert()
+                    alert.messageText = "Yooz Engine Failed to Start"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .critical
+                    alert.runModal()
+                }
             }
         }
     }

@@ -8,14 +8,37 @@ import XCTest
 
 final class BuildVariantTests: XCTestCase {
 
-    func testDefaultVariantIsFull() {
-        #if VARIANT_WHISPER
-        XCTAssertEqual(BuildVariant.current, .whisper)
-        #elseif VARIANT_LITE
-        XCTAssertEqual(BuildVariant.current, .lite)
-        #else
+    /// Unit-test bundles run under xctest's host bundle, which never carries
+    /// the `YoozBuildVariant` Info.plist key we set on the three app targets.
+    /// Absent-key behaviour must therefore fall back to `.full` so client
+    /// code has a sane default when running against an unannotated bundle.
+    func testCurrentFallsBackToFullInTestBundle() {
         XCTAssertEqual(BuildVariant.current, .full)
-        #endif
+    }
+
+    /// `resolved(from:)` is the pure seam exercised directly. We construct
+    /// a throwaway bundle wrapping a temporary directory with an Info.plist
+    /// carrying each known variant value, plus an unknown value to verify
+    /// the fallback path. No mocking — real Bundle, real disk.
+    func testResolvedFromBundleReadsInfoPlistKey() throws {
+        for raw in ["full", "whisper", "lite"] {
+            let bundle = try makeBundle(withVariant: raw)
+            XCTAssertEqual(
+                BuildVariant.resolved(from: bundle).rawValue,
+                raw,
+                "bundle annotated with YoozBuildVariant=\(raw) should resolve"
+            )
+        }
+    }
+
+    func testResolvedFallsBackWhenKeyMissing() throws {
+        let bundle = try makeBundle(withVariant: nil)
+        XCTAssertEqual(BuildVariant.resolved(from: bundle), .full)
+    }
+
+    func testResolvedFallsBackWhenKeyUnknown() throws {
+        let bundle = try makeBundle(withVariant: "made-up-variant")
+        XCTAssertEqual(BuildVariant.resolved(from: bundle), .full)
     }
 
     func testRawValueRoundTrip() {
@@ -65,5 +88,48 @@ final class BuildVariantTests: XCTestCase {
             ["stt"],
             "Lite drops the MLX STT module — Apple STT is the only speech backend."
         )
+    }
+
+    // MARK: - Helpers
+
+    /// Build a real on-disk bundle whose Info.plist optionally carries the
+    /// `YoozBuildVariant` key. The directory is created under the test's
+    /// temporary directory so it survives for the test's lifetime; XCTest
+    /// tears down `tempDir` automatically.
+    private func makeBundle(withVariant variant: String?) throws -> Bundle {
+        let tempDir = try FileManager.default.url(
+            for: .itemReplacementDirectory,
+            in: .userDomainMask,
+            appropriateFor: URL(fileURLWithPath: NSTemporaryDirectory()),
+            create: true
+        )
+        let bundleURL = tempDir.appendingPathComponent("variant.bundle")
+        try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+
+        // `CFBundlePackageType = BNDL` + `CFBundleIdentifier` is the minimum
+        // Bundle(url:) accepts across macOS versions — see advisor note.
+        var plist: [String: Any] = [
+            "CFBundleIdentifier": "live.yooz.engine.test.variant",
+            "CFBundlePackageType": "BNDL",
+        ]
+        if let variant = variant {
+            plist[BuildVariant.infoPlistKey] = variant
+        }
+
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: plist,
+            format: .xml,
+            options: 0
+        )
+        try plistData.write(to: bundleURL.appendingPathComponent("Info.plist"))
+
+        guard let bundle = Bundle(url: bundleURL) else {
+            throw NSError(
+                domain: "BuildVariantTests",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "failed to load synthesised bundle at \(bundleURL)"]
+            )
+        }
+        return bundle
     }
 }

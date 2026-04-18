@@ -88,14 +88,22 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         NSLog("YoozSTTEngine: Loading model for %@...", language.displayName)
 
         do {
-            // Get model directory from app bundle
-            let modelDir = try getModelDirectory()
-            NSLog("YoozSTTEngine: Got model directory: %@", modelDir.path)
-
-            // Check if language is implemented
+            // Check if language is implemented before we touch the model
+            // cache — no point downloading 700 MB to find out we can't use
+            // it yet.
             guard language.isImplemented else {
                 throw YoozSTTError.languageNotSupported(language)
             }
+
+            // Resolve (or download on first run) the model directory.
+            // Precedence inside the resolver:
+            //   1. already cached under EngineConfig.modelsDirectory
+            //   2. legacy yooz-whisper Application Support path
+            //   3. GHCR OCI manifest → tar.gz
+            //   4. GitHub Releases tar.gz
+            // Any failure surfaces as YoozSTTError.modelLoadFailed below.
+            let modelDir = try await resolveModelDirectory(for: language)
+            NSLog("YoozSTTEngine: Got model directory: %@", modelDir.path)
 
             // Load model
             NSLog("YoozSTTEngine: Calling ParakeetModel.fromDirectory...")
@@ -428,6 +436,107 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
     // MARK: - Private Methods
 
+    /// Resolve a model directory for the requested language, downloading
+    /// the weights if they are not already on disk.
+    ///
+    /// Called from `start(language:)`. Preserves the original bundle /
+    /// Application Support lookup (`getModelDirectory`) as a fast path so
+    /// developer builds that pre-populate Resources/Models/ keep working,
+    /// and delegates to `STTModelDownloader` for the download + legacy
+    /// import paths when the cache is cold.
+    private func resolveModelDirectory(for language: STTLanguage) async throws -> URL {
+        // Prefer an already-resolved location.
+        if let existing = locateExistingModelDirectory() {
+            return existing
+        }
+
+        // Pick the descriptor for the model family. Only Parakeet TDT is
+        // wired into the downloader today — FastConformer Arabic/Persian
+        // weights are bundled with legacy whisper, so the legacy-import
+        // path inside `STTModelDownloader` still covers them once we add
+        // their descriptors. Until then, fail loudly for those families.
+        let descriptor: STTModelDescriptor
+        switch language.modelFamily {
+        case .parakeetTDT:
+            descriptor = .parakeetTDT06B
+        default:
+            throw YoozSTTError.modelNotFound(
+                "No download descriptor for model family \(language.modelFamily.rawValue); only Parakeet TDT is wired up today."
+            )
+        }
+
+        NSLog("YoozSTTEngine: Model not cached; invoking STTModelDownloader")
+        return try await STTModelDownloader.shared.ensureAvailable(descriptor) { progress in
+            NSLog("YoozSTTEngine: Download progress %.0f%%", progress * 100)
+        }
+    }
+
+    /// Synchronous lookup of an already-present model directory. Returns
+    /// `nil` when nothing is cached; callers must then invoke the
+    /// downloader.
+    ///
+    /// A directory qualifies when it contains both `config.json` and at
+    /// least one weights file (`.safetensors` / `.npz`). Requiring the
+    /// weights file guards against a torn partial download from being
+    /// treated as a valid cache hit.
+    private func locateExistingModelDirectory() -> URL? {
+        let fm = FileManager.default
+
+        // 1. EngineConfig.modelsDirectory/<identifier>/ — this is where
+        //    `STTModelDownloader` places downloaded weights. Walk one level
+        //    so we don't need to know the identifier up front.
+        let root = EngineConfig.modelsDirectory
+        if let children = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+            for child in children where directoryContainsCompleteModel(child) {
+                return child
+            }
+        }
+
+        // 2. Legacy: EngineConfig.modelsDirectory itself contains the model.
+        //    Preserved to match the previous `getModelDirectory()` behaviour
+        //    for developer setups that manually unpacked into Models/.
+        if directoryContainsCompleteModel(root) {
+            return root
+        }
+
+        // 3. App bundle Resources/Models/ and Resources/ (flat layout).
+        if let resources = Bundle.main.resourcePath {
+            let resourceDir = URL(fileURLWithPath: resources)
+            let modelsDir = resourceDir.appendingPathComponent("Models")
+            if directoryContainsCompleteModel(modelsDir) {
+                return modelsDir
+            }
+            if directoryContainsCompleteModel(resourceDir) {
+                return resourceDir
+            }
+        }
+
+        return nil
+    }
+
+    private func directoryContainsCompleteModel(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
+            return false
+        }
+        guard let enumerator = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        for case let url as URL in enumerator {
+            let ext = url.pathExtension.lowercased()
+            if ext == "safetensors" || ext == "npz" {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Legacy synchronous model lookup — retained for callers (tests, tools)
+    /// that have no async context. Throws when nothing is cached.
     private func getModelDirectory() throws -> URL {
         NSLog("YoozSTTEngine: getModelDirectory called")
 
