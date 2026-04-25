@@ -1,0 +1,136 @@
+# Yooz Engine — Unified Local AI Service
+
+Project-specific agent instructions. The ecosystem-wide rules live in `../AGENTS.md` and apply on top of these.
+
+## Project Overview
+
+- **Product:** Standalone macOS service providing local AI capabilities to all Yooz apps
+- **Version:** 0.5.0
+- **Status:** Phase 5 — Thin Client Migration (ready)
+- **Tech Stack:** Swift 5.9+, SwiftUI, Hummingbird (HTTP/WebSocket), MLX-Swift
+
+All AI modules are complete and synced. The engine is the source of truth for STT, LLM, TouchUp, Grammar, and VAD. The Rust `text-cleanup` source lives in this repo.
+
+## Architecture
+
+`YoozEngine.app` is a macOS menu bar service running a local API on `localhost:19920`. All Yooz apps (Whisper, Notes, Voice, Crisp, Remi) are thin clients that hit this API via the `YoozEngineClient` Swift Package.
+
+```
+YoozEngine.app (menu bar service)
+├── Local API Server (localhost:19920)
+│   ├── REST: /v1/health, /v1/models
+│   ├── REST: /v1/stt/{languages,status,load,batch}
+│   ├── REST: /v1/llm/generate
+│   ├── REST: /v1/touchup
+│   ├── REST: /v1/grammar/check
+│   ├── REST: /v1/vad/detect
+│   ├── WebSocket: /v1/stt/stream
+│   └── Future: /v1/tts/synthesize
+├── STT Module (Parakeet TDT, FastConformer, Apple STT)
+├── LLM Module (MLX: Qwen 0.5B, 1.7B; Apple Intelligence on macOS 26+)
+├── TouchUp Module (regex + grammar + LLM pipeline)
+├── Grammar Module (Rust text-cleanup xcframework + source)
+├── VAD Module (Silero v6.0.0 CoreML, energy-based fallback)
+└── TTS Module [future]
+
+YoozEngineClient (Swift Package)
+├── Auto-discovery + auto-launch
+├── REST + WebSocket clients
+└── Shared types
+```
+
+**No embedded fallback.** Apps auto-launch the engine if it's not running.
+
+## Repository Layout
+
+```
+yooz-engine/
+├── YoozEngine/                # macOS app (menu bar service)
+│   ├── App/                   # Entry, lifecycle
+│   ├── Server/                # Hummingbird HTTP/WS
+│   ├── STT/, LLM/, TouchUp/, VAD/, Grammar/, TTS/, Core/
+├── Sources/YoozEngineClient/  # Swift Package (thin client SDK)
+├── Tests/
+├── Vendor/YoozTextCleanup/    # Rust xcframework (prebuilt)
+├── text-cleanup/              # Rust source (engine owns this)
+└── project.yml                # XcodeGen
+```
+
+## Build
+
+```bash
+xcodegen generate
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine -configuration Debug build
+open build/Debug/Yooz\ Engine.app
+curl http://localhost:19920/v1/health
+```
+
+## API
+
+Fixed port: **19920** (localhost only).
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/v1/health` | Service health; reports per-module statuses |
+| GET | `/v1/models` | Loaded and available models |
+| GET | `/v1/modules` | Build variant + per-module health manifest |
+| GET | `/v1/stt/languages` | Available STT languages |
+| GET | `/v1/stt/status` | STT model load status |
+| GET | `/v1/stt/engine` | Current + available STT backends + capability flags |
+| POST | `/v1/stt/engine` | Switch backend: `parakeet` / `fast_conformer` / `apple_stt` |
+| POST | `/v1/stt/load` | Load STT model for a language |
+| POST | `/v1/stt/batch` | Batch transcribe (`aligned=true` for token timestamps) |
+| WS | `/v1/stt/stream` | Real-time streaming STT |
+| POST | `/v1/llm/generate` | LLM text generation |
+| POST | `/v1/touchup` | Text cleanup pipeline |
+| POST | `/v1/grammar/check` | Rule-based grammar correction |
+| POST | `/v1/vad/detect` | Voice activity detection (501 on Whisper / Lite variants) |
+
+## Dependencies
+
+| Package | Purpose |
+|---|---|
+| Hummingbird | HTTP server |
+| HummingbirdWebSocket | WebSocket support |
+| mlx-swift | MLX runtime for Apple Silicon |
+| mlx-swift-lm | LLM inference |
+| YoozTextCleanup.xcframework | Rust grammar rules |
+| FoundationModels | Apple Intelligence on-device LLM (macOS 26+, conditional) |
+
+## Build Variants (Phase 5)
+
+Each consuming app bundles only the modules it needs. See `.context/phase5_epic.md`.
+
+| Variant | Modules | Consumer | Bundle |
+|---|---|---|---|
+| `YoozEngine` | STT + AppleSTT + Grammar + LLM + VAD | Standalone menu bar service | full |
+| `YoozEngineWhisper` | STT + AppleSTT + Grammar + LLM (no VAD) | Yooz Whisper helper | full-minus-VAD |
+| `YoozEngineLite` | AppleSTT + Grammar + LLM (no MLX STT, no VAD) | Remi-class apps, iOS | sub-GB |
+
+VAD stays whisper-embedded (~64ms call rate makes HTTP round-trip non-viable).
+
+## Migration Status
+
+| Phase | Module | Source | Status |
+|---|---|---|---|
+| 1 | Scaffold | New | [x] Done |
+| 2 | STT | yooz-stt-engine | [x] Done |
+| 3 | LLM | yooz-stt-engine/TouchUp/LLM | [x] Done |
+| 3 | TouchUp | yooz-whisper/TouchUp | [x] Done |
+| 4 | Grammar | yooz-stt-engine/text-cleanup | [x] Done |
+| 4 | VAD | yooz-whisper/Audio | [x] Done |
+| 4.5 | Engine sync | — | [x] Done (v0.5.0) |
+| 5 | Modular engine + whisper thin-client | — | [x] Done (v0.6.0); integration hardening in flight |
+| 6 | Archive yooz-stt-engine | — | PR #80 open; archive after whisper → stable |
+| 7 | TTS (Kokoro) | Future | Not started |
+
+## Conventions
+
+- **Swift 6 concurrency:** use `@MainActor` on classes that hold `@Published` state.
+- **Singletons:** Grammar and VAD are actor singletons. VAD requires `load()` for the CoreML model.
+- **HummingbirdWebSocket:** inbound yields `WebSocketDataFrame`; use `.messages(maxSize:)` for `WebSocketMessage`.
+- **Bundle id:** `live.yooz.engine`.
+
+---
+
+*Part of the Yooz ecosystem. Sovereign Intelligence.*
