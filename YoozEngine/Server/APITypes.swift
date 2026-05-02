@@ -116,7 +116,7 @@ struct WSSTTResult: Encodable {
 /// `rawValue` is what crosses the wire; clients branch on it. Kept
 /// as a typed enum (mirroring `WSSTTWarningCode`) so the compiler
 /// catches typos at the emit-site — a free-form `String` like
-/// `"sesion_error"` would silently break client branching.
+/// `"session_error"` would silently break client branching.
 enum WSSTTErrorCode: String, Encodable, Sendable, CaseIterable {
     /// Inbound text frame failed JSON decode (`WSSTTConfig`).
     case invalidMessageFormat = "invalid_message_format"
