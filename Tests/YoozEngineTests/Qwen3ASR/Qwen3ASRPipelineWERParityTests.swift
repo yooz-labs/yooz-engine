@@ -179,6 +179,7 @@ final class Qwen3ASRPipelineWERParityTests: XCTestCase {
     // MARK: - Test driver
 
     private func runWERSubset(_ code: String, label: String) async throws {
+        try Qwen3ASRTestEnvironment.skipUnlessSafeForTCC()
         let path = Self.phase4Root.appendingPathComponent(
             "wer_subset/\(code).json"
         )
@@ -332,6 +333,7 @@ final class Qwen3ASRPipelineWERParityTests: XCTestCase {
     /// must surface `Persian` (canonical label) from the model's
     /// `language X<asr_text>` preamble.
     func testAutoLanguageIDPersianClip() async throws {
+        try Qwen3ASRTestEnvironment.skipUnlessSafeForTCC()
         try XCTSkipUnless(
             FileManager.default.fileExists(
                 atPath: "/Volumes/S1/yooz/stt-test-data/persian/test_001.wav"

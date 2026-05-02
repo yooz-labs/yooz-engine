@@ -387,6 +387,11 @@ final class Qwen3SafetensorsLoaderTests: XCTestCase {
         // local /tmp copy can sidestep macOS TCC restrictions on
         // /Volumes access from the xctest GUI test host. See
         // Qwen3AudioEncoderParityTests for details.
+        if ProcessInfo.processInfo.environment[
+            "YOOZ_PHASE3_ARTIFACTS"
+        ] == nil {
+            try Qwen3ASRTestEnvironment.skipUnlessSafeForTCC()
+        }
         let weightsURL: URL = {
             if let override = ProcessInfo.processInfo.environment[
                 "YOOZ_PHASE3_ARTIFACTS"

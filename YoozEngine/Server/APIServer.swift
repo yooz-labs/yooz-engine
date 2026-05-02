@@ -144,6 +144,18 @@ final class APIServer: ObservableObject {
 
     // MARK: - HTTP Router
 
+    /// Build a router for testing without spinning up the full server
+    /// task. Used by HTTP integration tests that exercise the route
+    /// handlers via `Application.test(.router) { ... }`.
+    func makeTestRouter() -> Router<BasicRequestContext> {
+        buildRouter()
+    }
+
+    /// Build a WebSocket router for testing.
+    func makeTestWebSocketRouter() -> Router<BasicWebSocketRequestContext> {
+        buildWebSocketRouter()
+    }
+
     private func buildRouter() -> Router<BasicRequestContext> {
         let router = Router()
         let sttEngine = YoozSTTEngine.shared
@@ -380,6 +392,50 @@ final class APIServer: ObservableObject {
             }
         }
 
+        // STT: Backend selection (Phase 5)
+        router.get("/v1/stt/engine") { _, _ in
+            let current = sttEngine.currentBackend.rawValue
+            let available = STTBackendID.allCases.map { backend in
+                STTEngineCapabilities(
+                    id: backend.rawValue,
+                    supportsBatch: backend.supportsBatch,
+                    supportsStreaming: backend.supportsStreaming,
+                    supportedLanguages: backend.supportedLanguages
+                        .map(\.rawValue)
+                )
+            }
+            return STTEngineGetResponse(current: current, available: available)
+        }
+
+        router.post("/v1/stt/engine") { [self] request, context in
+            let body: STTEnginePostRequest
+            do {
+                body = try await request.decode(
+                    as: STTEnginePostRequest.self, context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            guard let backend = STTBackendID(rawValue: body.engine) else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown engine '\(body.engine)'. Available: "
+                        + STTBackendID.allCases.map(\.rawValue).joined(separator: ", "),
+                    code: "invalid_engine"
+                )
+            }
+
+            await sttEngine.setBackend(backend)
+            return try jsonResponse(STTEnginePostResponse(
+                current: sttEngine.currentBackend.rawValue
+            ))
+        }
+
         // STT: Available languages
         router.get("/v1/stt/languages") { _, _ in
             STTLanguagesResponse(languages: STTLanguage.allCases.map { lang in
@@ -415,6 +471,59 @@ final class APIServer: ObservableObject {
                     message: error.message,
                     code: error.code
                 )
+            }
+
+            // Phase 5: when the active backend is qwen3, ensure the
+            // model directory is materialized on disk before calling
+            // start(). The fetch is opt-in via `allowFetch` (default
+            // true for ergonomics; CI/tests can disable it).
+            if sttEngine.currentBackend == .qwen3ASRPreview {
+                let modelDir = Qwen3ASRModelFetcher.defaultModelDir
+                let fetcher = Qwen3ASRModelFetcher.shared
+                let ready = await fetcher.isModelDirReady(modelDir)
+                if !ready {
+                    let allow = body.allowFetch ?? true
+                    if !allow {
+                        return errorResponse(
+                            status: .notFound,
+                            message: "Qwen3-ASR model not on disk and "
+                                + "allow_fetch=false; bring the model "
+                                + "directory into place first.",
+                            code: "model_not_found"
+                        )
+                    }
+                    do {
+                        let stream = await fetcher.download(into: modelDir)
+                        for try await _ in stream {
+                            // Drain the progress stream; HTTP clients
+                            // get a single response after the fetch
+                            // completes. Streaming progress to clients
+                            // is a future enhancement (issue #59).
+                        }
+                    } catch {
+                        return errorResponse(
+                            status: .internalServerError,
+                            message: "Model fetch failed: \(error.localizedDescription)",
+                            code: "model_fetch_failed"
+                        )
+                    }
+                } else {
+                    // Even when the directory is ready, run the
+                    // tokenizer prep step in case a previous run
+                    // missed it (e.g. user pre-staged the files
+                    // manually). Idempotent.
+                    do {
+                        try await Qwen3ASRTokenizerPrep.prepare(
+                            modelDir: modelDir
+                        )
+                    } catch {
+                        return errorResponse(
+                            status: .internalServerError,
+                            message: "Tokenizer prep failed: \(error.localizedDescription)",
+                            code: "tokenizer_prep_failed"
+                        )
+                    }
+                }
             }
 
             do {
@@ -460,7 +569,22 @@ final class APIServer: ObservableObject {
             }
 
             let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
-            let result = await sttEngine.batchTranscribe(samples: body.samples, mode: mode)
+
+            // Phase 5: route through Qwen3 backend when active. The
+            // backend reports an empty `ParakeetResult` on internal
+            // failures rather than throwing, mirroring Parakeet's
+            // contract for this endpoint.
+            let result: ParakeetResult
+            if sttEngine.currentBackend == .qwen3ASRPreview {
+                result = await sttEngine.batchTranscribeQwen3(
+                    samples: body.samples,
+                    language: language
+                )
+            } else {
+                result = await sttEngine.batchTranscribe(
+                    samples: body.samples, mode: mode
+                )
+            }
 
             return try jsonResponse(BatchSTTResponse(
                 text: result.text,
@@ -510,6 +634,20 @@ final class APIServer: ObservableObject {
             }
 
             sttLogger.info("STT WebSocket client connected")
+
+            // Phase 5: Qwen3 streaming lands in Phase 7. When the
+            // qwen3_asr_preview backend is selected, send a single
+            // error frame and close cleanly. Don't pretend to stream.
+            if sttEngine.currentBackend == .qwen3ASRPreview {
+                await sendError(
+                    "Streaming not implemented for qwen3_asr_preview; "
+                        + "lands in Phase 7. Use POST /v1/stt/batch."
+                )
+                let rejectMsg = "STT WebSocket: rejected qwen3_asr_preview "
+                    + "streaming (deferred to Phase 7)"
+                sttLogger.info("\(rejectMsg)")
+                return
+            }
 
             // Use message-level API to handle fragmented frames automatically
             // Max message size: 10MB (enough for ~2.7 min of 16kHz Float32 audio)

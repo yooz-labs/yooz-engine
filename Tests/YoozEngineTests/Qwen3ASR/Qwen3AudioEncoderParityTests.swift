@@ -121,6 +121,11 @@ final class Qwen3AudioEncoderParityTests: XCTestCase {
     ]
 
     private func skipUnlessArtifactsPresent() throws {
+        if ProcessInfo.processInfo.environment[
+            "YOOZ_PHASE3_ARTIFACTS"
+        ] == nil {
+            try Qwen3ASRTestEnvironment.skipUnlessSafeForTCC()
+        }
         let fm = FileManager.default
         try XCTSkipUnless(
             fm.fileExists(atPath: Self.phase1WeightsURL.path)

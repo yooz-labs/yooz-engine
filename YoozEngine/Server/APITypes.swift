@@ -59,12 +59,42 @@ struct STTLanguageInfo: Codable {
 
 struct STTLoadRequest: Decodable {
     let language: String?
+    /// When true (or unset), the engine will fetch the model from the
+    /// remote source if it is not already on disk. When false, the
+    /// load fails with `model_not_found` if the directory is empty.
+    /// Only consulted by backends that own a first-run fetch path
+    /// (`qwen3_asr_preview` in Phase 5); ignored otherwise.
+    let allowFetch: Bool?
 }
 
 struct STTStatusResponse: ResponseCodable {
     let loaded: Bool
     let language: String?
     let streaming: Bool
+}
+
+// MARK: - Backend selection
+
+struct STTEngineGetResponse: ResponseCodable {
+    let current: String
+    let available: [STTEngineCapabilities]
+}
+
+struct STTEngineCapabilities: Codable {
+    let id: String
+    let supportsBatch: Bool
+    let supportsStreaming: Bool
+    let supportedLanguages: [String]
+}
+
+struct STTEnginePostRequest: Codable {
+    /// New backend identifier. Accepts the `STTBackendID` raw values:
+    /// `parakeet`, `fast_conformer`, `apple_stt`, `qwen3_asr_preview`.
+    let engine: String
+}
+
+struct STTEnginePostResponse: ResponseCodable {
+    let current: String
 }
 
 // MARK: - WebSocket STT Messages

@@ -164,6 +164,7 @@ final class Qwen3ASRPipelineParityTests: XCTestCase {
     }
 
     private static func skipUnlessArtifactsAvailable() throws {
+        try Qwen3ASRTestEnvironment.skipUnlessSafeForTCC()
         try XCTSkipUnless(
             FileManager.default.fileExists(
                 atPath: canonicalReferenceURL.path
