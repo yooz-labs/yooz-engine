@@ -154,7 +154,7 @@ public actor PreviewFallbackHook {
                     samples: samples, language: language
                 )
                 hasSucceededOnce = true
-                await emitSuccessMetric(
+                await emitMetric(
                     backend: .qwen3ASRPreview,
                     audioMs: audioMs,
                     started: started,
@@ -172,7 +172,7 @@ public actor PreviewFallbackHook {
                 let result = await fallback.transcribe(
                     samples: samples, language: language
                 )
-                await emitSuccessMetric(
+                await emitMetric(
                     backend: .parakeet,
                     audioMs: audioMs,
                     started: started,
@@ -193,7 +193,7 @@ public actor PreviewFallbackHook {
             let result = try await preview.transcribe(
                 samples: samples, language: language
             )
-            await emitSuccessMetric(
+            await emitMetric(
                 backend: .qwen3ASRPreview,
                 audioMs: audioMs,
                 started: started,
@@ -211,7 +211,7 @@ public actor PreviewFallbackHook {
             // Surface an empty result; the metric still fires so
             // dashboards see the failure rate. We do NOT mark this as
             // a fallback because the user's selection is honored.
-            await emitSuccessMetric(
+            await emitMetric(
                 backend: .qwen3ASRPreview,
                 audioMs: audioMs,
                 started: started,
@@ -235,7 +235,7 @@ public actor PreviewFallbackHook {
         return UInt32(min(ms, UInt64(UInt32.max)))
     }
 
-    private func emitSuccessMetric(
+    private func emitMetric(
         backend: STTBackendID,
         audioMs: UInt32,
         started: UInt64,
@@ -308,44 +308,24 @@ public struct Qwen3ASRPreviewBackendAdapter: PreviewBackendAdapter {
         samples: [Float],
         language: STTLanguage
     ) async throws -> ParakeetResult {
-        let hint = Self.qwen3LanguageHint(language)
+        // Shared mapping with `YoozSTTEngine.batchTranscribeQwen3`.
         let result = try await backend.transcribe(
-            pcm: samples, language: hint
+            pcm: samples, language: language.qwen3LanguageHint
         )
         return ParakeetResult(
             text: result.text, finalized: result.text, draft: ""
         )
-    }
-
-    /// Mirrors `YoozSTTEngine.qwen3LanguageHint` (which is private).
-    /// Kept in sync manually; both call sites map the same `STTLanguage`
-    /// → canonical Qwen3 label set.
-    private static func qwen3LanguageHint(_ language: STTLanguage) -> String? {
-        switch language {
-        case .english:    return "English"
-        case .arabic:     return "Arabic"
-        case .persian:    return "Persian"
-        case .hebrew:     return "Hebrew"
-        case .spanish:    return "Spanish"
-        case .french:     return "French"
-        case .german:     return "German"
-        case .italian:    return "Italian"
-        case .portuguese: return "Portuguese"
-        case .dutch:      return "Dutch"
-        case .polish:     return "Polish"
-        case .russian:    return "Russian"
-        case .ukrainian:  return "Ukrainian"
-        case .chinese:    return "Chinese"
-        case .japanese:   return "Japanese"
-        case .korean:     return "Korean"
-        case .cantonese:  return "Cantonese"
-        }
     }
 }
 
 /// Adapter wrapping `YoozSTTEngine.batchTranscribe` for the Parakeet
 /// fallback path.
 public struct ParakeetFallbackAdapter: FallbackBackendAdapter {
+    private static let logger = Logger(
+        subsystem: "live.yooz.engine",
+        category: "ParakeetFallbackAdapter"
+    )
+
     private let engine: YoozSTTEngine
 
     public init(engine: YoozSTTEngine = .shared) {
@@ -365,6 +345,14 @@ public struct ParakeetFallbackAdapter: FallbackBackendAdapter {
             await engine.setBackend(.parakeet)
             try await engine.start(language: language)
         } catch {
+            // The fallback itself failed to start. Log loudly — the
+            // hook can't surface this any other way (`FallbackBackendAdapter`
+            // returns non-throwing), and a silent empty result here
+            // would leave the user staring at no transcript with no
+            // diagnostic.
+            Self.logger.error(
+                "Parakeet fallback failed to start (\(String(describing: error), privacy: .public)); returning empty result"
+            )
             return .empty
         }
         return await engine.batchTranscribe(samples: samples)
