@@ -1,0 +1,31 @@
+# QLoRA fine-tuning: Yooz-Quality v2 -> v3
+# Base: Qwen3-1.7B-Instruct-4bit (Ojus1/mlx-community)
+# Output: yooz-quality-v3 (published to GHCR)
+# Data: 14,967 gold-standard entries (5x v2) -> ~24K train samples
+# Usage: python scripts/train.py --config configs/quality-v3.yaml
+
+# Yooz-Quality base model (Qwen3-1.7B-Instruct, 4-bit quantized by Ojus)
+model: "/Users/yahya/.cache/huggingface/hub/mlx-qwen3-1.7b-instruct-ojus-4bit"
+data: "./data/quality"
+adapter_path: "./outputs/quality-v3/adapters"
+
+# Training: ~0.7 epoch over 24K samples (batch 4)
+train: true
+iters: 4200
+batch_size: 4
+learning_rate: 5.0e-6
+seed: 42
+
+# LoRA
+num_layers: 16
+lora_rank: 8
+
+# Prompt masking (only compute loss on assistant tokens)
+mask_prompt: true
+max_seq_length: 1024
+
+# Evaluation
+val_batches: 25
+steps_per_eval: 200
+steps_per_report: 50
+save_every: 500

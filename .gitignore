@@ -1,39 +1,9 @@
-# Xcode
-xcuserdata/
-*.xcodeproj
-*.xcworkspace
-*.hmap
-*.ipa
-*.dSYM.zip
-*.dSYM
-DerivedData/
-build/
-
-# Swift Package Manager
-.build/
-.swiftpm/
-Package.resolved
-
-# Models (large binary files)
-YoozEngine/Resources/Models/*.mlpackage
-YoozEngine/Resources/Models/*.safetensors
-YoozEngine/Resources/Models/*.gguf
-YoozEngine/Resources/model.safetensors
-YoozEngine/Resources/config.json
-
-# Rust build artifacts
-text-cleanup/target/
-text-cleanup/build/
-
-# XCFramework (binary, rebuilt from Rust source)
-Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
-
-# Context docs (project-local)
-.context/
-
-# macOS
+.venv/
+__pycache__/
+*.pyc
 .DS_Store
-
-# IDE
-.vscode/
-.idea/
+.envrc
+finetune-pipeline/outputs/
+finetune-pipeline/data
+finetune-pipeline/data/
+bench-tools/gold_standard.jsonl
