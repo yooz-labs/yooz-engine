@@ -79,13 +79,22 @@ targets:
         CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
-        ENABLE_HARDENED_RUNTIME: true
         LSUIElement: true
         # `MLXHuggingFaceMacros` (used by `#huggingFaceTokenizerLoader`) is an
         # external Swift macro. Xcode UI builds prompt for trust on first run;
         # CLI / CI must pass `-skipMacroValidation` on the xcodebuild command
         # line (it is an xcodebuild-level flag, not an OTHER_SWIFT_FLAGS one).
         # See AGENTS.md "Build" for the recommended invocation.
+      configs:
+        Debug:
+          # Hardened runtime triggers macOS TCC prompts on /Volumes
+          # access during xctest; the GUI prompt never resolves
+          # under headless `xcodebuild test`, deadlocking parity
+          # tests that read weights from /Volumes/S1. Keep hardened
+          # runtime on for shipped builds (Release).
+          ENABLE_HARDENED_RUNTIME: false
+        Release:
+          ENABLE_HARDENED_RUNTIME: true
     dependencies:
       - package: hummingbird
         product: Hummingbird
@@ -93,6 +102,8 @@ targets:
         product: HummingbirdWebSocket
       - package: mlx-swift
         product: MLX
+      - package: mlx-swift
+        product: MLXFast
       - package: mlx-swift
         product: MLXNN
       - package: mlx-swift
@@ -133,6 +144,7 @@ targets:
         # under the modern toolchain; let Xcode synthesize one so we don't
         # have to maintain a separate Info.plist for tests.
         GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.tests
     dependencies:
       - target: YoozEngine
 
@@ -143,6 +155,7 @@ schemes:
         YoozEngine: all
         YoozEngineTests: [test]
     test:
+      config: Debug
       targets:
         - YoozEngineTests
       gatherCoverageData: false
