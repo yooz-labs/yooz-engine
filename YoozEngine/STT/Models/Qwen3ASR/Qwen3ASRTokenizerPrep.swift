@@ -152,10 +152,16 @@ public enum Qwen3ASRTokenizerPrep {
     /// `9707`). If a future tokenizer release diverges from this
     /// vector, `tokenizerValidationFailed` fires loudly at first-run
     /// rather than the engine emitting subtly-wrong tokens.
-    private static func runCanaryEncode(tokenizer: any Tokenizer) throws {
+    private static func runCanaryEncode(tokenizer: any Tokenizers.Tokenizer) throws {
         let canary = "Hello"
         let expected = canaryExpectedTokens
-        let actual = tokenizer.encode(text: canary)
+        // `encode(text:)` defaults to `addSpecialTokens: true`. The
+        // canary value above was captured WITHOUT special tokens to
+        // make the assertion stable under future BOS/EOS additions
+        // — so we explicitly request no special tokens here.
+        let actual = tokenizer.encode(
+            text: canary, addSpecialTokens: false
+        )
         guard actual == expected else {
             throw Qwen3ASRError.tokenizerValidationFailed(
                 "Canary encode of \"\(canary)\" produced "
