@@ -295,6 +295,41 @@ final class Qwen3SafetensorsLoaderTests: XCTestCase {
         }
     }
 
+    func testLoaderRejectsUnexpectedTensor() throws {
+        // Add an `audio_tower.bogus` key on top of a valid dump and
+        // confirm the loader surfaces it as `unexpectedTensor`
+        // rather than silently dropping it through to MLXNN's
+        // generic verify error.
+        let cfg = Self.smallConfig
+        let donor = Qwen3AudioEncoder(cfg)
+        eval(donor)
+
+        var dumped: [String: MLXArray] = [:]
+        for (name, value) in donor.parameters().flattened() {
+            dumped["audio_tower.\(name)"] = value
+        }
+        dumped["audio_tower.bogus"] = MLXArray.zeros(
+            [4], dtype: .float32
+        )
+        let tmpURL = makeTempURL(prefix: "qwen3-extra-key")
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+        try MLX.save(arrays: dumped, url: tmpURL)
+
+        let target = Qwen3AudioEncoder(cfg)
+        XCTAssertThrowsError(
+            try Qwen3SafetensorsLoader.loadAudioTower(
+                from: tmpURL, into: target
+            )
+        ) { error in
+            guard case Qwen3ASRError.unexpectedTensor(let key) = error
+            else {
+                XCTFail("expected unexpectedTensor, got \(error)")
+                return
+            }
+            XCTAssertEqual(key, "bogus")
+        }
+    }
+
     func testLoaderRejectsMalformedSafetensorsHeader() throws {
         // Truncated safetensors file: write only the first 4 bytes
         // of the would-be header. `MLX.loadArrays` treats this as a

@@ -30,6 +30,11 @@ public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
     /// `bfloat16` (or `float16`/`float32` after cast); anything else
     /// is rejected up front rather than silently up-cast.
     case dtypeMismatch(key: String, expected: String, actual: String)
+    /// Checkpoint contained `audio_tower.*` keys the encoder does
+    /// not declare. Surfaced rather than silently dropped because
+    /// it indicates the checkpoint format diverged from the
+    /// encoder schema; Phase 4 should know.
+    case unexpectedTensor(String)
     /// Underlying `MLX.loadArrays` (safetensors header) failed.
     /// Wrapped as `String` so any provider-specific error surface
     /// (truncated header, unknown dtype tag, etc.) is readable.
@@ -58,6 +63,8 @@ public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
             return
                 "Qwen3ASRError.dtypeMismatch: \(key) expected "
                 + "\(expected) got \(actual)"
+        case .unexpectedTensor(let key):
+            return "Qwen3ASRError.unexpectedTensor: \(key)"
         case .malformedSafetensors(let url, let detail):
             return
                 "Qwen3ASRError.malformedSafetensors(\(url.path)): "
