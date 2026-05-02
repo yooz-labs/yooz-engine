@@ -540,6 +540,10 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     /// historical (preserved for callers that don't care about
     /// distinguishing failure modes); new code should call
     /// `batchTranscribeQwen3Throwing(...)` and map the typed error.
+    @available(
+        *, deprecated,
+        message: "Errors are silently swallowed as `.empty`; SDK consumers see blank text on every failure mode. Prefer batchTranscribeQwen3Throwing(samples:language:) and map the typed Qwen3ASRError."
+    )
     public func batchTranscribeQwen3(
         samples: [Float],
         language: STTLanguage
