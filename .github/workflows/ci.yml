@@ -64,11 +64,33 @@ jobs:
         if: steps.cache-metal-toolchain.outputs.cache-hit != 'true'
         run: sudo xcodebuild -downloadComponent MetalToolchain
 
+      # `swift build` / `swift test` do not compile mlx-swift's Metal
+      # kernel sources, so any test that exercises an MLX path crashes
+      # at runtime with `Failed to load the default metallib`. We drive
+      # the SwiftPM-generated `YoozEngineRepo-Package` scheme through
+      # `xcodebuild` instead, which compiles the bundled `.metal`
+      # sources into `default.metallib` using the toolchain downloaded
+      # above. `-workspace .` selects the implicit SwiftPM workspace so
+      # `xcodebuild` does not pick up `YoozEngine.xcodeproj` (which has
+      # no SwiftPM scheme). `-skipMacroValidation` skips Xcode's macro
+      # fingerprint prompt for swift-syntax macro plugins on CI.
       - name: Build
-        run: swift build
+        run: |
+          xcodebuild build \
+            -workspace . \
+            -scheme YoozEngineRepo-Package \
+            -destination 'platform=macOS' \
+            -skipMacroValidation \
+            -derivedDataPath .build/xcodebuild
 
       - name: Test
-        run: swift test
+        run: |
+          xcodebuild test \
+            -workspace . \
+            -scheme YoozEngineRepo-Package \
+            -destination 'platform=macOS' \
+            -skipMacroValidation \
+            -derivedDataPath .build/xcodebuild
 
   engine-app:
     name: Engine App Build + Test
