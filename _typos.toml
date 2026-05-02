@@ -23,3 +23,5 @@ hel = "hel"
 # Walsh-Hadamard Transform abbreviation, used throughout the issue #10
 # TurboQuant feasibility doc.
 WHT = "WHT"
+# `arange` is the numpy-style range builder, not a misspelling of `arrange`.
+arange = "arange"

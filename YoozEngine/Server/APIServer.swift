@@ -131,6 +131,143 @@ final class APIServer: ObservableObject {
         )
     }
 
+    /// Map a Qwen3-ASR backend error to the right HTTP error
+    /// response. Mirrors the parakeet/fast_conformer error mapping
+    /// so clients get a consistent shape across backends.
+    ///
+    /// `FetchFailure` payloads are demuxed into distinct HTTP codes
+    /// so clients can branch on root cause: 401 for auth, 404 for
+    /// repo missing, 502 for transient transport, 422 for local
+    /// integrity violations (size/checksum mismatch), 500 for
+    /// programmer error (`.other`, manifest decode bugs).
+    nonisolated func mapQwen3BatchError(
+        _ error: Qwen3ASRError
+    ) -> Response {
+        switch error {
+        case .invalidInput(let detail):
+            return errorResponse(
+                status: .badRequest,
+                message: detail,
+                code: "invalid_input"
+            )
+        case .invalidConfig(let detail):
+            return errorResponse(
+                status: .internalServerError,
+                message: "Qwen3 config invalid: \(detail)",
+                code: "model_config_invalid"
+            )
+        case .pipelineNotLoaded:
+            return errorResponse(
+                status: .serviceUnavailable,
+                message:
+                    "Qwen3 pipeline is not loaded; call /v1/stt/load "
+                    + "before /v1/stt/batch.",
+                code: "pipeline_not_loaded"
+            )
+        case .fileNotFound, .noAudioTowerWeights:
+            return errorResponse(
+                status: .serviceUnavailable,
+                message: error.description,
+                code: "model_not_loaded"
+            )
+        case .malformedSafetensors,
+             .missingTensor,
+             .shapeMismatch,
+             .dtypeMismatch,
+             .unexpectedTensor:
+            return errorResponse(
+                status: .internalServerError,
+                message: error.description,
+                code: "model_load_failed"
+            )
+        case .fetchFailed(let failure):
+            return mapFetchFailure(failure, message: error.description)
+        case .tokenizerValidationFailed(let detail):
+            return errorResponse(
+                status: .internalServerError,
+                message: detail,
+                code: "tokenizer_validation_failed"
+            )
+        }
+    }
+
+    /// Demux a structured `FetchFailure` payload into its HTTP code.
+    /// Shared between `/v1/stt/batch` and `/v1/stt/load` so clients
+    /// see a single mapping regardless of which endpoint surfaced
+    /// the failure.
+    nonisolated func mapFetchFailure(
+        _ failure: FetchFailure,
+        message: String? = nil
+    ) -> Response {
+        let body = message ?? failure.description
+        switch failure {
+        case .httpStatus(let code, _):
+            switch code {
+            case 401:
+                return errorResponse(
+                    status: .unauthorized,
+                    message: body,
+                    code: "model_fetch_unauthorized"
+                )
+            case 404:
+                return errorResponse(
+                    status: .notFound,
+                    message: body,
+                    code: "model_fetch_not_found"
+                )
+            case 500..<600:
+                return errorResponse(
+                    status: .badGateway,
+                    message: body,
+                    code: "model_fetch_upstream_5xx"
+                )
+            default:
+                return errorResponse(
+                    status: .badGateway,
+                    message: body,
+                    code: "model_fetch_failed"
+                )
+            }
+        case .checksumMismatch, .sizeMismatch:
+            // Local integrity violation. Not a transient gateway
+            // problem; retrying the same gateway will likely
+            // surface the same bytes. Surface as 422 with a
+            // dedicated code so retry policy doesn't spin.
+            return errorResponse(
+                status: .unprocessableContent,
+                message: body,
+                code: "model_corruption_detected"
+            )
+        case .rangeIgnored:
+            return errorResponse(
+                status: .conflict,
+                message: body,
+                code: "model_fetch_resume_failed"
+            )
+        case .manifestDecode:
+            return errorResponse(
+                status: .badGateway,
+                message: body,
+                code: "model_manifest_invalid"
+            )
+        case .other:
+            // Internal contract violation (typo'd repo URL, etc.) —
+            // not a gateway problem. 500 so it surfaces as a server
+            // bug rather than an upstream blame.
+            return errorResponse(
+                status: .internalServerError,
+                message: body,
+                code: "model_fetch_internal_error"
+            )
+        case .transport:
+            return errorResponse(
+                status: .badGateway,
+                message: body,
+                code: "model_fetch_failed"
+            )
+        }
+    }
+
     private nonisolated func parseLanguage(_ code: String?) throws -> STTLanguage {
         let languageCode = code ?? "en"
         guard let language = STTLanguage.fromCode(languageCode) else {
@@ -144,9 +281,37 @@ final class APIServer: ObservableObject {
 
     // MARK: - HTTP Router
 
+    /// Build a router for testing without spinning up the full server
+    /// task. Used by HTTP integration tests that exercise the route
+    /// handlers via `Application.test(.router) { ... }`.
+    func makeTestRouter() -> Router<BasicRequestContext> {
+        buildRouter()
+    }
+
+    /// Build a WebSocket router for testing.
+    func makeTestWebSocketRouter() -> Router<BasicWebSocketRequestContext> {
+        buildWebSocketRouter()
+    }
+
     private func buildRouter() -> Router<BasicRequestContext> {
         let router = Router()
         let sttEngine = YoozSTTEngine.shared
+        // Hoist the metrics sink + preview fallback hook so they
+        // share lifecycle with the router (one engine `start()` call
+        // = one sink + one hook, surviving across requests). The
+        // hook's cold-start state machine relies on this — a
+        // per-request hook would treat every request as a new
+        // cold-start.
+        let metricsSink: any STTMetricsSink = makeSTTMetricsSink(
+            optedIn: EngineConfig.telemetryOptedIn,
+            fileURL: EngineConfig.sttMetricsFileURL
+        )
+        let previewFallbackHook = PreviewFallbackHook(
+            fetcher: Qwen3ASRPreviewFetcherAdapter(),
+            preview: Qwen3ASRPreviewBackendAdapter(),
+            fallback: ParakeetFallbackAdapter(),
+            sink: metricsSink
+        )
 
         // Health
         router.get("/v1/health") { _, _ in
@@ -381,6 +546,50 @@ final class APIServer: ObservableObject {
             }
         }
 
+        // STT: Backend selection
+        router.get("/v1/stt/engine") { _, _ in
+            let current = sttEngine.currentBackend.rawValue
+            let available = STTBackendID.allCases.map { backend in
+                STTEngineCapabilities(
+                    id: backend.rawValue,
+                    supportsBatch: backend.supportsBatch,
+                    supportsStreaming: backend.supportsStreaming,
+                    supportedLanguages: backend.supportedLanguages
+                        .map(\.rawValue)
+                )
+            }
+            return STTEngineGetResponse(current: current, available: available)
+        }
+
+        router.post("/v1/stt/engine") { [self] request, context in
+            let body: STTEnginePostRequest
+            do {
+                body = try await request.decode(
+                    as: STTEnginePostRequest.self, context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            guard let backend = STTBackendID(rawValue: body.engine) else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown engine '\(body.engine)'. Available: "
+                        + STTBackendID.allCases.map(\.rawValue).joined(separator: ", "),
+                    code: "invalid_engine"
+                )
+            }
+
+            await sttEngine.setBackend(backend)
+            return try jsonResponse(STTEnginePostResponse(
+                current: sttEngine.currentBackend.rawValue
+            ))
+        }
+
         // STT: Available languages
         router.get("/v1/stt/languages") { _, _ in
             STTLanguagesResponse(languages: STTLanguage.allCases.map { lang in
@@ -395,10 +604,26 @@ final class APIServer: ObservableObject {
 
         // STT: Status
         router.get("/v1/stt/status") { _, _ in
-            let running = sttEngine.isRunning
+            // `isCurrentBackendLoaded()` is backend-aware: for
+            // Parakeet/FastConformer/AppleSTT it reads `model != nil`
+            // (same as `isRunning`); for `qwen3_asr_preview` it
+            // reads the actor's `isLoaded` flag. Without this, after
+            // a fallback the engine would report `loaded: true` for
+            // qwen3_asr_preview while only the Parakeet model is in
+            // memory — see round-2 silent-failure #B4.
+            let backendLoaded = await sttEngine.isCurrentBackendLoaded()
+            // Surface the language the *currently-selected* backend
+            // is loaded for. For qwen3 the backend actor doesn't
+            // expose a per-language state today, so we report the
+            // engine's `currentLanguage` (which the WS / batch
+            // handlers use for the Qwen3 hint) when the backend is
+            // loaded; nil otherwise.
+            let language: String? = backendLoaded
+                ? sttEngine.currentLanguage.rawValue
+                : nil
             return STTStatusResponse(
-                loaded: running,
-                language: running ? sttEngine.currentLanguage.rawValue : nil,
+                loaded: backendLoaded,
+                language: language,
                 streaming: sttEngine.isStreaming
             )
         }
@@ -416,6 +641,73 @@ final class APIServer: ObservableObject {
                     message: error.message,
                     code: error.code
                 )
+            }
+
+            // When the active backend is qwen3, ensure the model
+            // directory is materialized on disk before calling
+            // start(). The fetch is opt-in via `allowFetch` (default
+            // true for ergonomics; CI/tests can disable it).
+            if sttEngine.currentBackend == .qwen3ASRPreview {
+                let modelDir = Qwen3ASRModelFetcher.defaultModelDir
+                let fetcher = Qwen3ASRModelFetcher.shared
+                let ready = await fetcher.isModelDirReady(modelDir)
+                if !ready {
+                    let allow = body.allowFetch ?? true
+                    if !allow {
+                        return errorResponse(
+                            status: .notFound,
+                            message: "Qwen3-ASR model not on disk and "
+                                + "allow_fetch=false; bring the model "
+                                + "directory into place first.",
+                            code: "model_not_found"
+                        )
+                    }
+                    do {
+                        let stream = await fetcher.download(into: modelDir)
+                        for try await _ in stream {
+                            // Drain the progress stream; HTTP clients
+                            // get a single response after the fetch
+                            // completes. Streaming progress to clients
+                            // is a future enhancement (issue #59).
+                        }
+                    } catch let asrError as Qwen3ASRError {
+                        // Route through the same demux as
+                        // /v1/stt/batch so a fetch failure surfaces
+                        // the same HTTP code regardless of which
+                        // endpoint the client hit.
+                        return mapQwen3BatchError(asrError)
+                    } catch let fetchFailure as FetchFailure {
+                        return mapFetchFailure(fetchFailure)
+                    } catch {
+                        return errorResponse(
+                            status: .internalServerError,
+                            message: "Model fetch failed: \(error.localizedDescription)",
+                            code: "model_fetch_failed"
+                        )
+                    }
+                } else {
+                    // Even when the directory is ready, run the
+                    // tokenizer prep step in case a previous run
+                    // missed it (e.g. user pre-staged the files
+                    // manually). Idempotent.
+                    do {
+                        try await Qwen3ASRTokenizerPrep.prepare(
+                            modelDir: modelDir
+                        )
+                    } catch let asrError as Qwen3ASRError {
+                        // Same mapping as the batch path so the wire
+                        // shape is consistent
+                        // (`tokenizer_validation_failed` /
+                        // `model_fetch_failed` / etc).
+                        return mapQwen3BatchError(asrError)
+                    } catch {
+                        return errorResponse(
+                            status: .internalServerError,
+                            message: "Tokenizer prep failed: \(error.localizedDescription)",
+                            code: "tokenizer_prep_failed"
+                        )
+                    }
+                }
             }
 
             do {
@@ -449,19 +741,45 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            // Ensure model is loaded for the requested language
-            do {
-                try await sttEngine.start(language: language)
-            } catch {
-                return errorResponse(
-                    status: .internalServerError,
-                    message: error.localizedDescription,
-                    code: "model_load_failed"
+            let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
+
+            // Route through the Qwen3 backend when active. Typed
+            // errors from the backend are mapped to HTTP error
+            // responses below; we do NOT swallow Qwen3 failures as
+            // 200 OK with empty text — the user deserves to see
+            // pipeline-not-loaded / invalid-input as a structured
+            // response, not silent emptiness.
+            let result: ParakeetResult
+            if sttEngine.currentBackend == .qwen3ASRPreview {
+                // Route through the auto-fallback hook so a
+                // first-run cold-start failure (network blip,
+                // missing model) hands off to Parakeet instead of
+                // returning a 500. Once the cold-start path
+                // resolves, subsequent failures propagate with
+                // typed HTTP codes (the hook only surfaces
+                // `Outcome` for happy-path & fallback; raw
+                // post-warmup throws still hit the catch below).
+                let outcome = await previewFallbackHook
+                    .attemptPreviewWithFallback(
+                        samples: body.samples,
+                        language: language
+                    )
+                result = outcome.result
+            } else {
+                // Ensure model is loaded for the requested language
+                do {
+                    try await sttEngine.start(language: language)
+                } catch {
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: error.localizedDescription,
+                        code: "model_load_failed"
+                    )
+                }
+                result = await sttEngine.batchTranscribe(
+                    samples: body.samples, mode: mode
                 )
             }
-
-            let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
-            let result = await sttEngine.batchTranscribe(samples: body.samples, mode: mode)
 
             return try jsonResponse(BatchSTTResponse(
                 text: result.text,
@@ -479,10 +797,30 @@ final class APIServer: ObservableObject {
     private func buildWebSocketRouter() -> Router<BasicWebSocketRequestContext> {
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         let sttLogger = Logger(label: "live.yooz.engine.stt.stream")
+        // One sink instance per server lifetime — file handle stays
+        // owned by the actor. Per-request sinks would race on the
+        // file URL and confuse lifecycle ("is this sink alive?").
+        let metricsSink: any STTMetricsSink = makeSTTMetricsSink(
+            optedIn: EngineConfig.telemetryOptedIn,
+            fileURL: EngineConfig.sttMetricsFileURL
+        )
 
         wsRouter.ws("/v1/stt/stream") { inbound, outbound, context in
             let sttEngine = YoozSTTEngine.shared
             var transcriber: StreamingTranscriber?
+            // Per-connection streaming session for the qwen3
+            // backend. Owns its own audio buffer; the underlying
+            // backend actor serializes concurrent transcribe calls.
+            var qwen3Session: Qwen3ASRStreamingSession?
+            // Wall clock at session start for the telemetry record
+            // emitted on `final`. Set when the qwen3 session is
+            // configured (matches "stream start" semantics).
+            var qwen3StreamStartedMs: UInt64?
+            // True once we've sent the buffer-cap warning frame.
+            // The frame is one-shot per connection so a long
+            // dictation past the cap doesn't flood the client with
+            // identical warnings.
+            var qwen3BufferCapWarned = false
             let encoder = JSONEncoder()
 
             // Encode a WSSTTResult to JSON and send via WebSocket
@@ -499,10 +837,20 @@ final class APIServer: ObservableObject {
                 }
             }
 
-            // Send a JSON-encoded error message to the client
-            func sendError(_ message: String) async {
+            // Send a JSON-encoded error message to the client.
+            // `code` is a stable identifier the client can branch on
+            // (e.g. `protocol`, `stream_aborted`) without parsing
+            // `message`. Best-effort: if the connection has already
+            // gone, this is a no-op.
+            func sendError(
+                _ message: String, code: WSSTTErrorCode? = nil
+            ) async {
                 do {
-                    let json = try encoder.encode(WSSTTError(type: "error", message: message))
+                    let json = try encoder.encode(
+                        WSSTTError(
+                            type: "error", message: message, code: code
+                        )
+                    )
                     guard let jsonStr = String(data: json, encoding: .utf8) else { return }
                     try await outbound.write(.text(jsonStr))
                 } catch {
@@ -510,10 +858,72 @@ final class APIServer: ObservableObject {
                 }
             }
 
+            // Send a one-shot non-fatal warning frame. `code` is a
+            // typed enum; the wire still carries the snake_case
+            // rawValue ("buffer_cap_reached", etc.) so clients
+            // don't see a wire-shape change.
+            func sendWarning(
+                code: WSSTTWarningCode, message: String
+            ) async {
+                do {
+                    let json = try encoder.encode(
+                        WSSTTWarning(
+                            type: "warning",
+                            code: code,
+                            message: message
+                        )
+                    )
+                    guard let jsonStr = String(data: json, encoding: .utf8) else { return }
+                    try await outbound.write(.text(jsonStr))
+                } catch {
+                    sttLogger.error("Failed to send warning: \(error)")
+                }
+            }
+
+            // Build a Qwen3 telemetry record. `audioMs` is the
+            // amount of audio actually consumed by the session
+            // (post-cap if truncation happened). `errored` flips
+            // when the stream tore down via an exception path so
+            // dashboards can distinguish clean closes from drops.
+            func buildQwen3Metric(
+                audioMs: UInt32, fellBack: Bool, errored: Bool
+            ) -> STTBackendMetrics {
+                let endMs = DispatchTime.now().uptimeNanoseconds / 1_000_000
+                let elapsed: UInt32
+                if let started = qwen3StreamStartedMs {
+                    elapsed = UInt32(min(endMs &- started, UInt64(UInt32.max)))
+                } else {
+                    elapsed = 0
+                }
+                let variant = STTBackendMetrics.defaultModelVariant(
+                    for: .qwen3ASRPreview
+                )
+                return STTBackendMetrics(
+                    backend: .qwen3ASRPreview,
+                    modelVariant: variant,
+                    audioDurationMs: audioMs,
+                    timeToFirstTokenMs: nil,
+                    endToEndLatencyMs: elapsed,
+                    hardwareClass: SystemHardwareClassResolver().resolve(),
+                    fellBackFromPreview: fellBack,
+                    streamAborted: errored,
+                    timestampUTC: Date()
+                )
+            }
+
             sttLogger.info("STT WebSocket client connected")
 
-            // Use message-level API to handle fragmented frames automatically
-            // Max message size: 10MB (enough for ~2.7 min of 16kHz Float32 audio)
+            // Use message-level API to handle fragmented frames automatically.
+            // Max message size: 10MB (enough for ~2.7 min of 16kHz Float32 audio).
+            //
+            // We wrap the loop in do/catch so a thrown error inside
+            // `inbound.messages(...)` (oversized frame, abrupt
+            // disconnect mid-frame, framer decode error) does NOT
+            // bypass the cleanup block below — without this, the
+            // qwen3 session never gets `discard()`-ed, no telemetry
+            // record fires, and the audio buffer (up to ~19 MB at
+            // the 5-min cap) lingers on the actor's executor.
+            do {
             for try await message in inbound.messages(maxSize: 10 * 1024 * 1024) {
                 switch message {
                 case .text(let text):
@@ -527,26 +937,108 @@ final class APIServer: ObservableObject {
                         config = try JSONDecoder().decode(WSSTTConfig.self, from: data)
                     } catch {
                         sttLogger.warning("Invalid text message: \(error)")
-                        await sendError("Invalid message format")
+                        await sendError(
+                            "Invalid message format",
+                            code: .invalidMessageFormat
+                        )
                         continue
                     }
 
                     if config.type == "config" {
                         let languageCode = config.language ?? "en"
                         guard let language = STTLanguage.fromCode(languageCode) else {
-                            await sendError("Unknown language: \(languageCode)")
+                            await sendError(
+                                "Unknown language: \(languageCode)",
+                                code: .unknownLanguage
+                            )
                             continue
                         }
 
                         guard language.isImplemented else {
-                            await sendError("Language not implemented: \(language.displayName)")
+                            await sendError(
+                                "Language not implemented: \(language.displayName)",
+                                code: .languageNotImplemented
+                            )
+                            continue
+                        }
+
+                        // Branch on the active backend at config
+                        // time. The qwen3 path opens a streaming
+                        // session against the (already-loaded)
+                        // backend actor; the Parakeet/FastConformer
+                        // path creates a per-connection
+                        // `StreamingTranscriber` exactly as before.
+                        if sttEngine.currentBackend == .qwen3ASRPreview {
+                            // Allow only languages the backend
+                            // declares; the engine's `start` would
+                            // otherwise refuse later anyway, but
+                            // surfacing the error here keeps the
+                            // protocol response immediate.
+                            guard
+                                STTBackendID.qwen3ASRPreview.supportedLanguages
+                                    .contains(language)
+                            else {
+                                await sendError(
+                                    "Language not supported by qwen3_asr_preview: "
+                                        + language.displayName,
+                                    code: .languageNotSupportedByBackend
+                                )
+                                continue
+                            }
+
+                            do {
+                                try await sttEngine.start(language: language)
+                            } catch {
+                                await sendError(
+                                    "Failed to load model: \(error.localizedDescription)",
+                                    code: .modelLoadFailed
+                                )
+                                continue
+                            }
+
+                            // Discard any prior session — clients
+                            // sending a second `config` reset the
+                            // transcript. Mirrors how the legacy
+                            // path overwrites `transcriber`.
+                            if let existing = qwen3Session {
+                                await existing.discard()
+                            }
+                            qwen3Session = Qwen3ASRStreamingSession(
+                                languageHint: language.qwen3LanguageHint
+                            )
+                            qwen3StreamStartedMs =
+                                DispatchTime.now().uptimeNanoseconds / 1_000_000
+                            // Each `config` message starts a brand-new
+                            // session with an empty buffer; the cap
+                            // warning is one-shot per session, not per
+                            // WS connection, so the prior session's
+                            // flag must not silence the next session's
+                            // truncation.
+                            qwen3BufferCapWarned = false
+
+                            do {
+                                let ready = try encoder.encode(
+                                    WSSTTReady(type: "ready", language: languageCode)
+                                )
+                                if let readyStr = String(data: ready, encoding: .utf8) {
+                                    try await outbound.write(.text(readyStr))
+                                }
+                            } catch {
+                                sttLogger.error("Failed to send ready message: \(error)")
+                            }
+                            sttLogger.info(
+                                "STT stream configured: language=\(languageCode), backend=qwen3_asr_preview"
+                            )
                             continue
                         }
 
                         do {
                             try await sttEngine.start(language: language)
                         } catch {
-                            await sendError("Failed to load model: \(error.localizedDescription)")
+                            await sendError(
+                                "Failed to load model: \(error.localizedDescription)",
+                                code: .modelLoadFailed
+                            )
                             continue
                         }
 
@@ -565,13 +1057,21 @@ final class APIServer: ObservableObject {
                     }
 
                 case .binary(var buffer):
-                    // Audio data: raw Float32 samples at 16kHz
-                    guard let transcriber = transcriber else {
-                        sttLogger.warning("Audio received before config message")
+                    let byteCount = buffer.readableBytes
+                    // Reject obviously-malformed frames early. The
+                    // protocol expects a multiple of `Float32`-sized
+                    // bytes; partial-sample frames are dropped with a
+                    // typed error so the client can correct rather
+                    // than silently corrupting the buffer.
+                    if byteCount % MemoryLayout<Float>.size != 0 {
+                        await sendError(
+                            "Audio frame byte count (\(byteCount)) is not a "
+                                + "multiple of Float32 size; expected raw "
+                                + "Float32 PCM at 16 kHz mono.",
+                            code: .invalidAudioFrame
+                        )
                         continue
                     }
-
-                    let byteCount = buffer.readableBytes
                     let sampleCount = byteCount / MemoryLayout<Float>.size
                     guard sampleCount > 0 else { continue }
 
@@ -585,6 +1085,63 @@ final class APIServer: ObservableObject {
                         }
                     }
 
+                    if let session = qwen3Session {
+                        let outcome: Qwen3ASRStreamingSession.PushOutcome
+                        do {
+                            outcome = try await session.push(samples: samples)
+                        } catch let sessionError as Qwen3ASRStreamingSession.SessionError {
+                            await sendError(
+                                "Streaming session error: \(sessionError.description)",
+                                code: .sessionError
+                            )
+                            continue
+                        } catch {
+                            await sendError(
+                                "Streaming session error: \(error.localizedDescription)",
+                                code: .sessionError
+                            )
+                            continue
+                        }
+                        // Detect a buffer-cap hit: push() silently
+                        // truncates past the soft cap. Fire a
+                        // one-shot warning frame the first time
+                        // truncation happens — including the very
+                        // first chunk that partially crosses the cap,
+                        // not just subsequent fully-rejected chunks.
+                        // The flag is reset when the client sends a
+                        // second `config` (transcript reset), so a
+                        // long dictation that re-configs mid-stream
+                        // still gets a warning per session.
+                        if outcome.truncated && !qwen3BufferCapWarned {
+                            qwen3BufferCapWarned = true
+                            await sendWarning(
+                                code: .bufferCapReached,
+                                message:
+                                    "Audio buffer reached the streaming "
+                                    + "cap. Additional audio is being "
+                                    + "discarded. The transcript on "
+                                    + "`final` reflects the buffered "
+                                    + "audio only."
+                            )
+                        }
+                        // Heartbeat partial — qwen3's streaming model
+                        // doesn't expose intermediate text without a
+                        // re-prefill on every chunk, so the partial
+                        // text fields stay empty until `final`.
+                        await sendResult(WSSTTResult(
+                            type: "partial",
+                            text: "",
+                            finalized: "",
+                            draft: ""
+                        ))
+                        continue
+                    }
+
+                    guard let transcriber = transcriber else {
+                        sttLogger.warning("Audio received before config message")
+                        continue
+                    }
+
                     let result = transcriber.addAudio(samples: samples)
 
                     await sendResult(WSSTTResult(
@@ -595,9 +1152,115 @@ final class APIServer: ObservableObject {
                     ))
                 }
             }
+            } catch is CancellationError {
+                // Outer Task was cancelled (server stop, peer
+                // dropped, etc.). Run the same cleanup as a clean
+                // disconnect so the qwen3 session is `discard()`-ed
+                // and a metric record fires with the audio actually
+                // consumed before the cancel.
+                if let session = qwen3Session {
+                    let audioMs = await session.audioDurationMs
+                    await session.discard()
+                    qwen3Session = nil
+                    let metric = buildQwen3Metric(
+                        audioMs: audioMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
+                }
+                sttLogger.info("STT WebSocket cancelled")
+                throw CancellationError()
+            } catch {
+                // The message loop threw — oversized frame past the
+                // 10 MB cap, abrupt connection drop with a partial
+                // frame in flight, framer decode error. Run the
+                // qwen3 session cleanup we would otherwise miss,
+                // emit one error frame to the client (best-effort),
+                // and emit a metric record so dashboards see the
+                // drop rate.
+                sttLogger.error(
+                    "STT WebSocket loop threw: \(String(describing: error))"
+                )
+                await sendError(
+                    "Stream aborted: \(error.localizedDescription)",
+                    code: .streamAborted
+                )
+                if let session = qwen3Session {
+                    let audioMs = await session.audioDurationMs
+                    await session.discard()
+                    qwen3Session = nil
+                    let metric = buildQwen3Metric(
+                        audioMs: audioMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
+                }
+                sttLogger.info("STT WebSocket client disconnected (error)")
+                return
+            }
 
-            // Client disconnected; finalize if a transcriber is active
-            if let transcriber = transcriber {
+            // Client disconnected cleanly; finalize whichever
+            // session is active.
+            if let session = qwen3Session {
+                do {
+                    let final = try await session.finalize()
+                    await sendResult(WSSTTResult(
+                        type: "final",
+                        text: final.text,
+                        finalized: final.text,
+                        draft: ""
+                    ))
+                    // Telemetry — opt-in via EngineConfig. The
+                    // hoisted sink lives for the server's lifetime;
+                    // a `DiscardingMetricsSink` swallows the record
+                    // when the user hasn't enabled local telemetry.
+                    let metric = buildQwen3Metric(
+                        audioMs: final.audioDurationMs,
+                        fellBack: false,
+                        errored: false
+                    )
+                    await metricsSink.record(metric)
+                } catch Qwen3ASRStreamingSession.SessionError.empty {
+                    // Client disconnected without sending audio. Emit
+                    // an empty `final` for protocol symmetry.
+                    await sendResult(WSSTTResult(
+                        type: "final",
+                        text: "",
+                        finalized: "",
+                        draft: ""
+                    ))
+                } catch let sessionError as Qwen3ASRStreamingSession.SessionError {
+                    sttLogger.error(
+                        "Qwen3 streaming finalize failed: \(sessionError.description)"
+                    )
+                    await sendError(
+                        "Streaming finalize failed: \(sessionError.description)",
+                        code: .finalizeFailed
+                    )
+                    let metric = buildQwen3Metric(
+                        audioMs: await session.audioDurationMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
+                } catch {
+                    sttLogger.error(
+                        "Qwen3 streaming finalize failed: \(error.localizedDescription)"
+                    )
+                    await sendError(
+                        "Streaming finalize failed: \(error.localizedDescription)",
+                        code: .finalizeFailed
+                    )
+                    let metric = buildQwen3Metric(
+                        audioMs: await session.audioDurationMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
+                }
+            } else if let transcriber = transcriber {
                 let finalResult = transcriber.finalize()
                 await sendResult(WSSTTResult(
                     type: "final",

@@ -47,6 +47,11 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     @Published public private(set) var lastError: String?
     @Published public private(set) var currentLanguage: STTLanguage = .english
 
+    /// Active STT backend. Default is `.parakeet`; switchable via
+    /// `setBackend(_:)` (HTTP `POST /v1/stt/engine`) or the
+    /// `YOOZ_STT_BACKEND` env var honored by `EngineConfig`.
+    @Published public private(set) var currentBackend: STTBackendID = .parakeet
+
     // MARK: - Callbacks
 
     /// Callback for transcription updates
@@ -66,7 +71,50 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
     // MARK: - Initialization
 
-    private init() {}
+    private init() {
+        // Honor the env-driven default at construction time.
+        self.currentBackend = EngineConfig.sttBackend
+    }
+
+    // MARK: - Backend Selection
+
+    /// Switch the active STT backend. Unloads any model held by the
+    /// previous backend so the next `start(language:)` /
+    /// `batchTranscribe(...)` call starts cleanly.
+    ///
+    /// This call is light-weight: it does NOT trigger a model fetch
+    /// or pipeline load. Heavy work happens lazily on the next
+    /// transcribe call, matching the existing Parakeet flow.
+    public func setBackend(_ backend: STTBackendID) async {
+        guard backend != currentBackend else { return }
+        NSLog(
+            "YoozSTTEngine: switching backend %@ -> %@",
+            currentBackend.rawValue, backend.rawValue
+        )
+
+        // Drop Parakeet/FastConformer state.
+        stop()
+
+        // Drop Qwen3 state if it was loaded.
+        await Qwen3ASRBackend.shared.unload()
+
+        await MainActor.run {
+            self.currentBackend = backend
+            self.isReady = false
+        }
+    }
+
+    /// Whether the currently-selected backend has a model loaded and
+    /// ready to transcribe. Differs from `isReady` only for the Qwen3
+    /// backend, which keeps its load state inside the actor.
+    public func isCurrentBackendLoaded() async -> Bool {
+        switch currentBackend {
+        case .parakeet, .fastConformer, .appleSTT:
+            return isRunning
+        case .qwen3ASRPreview:
+            return await Qwen3ASRBackend.shared.isLoaded
+        }
+    }
 
     // MARK: - Model Management
 
@@ -76,6 +124,23 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     public func start(language: STTLanguage = .english) async throws {
         NSLog("YoozSTTEngine: start(language: %@) called", language.rawValue)
 
+        // Backend-specific dispatch: the Qwen3 backend lives entirely
+        // inside its actor and does not touch `model` / `currentLanguage`.
+        if currentBackend == .qwen3ASRPreview {
+            try await startQwen3Backend(language: language)
+            return
+        }
+
+        try await loadParakeetModel(language: language)
+    }
+
+    /// Load the Parakeet/FastConformer model for `language` without
+    /// touching `currentBackend`. Used by the auto-fallback adapter so
+    /// the hook can run a single Parakeet transcription without
+    /// permanently flipping the engine's backend selection — the
+    /// user's preview pick is honored at next process start (or after
+    /// a manual `POST /v1/stt/engine`).
+    public func loadParakeetModel(language: STTLanguage) async throws {
         // Check if already loaded with same language
         if model != nil && currentLanguage == language {
             NSLog("YoozSTTEngine: Already started with language %@", language.rawValue)
@@ -421,6 +486,100 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         return StreamingTranscriber(
             model: model,
             preprocessConfig: config
+        )
+    }
+
+    // MARK: - Qwen3 Backend
+
+    /// Load the Qwen3-ASR pipeline for the given language. The
+    /// pipeline auto-detects language at runtime, so the language
+    /// parameter is mostly informational (recorded as
+    /// `currentLanguage`). Requires the model directory to be ready
+    /// on disk; callers run `Qwen3ASRModelFetcher` first if needed.
+    private func startQwen3Backend(language: STTLanguage) async throws {
+        guard
+            STTBackendID.qwen3ASRPreview.supportedLanguages.contains(language)
+        else {
+            throw YoozSTTError.languageNotSupported(language)
+        }
+
+        let modelDir = Qwen3ASRModelFetcher.defaultModelDir
+        guard FileManager.default.fileExists(
+            atPath: modelDir.appendingPathComponent("config.json").path
+        ) else {
+            throw YoozSTTError.modelNotFound(
+                "Qwen3-ASR model directory not ready at "
+                + "\(modelDir.path) — run model fetch first"
+            )
+        }
+
+        do {
+            try await Qwen3ASRBackend.shared.ensureLoaded(modelDir: modelDir)
+            await MainActor.run {
+                self.isReady = true
+                self.currentLanguage = language
+            }
+            NSLog(
+                "YoozSTTEngine: Qwen3-ASR ready (language=%@)",
+                language.rawValue
+            )
+        } catch {
+            let msg = "Failed to load Qwen3-ASR pipeline: \(error)"
+            NSLog("YoozSTTEngine: ERROR - %@", msg)
+            await MainActor.run {
+                self.lastError = msg
+            }
+            onError?(msg)
+            throw YoozSTTError.modelLoadFailed(msg)
+        }
+    }
+
+    /// Run a Qwen3-ASR batch transcription. Returns a `ParakeetResult`
+    /// so callers (the existing HTTP layer) don't have to branch on
+    /// the backend type. Errors are SWALLOWED — the swallow is
+    /// historical (preserved for callers that don't care about
+    /// distinguishing failure modes); new code should call
+    /// `batchTranscribeQwen3Throwing(...)` and map the typed error.
+    @available(
+        *, deprecated,
+        message: "Errors are silently swallowed as `.empty`; SDK consumers see blank text on every failure mode. Prefer batchTranscribeQwen3Throwing(samples:language:) and map the typed Qwen3ASRError."
+    )
+    public func batchTranscribeQwen3(
+        samples: [Float],
+        language: STTLanguage
+    ) async -> ParakeetResult {
+        do {
+            return try await batchTranscribeQwen3Throwing(
+                samples: samples,
+                language: language
+            )
+        } catch {
+            NSLog(
+                "YoozSTTEngine: Qwen3 batch transcribe failed: %@",
+                String(describing: error)
+            )
+            return .empty
+        }
+    }
+
+    /// Run a Qwen3-ASR batch transcription, propagating the typed
+    /// `Qwen3ASRError` (or any other underlying error) so the
+    /// HTTP layer can map cases to the right status code.
+    public func batchTranscribeQwen3Throwing(
+        samples: [Float],
+        language: STTLanguage
+    ) async throws -> ParakeetResult {
+        // `STTLanguage.qwen3LanguageHint` is the single source of
+        // truth for this mapping, shared with
+        // `Qwen3ASRPreviewBackendAdapter`.
+        let result = try await Qwen3ASRBackend.shared.transcribe(
+            pcm: samples,
+            language: language.qwen3LanguageHint
+        )
+        return ParakeetResult(
+            text: result.text,
+            finalized: result.text,
+            draft: ""
         )
     }
 

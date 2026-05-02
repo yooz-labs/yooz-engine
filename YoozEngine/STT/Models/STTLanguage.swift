@@ -111,6 +111,40 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
         rawValue
     }
 
+    /// Canonical language label the Qwen3-ASR pipeline expects
+    /// (e.g. `English`, `Arabic`, `Persian`). The Qwen3 chat template
+    /// matches on these exact strings; they're close to but not
+    /// identical with `displayName` (e.g. `"Chinese"` vs
+    /// `"Chinese (Mandarin)"`).
+    ///
+    /// Single source of truth for the engine's `YoozSTTEngine`
+    /// dispatch path and the `Qwen3ASRPreviewBackendAdapter` used by
+    /// `PreviewFallbackHook`. Keeping the mapping in one place
+    /// avoids the two-call-sites drift risk that would otherwise
+    /// silently break preview transcribes for one language but not
+    /// the other.
+    public var qwen3LanguageHint: String {
+        switch self {
+        case .english:    return "English"
+        case .arabic:     return "Arabic"
+        case .persian:    return "Persian"
+        case .hebrew:     return "Hebrew"
+        case .spanish:    return "Spanish"
+        case .french:     return "French"
+        case .german:     return "German"
+        case .italian:    return "Italian"
+        case .portuguese: return "Portuguese"
+        case .dutch:      return "Dutch"
+        case .polish:     return "Polish"
+        case .russian:    return "Russian"
+        case .ukrainian:  return "Ukrainian"
+        case .chinese:    return "Chinese"
+        case .japanese:   return "Japanese"
+        case .korean:     return "Korean"
+        case .cantonese:  return "Cantonese"
+        }
+    }
+
     /// Whether this language uses right-to-left script
     public var isRTL: Bool {
         switch self {

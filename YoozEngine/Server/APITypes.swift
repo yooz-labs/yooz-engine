@@ -59,12 +59,42 @@ struct STTLanguageInfo: Codable {
 
 struct STTLoadRequest: Decodable {
     let language: String?
+    /// When true (or unset), the engine will fetch the model from the
+    /// remote source if it is not already on disk. When false, the
+    /// load fails with `model_not_found` if the directory is empty.
+    /// Only consulted by backends that own a first-run fetch path
+    /// (`qwen3_asr_preview`); ignored otherwise.
+    let allowFetch: Bool?
 }
 
 struct STTStatusResponse: ResponseCodable {
     let loaded: Bool
     let language: String?
     let streaming: Bool
+}
+
+// MARK: - Backend selection
+
+struct STTEngineGetResponse: ResponseCodable {
+    let current: String
+    let available: [STTEngineCapabilities]
+}
+
+struct STTEngineCapabilities: Codable {
+    let id: String
+    let supportsBatch: Bool
+    let supportsStreaming: Bool
+    let supportedLanguages: [String]
+}
+
+struct STTEnginePostRequest: Codable {
+    /// New backend identifier. Accepts the `STTBackendID` raw values:
+    /// `parakeet`, `fast_conformer`, `apple_stt`, `qwen3_asr_preview`.
+    let engine: String
+}
+
+struct STTEnginePostResponse: ResponseCodable {
+    let current: String
 }
 
 // MARK: - WebSocket STT Messages
@@ -82,14 +112,78 @@ struct WSSTTResult: Encodable {
     let draft: String
 }
 
+/// Stable wire-level error codes the engine emits over WS. The
+/// `rawValue` is what crosses the wire; clients branch on it. Kept
+/// as a typed enum (mirroring `WSSTTWarningCode`) so the compiler
+/// catches typos at the emit-site — a free-form `String` like
+/// `"session_error"` would silently break client branching.
+enum WSSTTErrorCode: String, Encodable, Sendable, CaseIterable {
+    /// Inbound text frame failed JSON decode (`WSSTTConfig`).
+    case invalidMessageFormat = "invalid_message_format"
+    /// `config.language` does not map to a known `STTLanguage`.
+    case unknownLanguage = "unknown_language"
+    /// Language is known but not implemented for any backend yet.
+    case languageNotImplemented = "language_not_implemented"
+    /// The active backend (`qwen3_asr_preview`) does not support
+    /// the requested language.
+    case languageNotSupportedByBackend = "language_not_supported_by_backend"
+    /// `sttEngine.start(language:)` threw — the per-backend load
+    /// path failed (model fetch, weight load, tokenizer prep).
+    case modelLoadFailed = "model_load_failed"
+    /// Inbound binary frame is not a whole-`Float32` multiple.
+    case invalidAudioFrame = "invalid_audio_frame"
+    /// Qwen3 streaming session raised a typed `SessionError`
+    /// during `push`.
+    case sessionError = "session_error"
+    /// The WS message loop tore down via an exception path
+    /// (oversized frame, abrupt disconnect, framer decode).
+    case streamAborted = "stream_aborted"
+    /// `finalize()` threw — the model produced no transcript or
+    /// the post-processing path failed mid-stream.
+    case finalizeFailed = "finalize_failed"
+}
+
 struct WSSTTError: Encodable {
     let type: String  // "error"
     let message: String
+    /// Typed error code so clients can branch without parsing
+    /// `message`. Optional to keep the wire format backward-
+    /// compatible with older consumers; the wire still carries the
+    /// snake_case rawValue.
+    let code: WSSTTErrorCode?
+
+    init(type: String, message: String, code: WSSTTErrorCode? = nil) {
+        self.type = type
+        self.message = message
+        self.code = code
+    }
 }
 
 struct WSSTTReady: Encodable {
     let type: String  // "ready"
     let language: String
+}
+
+/// Stable wire-level warning codes the engine emits over WS. The
+/// `rawValue` is what crosses the wire; clients branch on it. Kept
+/// as a typed enum so the compiler catches typos at the engine
+/// emit-site (a free-form `String` like
+/// `"buffer_cap_reachd"` would silently break client branching).
+enum WSSTTWarningCode: String, Encodable, Sendable, CaseIterable {
+    /// The streaming session's audio buffer hit its soft cap;
+    /// additional audio is being discarded. The transcript on
+    /// `final` reflects the buffered audio only.
+    case bufferCapReached = "buffer_cap_reached"
+}
+
+/// One-shot non-fatal warning frame. Used when the engine wants to
+/// keep the stream alive but signal a soft-capacity event (e.g. the
+/// session buffer cap was reached and additional audio is being
+/// dropped).
+struct WSSTTWarning: Encodable {
+    let type: String  // "warning"
+    let code: WSSTTWarningCode
+    let message: String
 }
 
 // MARK: - LLM Types
