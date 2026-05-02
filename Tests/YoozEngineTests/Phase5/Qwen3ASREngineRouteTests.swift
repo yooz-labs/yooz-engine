@@ -98,7 +98,10 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
             }
             XCTAssertNotNil(qwen3)
             XCTAssertTrue(qwen3?.supportsBatch ?? false)
-            XCTAssertFalse(qwen3?.supportsStreaming ?? true)
+            // Phase 7 (issue #61) flipped streaming support on for
+            // the qwen3 backend. The capability is now exposed via
+            // the `/v1/stt/engine` GET response.
+            XCTAssertTrue(qwen3?.supportsStreaming ?? false)
         }
     }
 

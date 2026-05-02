@@ -59,8 +59,11 @@ final class STTBackendConfigTests: XCTestCase {
         }
     }
 
-    func testQwen3SupportsBatchButNotStreaming() {
+    /// Phase 7 (issue #61) added streaming support for the qwen3
+    /// backend. The capability flag flipped to `true` when the WS
+    /// path landed; this test guards against an accidental flip back.
+    func testQwen3SupportsBatchAndStreaming() {
         XCTAssertTrue(STTBackendID.qwen3ASRPreview.supportsBatch)
-        XCTAssertFalse(STTBackendID.qwen3ASRPreview.supportsStreaming)
+        XCTAssertTrue(STTBackendID.qwen3ASRPreview.supportsStreaming)
     }
 }

@@ -5,21 +5,23 @@ import XCTest
 
 @testable import YoozEngine
 
-/// Phase 5 — WebSocket smoke test for the qwen3 backend. Streaming
-/// for `qwen3_asr_preview` lands in Phase 7 (issue #58); for now the
-/// server must reject the connection cleanly with a JSON error frame
-/// rather than crashing or pretending to stream.
+/// Phase 5 placeholder — under Phase 5 this file asserted that the WS
+/// `/v1/stt/stream` endpoint *rejected* connections for the
+/// `qwen3_asr_preview` backend with a JSON error frame containing the
+/// "Phase 7" sentinel. Phase 7 (issue #61) lifts that rejection: the
+/// streaming path is now wired up.
 ///
-/// We can't use HummingbirdWSTesting here because of a known
-/// transitive-Logging link issue in `swift-websocket`'s WSCore target.
-/// Instead we boot the real APIServer on its localhost port (port
-/// 19920) and dial it via `URLSessionWebSocketTask`. The server reuse
-/// of the canonical port means only one of these tests can run at a
-/// time per process, which XCTest already serializes by default.
+/// This test is kept in place (rather than deleted) so the symbol
+/// referenced by the Phase 5 PR's CI history still exists; its
+/// assertion has been inverted to guard against a regression that
+/// puts the rejection back. The full streaming protocol is exercised
+/// by `Qwen3ASRStreamingProtocolTests` and the heavy end-to-end
+/// streaming smoke (which requires the live model) lives in
+/// `Qwen3ASRStreamingSmokeTests`.
 final class Qwen3ASRWebSocketTests: XCTestCase {
 
     @MainActor
-    func testQwen3StreamRejectsWithDeferredMessage() async throws {
+    func testQwen3StreamNoLongerSendsDeferredError() async throws {
         // Switch the global engine to qwen3 BEFORE booting the server
         // so the upgrade handler sees the right state on connect.
         await YoozSTTEngine.shared.setBackend(.qwen3ASRPreview)
@@ -35,8 +37,6 @@ final class Qwen3ASRWebSocketTests: XCTestCase {
             Task { @MainActor in await server.stop() }
         }
 
-        // Connect over WS, read the first frame, assert it carries the
-        // deferred-streaming sentinel "Phase 7".
         guard
             let url = URL(
                 string: "ws://\(EngineConfig.host):\(EngineConfig.port)/v1/stt/stream"
@@ -48,8 +48,17 @@ final class Qwen3ASRWebSocketTests: XCTestCase {
         let task = session.webSocketTask(with: url)
         task.resume()
 
-        // First frame: should be a JSON error message containing
-        // "Phase 7". The server then closes the connection on its own.
+        // The server should NOT proactively send a frame on connect
+        // anymore — it waits for a config message. To assert "no
+        // Phase-7 deferred frame" without blocking on receive forever
+        // we push a config that asks for an unsupported language;
+        // the response is a typed error that does not contain
+        // "Phase 7".
+        let badConfig = """
+        {"type":"config","language":"zz"}
+        """
+        try await task.send(.string(badConfig))
+
         let message = try await task.receive()
         let text: String
         switch message {
@@ -61,9 +70,15 @@ final class Qwen3ASRWebSocketTests: XCTestCase {
             text = ""
         }
 
-        XCTAssertTrue(
+        XCTAssertFalse(
             text.contains("Phase 7"),
-            "Expected deferred-streaming error frame, got: \(text)"
+            "Expected the qwen3 streaming path to NOT emit the legacy "
+                + "Phase-7 deferred frame, got: \(text)"
+        )
+        XCTAssertTrue(
+            text.contains("error") || text.contains("Unknown")
+                || text.contains("not implemented"),
+            "Expected a typed error frame for the bogus language code, got: \(text)"
         )
 
         task.cancel(with: .normalClosure, reason: nil)
