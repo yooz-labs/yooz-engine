@@ -59,7 +59,7 @@ final class KVCompressionTests: XCTestCase {
         // property is private), but instantiation must succeed and return
         // a backend with the expected identifier.
         let backend = MLXLLMBackend(modelType: .yoozLight)
-        let id = backend.identifier
+        let id = await backend.identifier
         XCTAssertEqual(id, LLMModelType.yoozLight.rawValue)
     }
 
@@ -71,7 +71,7 @@ final class KVCompressionTests: XCTestCase {
             modelType: .yoozQuality,
             kvCompression: .turbo3
         )
-        let id = backend.identifier
+        let id = await backend.identifier
         XCTAssertEqual(id, LLMModelType.yoozQuality.rawValue)
     }
 
@@ -102,6 +102,6 @@ final class KVCompressionTests: XCTestCase {
             systemPrompt: "You are a helpful assistant. Reply in one short sentence."
         )
         XCTAssertFalse(output.isEmpty, "turbo3 backend must produce output on a short prompt")
-        backend.unload()
+        await backend.unload()
     }
 }
