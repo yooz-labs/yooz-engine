@@ -1,0 +1,41 @@
+# QLoRA fine-tuning: Gemma-4 E2B (Quality tier candidate, BLOCKED)
+#
+# Base: mlx-community/Gemma4-E2B-IT-Text-int4 (text-only stripped checkpoint, ~2.7 GB)
+#
+# STATUS: BLOCKED. mlx-lm 0.31.3's `mlx_lm.lora` CLI calls `mlx_lm.load(..., strict=True)`
+# under the hood, and this checkpoint contains 140 spurious K/V projection weights for
+# the last 20 KV-shared layers (gemma4_text uses `num_kv_shared_layers: 20`). The
+# weights load only when `strict=False` is passed, but the lora CLI does not expose
+# that knob.
+#
+# See:
+#   /Volumes/S1/yooz/research/issue-9/.venv/lib/python3.12/site-packages/mlx_lm/lora.py:329
+#   /Volumes/S1/yooz/research/issue-9/.venv/lib/python3.12/site-packages/mlx/nn/layers/base.py:182
+#
+# Workarounds (none implemented in this PR — see BLOCKED.md):
+# 1. Patch a local fork of `mlx_lm.lora` to call `load(..., strict=False)`.
+# 2. Pre-fuse the checkpoint, dropping the unused parameters, then point the config at
+#    that on-disk path.
+# 3. Wait for an upstream fix (mlx-lm > 0.31.3) that recognises the gemma4_text shared
+#    K/V layout.
+
+model: "mlx-community/Gemma4-E2B-IT-Text-int4"
+data: "./data/quality"
+adapter_path: "/Volumes/S1/yooz/research/issue-9/results/phase3_finetune/gemma4-quality/adapters"
+
+train: true
+iters: 4200
+batch_size: 4
+learning_rate: 5.0e-6
+seed: 42
+
+num_layers: 16
+lora_rank: 8
+
+mask_prompt: true
+max_seq_length: 1024
+
+val_batches: 25
+steps_per_eval: 200
+steps_per_report: 50
+save_every: 500
