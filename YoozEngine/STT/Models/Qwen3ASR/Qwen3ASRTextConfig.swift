@@ -28,6 +28,12 @@ public struct Qwen3ASRTextConfig: Codable, Sendable, Equatable {
     public let tieWordEmbeddings: Bool
     public let attentionBias: Bool
 
+    /// Memberwise initializer. Non-throwing for source-compat (the
+    /// `audio` companion in `Qwen3ASRFullConfig` builds one of these
+    /// inline). The `init(from:)` decode path runs `validate()`, so
+    /// configs that crossed a JSON boundary are checked. Direct
+    /// programmatic construction should call `validated(...)` for
+    /// validation-on-construction.
     public init(
         modelType: String = "qwen3",
         vocabSize: Int = 151_936,
@@ -58,6 +64,44 @@ public struct Qwen3ASRTextConfig: Codable, Sendable, Equatable {
         self.ropeTheta = ropeTheta
         self.tieWordEmbeddings = tieWordEmbeddings
         self.attentionBias = attentionBias
+    }
+
+    /// Throwing factory: same fields as the memberwise init, but
+    /// runs `validate()` before returning.
+    public static func validated(
+        modelType: String = "qwen3",
+        vocabSize: Int = 151_936,
+        hiddenSize: Int = 2_048,
+        intermediateSize: Int = 6_144,
+        numHiddenLayers: Int = 28,
+        numAttentionHeads: Int = 16,
+        numKeyValueHeads: Int = 8,
+        headDim: Int = 128,
+        hiddenAct: String = "silu",
+        maxPositionEmbeddings: Int = 65_536,
+        rmsNormEps: Float = 1e-6,
+        ropeTheta: Float = 1_000_000.0,
+        tieWordEmbeddings: Bool = true,
+        attentionBias: Bool = false
+    ) throws -> Qwen3ASRTextConfig {
+        let cfg = Qwen3ASRTextConfig(
+            modelType: modelType,
+            vocabSize: vocabSize,
+            hiddenSize: hiddenSize,
+            intermediateSize: intermediateSize,
+            numHiddenLayers: numHiddenLayers,
+            numAttentionHeads: numAttentionHeads,
+            numKeyValueHeads: numKeyValueHeads,
+            headDim: headDim,
+            hiddenAct: hiddenAct,
+            maxPositionEmbeddings: maxPositionEmbeddings,
+            rmsNormEps: rmsNormEps,
+            ropeTheta: ropeTheta,
+            tieWordEmbeddings: tieWordEmbeddings,
+            attentionBias: attentionBias
+        )
+        try cfg.validate()
+        return cfg
     }
 
     enum CodingKeys: String, CodingKey {

@@ -26,6 +26,17 @@ public struct Qwen3ASRConfig: Codable, Sendable, Equatable {
     public let scaleEmbedding: Bool
     public let activationFunction: String
 
+    /// Memberwise initializer. Non-throwing for source-compat with
+    /// the wide call-site set (encoder constructors, parity tests,
+    /// derived configs). Callers that need the validated invariant
+    /// should call `validated(...)` instead — that throws on the
+    /// same bad fields `validate()` rejects.
+    ///
+    /// This memberwise init is deliberately permissive so tests can
+    /// construct invalid configs to exercise `validate()` itself
+    /// (`testValidateRejectsNonDivisibleHeadDim` and friends). The
+    /// `init(from:)` decode path always runs `validate()`, so
+    /// configs that crossed a JSON boundary are checked.
     public init(
         numMelBins: Int = 128,
         encoderLayers: Int = 24,
@@ -54,6 +65,47 @@ public struct Qwen3ASRConfig: Codable, Sendable, Equatable {
         self.convChunkSize = convChunkSize
         self.scaleEmbedding = scaleEmbedding
         self.activationFunction = activationFunction
+    }
+
+    /// Throwing factory: same fields as the memberwise init, but
+    /// runs `validate()` before returning. Use this from production
+    /// call sites where receiving a malformed config should produce
+    /// a typed error instead of an instance that crashes the
+    /// encoder later. The decode path (`init(from:)`) already calls
+    /// `validate()`, so this factory is only needed for direct
+    /// construction (tests, programmatic config building).
+    public static func validated(
+        numMelBins: Int = 128,
+        encoderLayers: Int = 24,
+        encoderAttentionHeads: Int = 16,
+        encoderFFNDim: Int = 4096,
+        dModel: Int = 1024,
+        downsampleHiddenSize: Int = 480,
+        outputDim: Int = 2048,
+        maxSourcePositions: Int = 1500,
+        nWindow: Int = 50,
+        nWindowInfer: Int = 800,
+        convChunkSize: Int = 500,
+        scaleEmbedding: Bool = false,
+        activationFunction: String = "gelu"
+    ) throws -> Qwen3ASRConfig {
+        let cfg = Qwen3ASRConfig(
+            numMelBins: numMelBins,
+            encoderLayers: encoderLayers,
+            encoderAttentionHeads: encoderAttentionHeads,
+            encoderFFNDim: encoderFFNDim,
+            dModel: dModel,
+            downsampleHiddenSize: downsampleHiddenSize,
+            outputDim: outputDim,
+            maxSourcePositions: maxSourcePositions,
+            nWindow: nWindow,
+            nWindowInfer: nWindowInfer,
+            convChunkSize: convChunkSize,
+            scaleEmbedding: scaleEmbedding,
+            activationFunction: activationFunction
+        )
+        try cfg.validate()
+        return cfg
     }
 
     /// Codable entry point — calls `validate()` so an unvalidated
