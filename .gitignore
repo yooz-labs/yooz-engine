@@ -7,3 +7,10 @@ finetune-pipeline/outputs/
 finetune-pipeline/data
 finetune-pipeline/data/
 bench-tools/gold_standard.jsonl
+
+# IDE
+.vscode/
+.idea/
+
+# Reference repos cloned for research (issue #10 TurboQuant)
+external/
