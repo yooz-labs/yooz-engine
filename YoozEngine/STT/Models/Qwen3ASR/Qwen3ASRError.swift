@@ -42,6 +42,14 @@ public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
     /// The forward pass was called with an input the encoder cannot
     /// process (zero-length frames, batch == 0, etc.).
     case invalidInput(String)
+    /// `Qwen3ASRBackend.transcribe` was called before the pipeline
+    /// was loaded via `ensureLoaded(modelDir:)`.
+    case pipelineNotLoaded
+    /// First-run model fetch could not contact the manifest endpoint.
+    /// The wrapped string carries the underlying transport error.
+    case fetchFailed(String)
+    /// Downloaded artifact did not match the expected size or hash.
+    case fetchValidationFailed(String)
 
     public var description: String {
         switch self {
@@ -71,6 +79,14 @@ public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
                 + detail
         case .invalidInput(let detail):
             return "Qwen3ASRError.invalidInput: \(detail)"
+        case .pipelineNotLoaded:
+            return
+                "Qwen3ASRError.pipelineNotLoaded: call "
+                + "Qwen3ASRBackend.ensureLoaded(modelDir:) first"
+        case .fetchFailed(let detail):
+            return "Qwen3ASRError.fetchFailed: \(detail)"
+        case .fetchValidationFailed(let detail):
+            return "Qwen3ASRError.fetchValidationFailed: \(detail)"
         }
     }
 }
