@@ -450,6 +450,26 @@ public struct ParakeetFallbackAdapter: FallbackBackendAdapter {
         samples: [Float],
         language: STTLanguage
     ) async -> ParakeetResult {
+        // Round-2 silent-failure #B10: Parakeet only supports a
+        // subset of the languages Qwen3 preview covers (Persian
+        // and Arabic in particular are preview-only). When the
+        // user picked one of those, the cold-start fallback would
+        // otherwise call `loadParakeetModel(language:)` which
+        // throws `languageNotSupported`, the catch block swallows
+        // it as `.empty`, and the hook records a "successful"
+        // fallback metric with empty audio — silent failure with
+        // green telemetry. Refuse the fallback up front so the
+        // caller sees an empty result that is at least logged
+        // distinctly from a "fallback worked but produced empty"
+        // outcome.
+        guard
+            STTBackendID.parakeet.supportedLanguages.contains(language)
+        else {
+            Self.logger.error(
+                "Parakeet fallback cannot serve \(language.displayName, privacy: .public); preview-only language. The transcription will return empty."
+            )
+            return .empty
+        }
         // The Parakeet path expects the model to be loaded for the
         // requested language. `loadParakeetModel` is idempotent for
         // the same language and cheap once loaded.

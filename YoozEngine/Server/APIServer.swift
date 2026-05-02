@@ -296,6 +296,22 @@ final class APIServer: ObservableObject {
     private func buildRouter() -> Router<BasicRequestContext> {
         let router = Router()
         let sttEngine = YoozSTTEngine.shared
+        // Hoist the metrics sink + preview fallback hook so they
+        // share lifecycle with the router (one engine `start()` call
+        // = one sink + one hook, surviving across requests). The
+        // hook's cold-start state machine relies on this — a
+        // per-request hook would treat every request as a new
+        // cold-start.
+        let metricsSink: any STTMetricsSink = makeSTTMetricsSink(
+            optedIn: EngineConfig.telemetryOptedIn,
+            fileURL: EngineConfig.sttMetricsFileURL
+        )
+        let previewFallbackHook = PreviewFallbackHook(
+            fetcher: Qwen3ASRPreviewFetcherAdapter(),
+            preview: Qwen3ASRPreviewBackendAdapter(),
+            fallback: ParakeetFallbackAdapter(),
+            sink: metricsSink
+        )
 
         // Health
         router.get("/v1/health") { _, _ in
@@ -725,17 +741,6 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            // Ensure model is loaded for the requested language
-            do {
-                try await sttEngine.start(language: language)
-            } catch {
-                return errorResponse(
-                    status: .internalServerError,
-                    message: error.localizedDescription,
-                    code: "model_load_failed"
-                )
-            }
-
             let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
 
             // Route through the Qwen3 backend when active. Typed
@@ -746,21 +751,31 @@ final class APIServer: ObservableObject {
             // response, not silent emptiness.
             let result: ParakeetResult
             if sttEngine.currentBackend == .qwen3ASRPreview {
-                do {
-                    result = try await sttEngine.batchTranscribeQwen3Throwing(
+                // Route through the auto-fallback hook so a
+                // first-run cold-start failure (network blip,
+                // missing model) hands off to Parakeet instead of
+                // returning a 500. Once the cold-start path
+                // resolves, subsequent failures propagate with
+                // typed HTTP codes (the hook only surfaces
+                // `Outcome` for happy-path & fallback; raw
+                // post-warmup throws still hit the catch below).
+                let outcome = await previewFallbackHook
+                    .attemptPreviewWithFallback(
                         samples: body.samples,
                         language: language
                     )
-                } catch let asrError as Qwen3ASRError {
-                    return mapQwen3BatchError(asrError)
+                result = outcome.result
+            } else {
+                // Ensure model is loaded for the requested language
+                do {
+                    try await sttEngine.start(language: language)
                 } catch {
                     return errorResponse(
                         status: .internalServerError,
                         message: error.localizedDescription,
-                        code: "transcription_failed"
+                        code: "model_load_failed"
                     )
                 }
-            } else {
                 result = await sttEngine.batchTranscribe(
                     samples: body.samples, mode: mode
                 )
@@ -876,17 +891,15 @@ final class APIServer: ObservableObject {
                 let variant = STTBackendMetrics.defaultModelVariant(
                     for: .qwen3ASRPreview
                 )
-                let taggedVariant = errored
-                    ? "\(variant)+stream_aborted"
-                    : variant
                 return STTBackendMetrics(
                     backend: .qwen3ASRPreview,
-                    modelVariant: taggedVariant,
+                    modelVariant: variant,
                     audioDurationMs: audioMs,
                     timeToFirstTokenMs: nil,
                     endToEndLatencyMs: elapsed,
                     hardwareClass: SystemHardwareClassResolver().resolve(),
                     fellBackFromPreview: fellBack,
+                    streamAborted: errored,
                     timestampUTC: Date()
                 )
             }
