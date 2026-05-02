@@ -13,20 +13,20 @@ import Foundation
 /// path is provided by `Qwen3ASRTextDecoder` rather than the stock
 /// `MLXLLM.Qwen3` model — hence this Qwen3-ASR-local config.
 public struct Qwen3ASRTextConfig: Codable, Sendable, Equatable {
-    public var modelType: String
-    public var vocabSize: Int
-    public var hiddenSize: Int
-    public var intermediateSize: Int
-    public var numHiddenLayers: Int
-    public var numAttentionHeads: Int
-    public var numKeyValueHeads: Int
-    public var headDim: Int
-    public var hiddenAct: String
-    public var maxPositionEmbeddings: Int
-    public var rmsNormEps: Float
-    public var ropeTheta: Float
-    public var tieWordEmbeddings: Bool
-    public var attentionBias: Bool
+    public let modelType: String
+    public let vocabSize: Int
+    public let hiddenSize: Int
+    public let intermediateSize: Int
+    public let numHiddenLayers: Int
+    public let numAttentionHeads: Int
+    public let numKeyValueHeads: Int
+    public let headDim: Int
+    public let hiddenAct: String
+    public let maxPositionEmbeddings: Int
+    public let rmsNormEps: Float
+    public let ropeTheta: Float
+    public let tieWordEmbeddings: Bool
+    public let attentionBias: Bool
 
     public init(
         modelType: String = "qwen3",
@@ -81,8 +81,8 @@ public struct Qwen3ASRTextConfig: Codable, Sendable, Equatable {
     /// omitting fields from the canonical default (every `head_dim`
     /// in a Qwen3 checkpoint, but no `model_type` in some forks). All
     /// decoded fields default to the published 1.7B-8bit values when
-    /// missing — the validator runs immediately afterwards so a real
-    /// mismatch still surfaces as `Qwen3ASRError.invalidConfig`.
+    /// missing — `validate()` runs at the end of the initializer so an
+    /// unvalidated instance cannot exist after a successful decode.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = Qwen3ASRTextConfig()
@@ -130,6 +130,7 @@ public struct Qwen3ASRTextConfig: Codable, Sendable, Equatable {
         self.attentionBias =
             (try container.decodeIfPresent(Bool.self, forKey: .attentionBias))
             ?? defaults.attentionBias
+        try self.validate()
     }
 
     /// Validate semantic invariants. Throws `Qwen3ASRError.invalidConfig`
@@ -184,14 +185,14 @@ public struct Qwen3ASRTextConfig: Codable, Sendable, Equatable {
 /// Top-level Qwen3-ASR config covering both the audio encoder and the
 /// text decoder, plus the cross-modal token IDs.
 public struct Qwen3ASRFullConfig: Codable, Sendable, Equatable {
-    public var audio: Qwen3ASRConfig
-    public var text: Qwen3ASRTextConfig
-    public var audioTokenId: Int
-    public var audioStartTokenId: Int
-    public var audioEndTokenId: Int
-    public var supportLanguages: [String]
-    public var quantBits: Int?
-    public var quantGroupSize: Int?
+    public let audio: Qwen3ASRConfig
+    public let text: Qwen3ASRTextConfig
+    public let audioTokenId: Int
+    public let audioStartTokenId: Int
+    public let audioEndTokenId: Int
+    public let supportLanguages: [String]
+    public let quantBits: Int?
+    public let quantGroupSize: Int?
 
     public init(
         audio: Qwen3ASRConfig = Qwen3ASRConfig(),

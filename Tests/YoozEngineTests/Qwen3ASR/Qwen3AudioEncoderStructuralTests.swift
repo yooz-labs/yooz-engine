@@ -72,8 +72,11 @@ final class Qwen3AudioEncoderStructuralTests: XCTestCase {
     }
 
     func testCheckedInitializerRejectsBadConfig() {
-        var cfg = Qwen3ASRConfig()
-        cfg.encoderAttentionHeads = 17
+        // dModel=1024 is not divisible by encoderAttentionHeads=17, so
+        // the checked init must throw `.invalidConfig`. The config
+        // struct now uses `let` fields and validates on decode; the
+        // checked-init path remains the primary in-code guard.
+        let cfg = Qwen3ASRConfig(encoderAttentionHeads: 17)
         XCTAssertThrowsError(try Qwen3AudioEncoder(checked: cfg)) {
             error in
             guard case Qwen3ASRError.invalidConfig = error else {

@@ -99,16 +99,55 @@ final class Qwen3ASRTextDecoderStructuralTests: XCTestCase {
     }
 
     func testInvalidConfigIsRejected() {
-        var cfg = smallConfig()
-        cfg.numAttentionHeads = 5  // not divisible by numKeyValueHeads (2)
+        // Config struct uses `let` fields, so each invalid case is
+        // composed via the explicit initializer instead of mutated
+        // post-construction.
+        let cfg = Qwen3ASRTextConfig(
+            vocabSize: 128,
+            hiddenSize: 32,
+            intermediateSize: 64,
+            numHiddenLayers: 2,
+            numAttentionHeads: 5,  // not divisible by numKeyValueHeads
+            numKeyValueHeads: 2,
+            headDim: 8,
+            maxPositionEmbeddings: 256,
+            rmsNormEps: 1e-6,
+            ropeTheta: 10_000.0,
+            tieWordEmbeddings: true,
+            attentionBias: false
+        )
         XCTAssertThrowsError(try cfg.validate())
 
-        var cfg2 = smallConfig()
-        cfg2.headDim = 0
+        let cfg2 = Qwen3ASRTextConfig(
+            vocabSize: 128,
+            hiddenSize: 32,
+            intermediateSize: 64,
+            numHiddenLayers: 2,
+            numAttentionHeads: 4,
+            numKeyValueHeads: 2,
+            headDim: 0,
+            maxPositionEmbeddings: 256,
+            rmsNormEps: 1e-6,
+            ropeTheta: 10_000.0,
+            tieWordEmbeddings: true,
+            attentionBias: false
+        )
         XCTAssertThrowsError(try cfg2.validate())
 
-        var cfg3 = smallConfig()
-        cfg3.rmsNormEps = 0
+        let cfg3 = Qwen3ASRTextConfig(
+            vocabSize: 128,
+            hiddenSize: 32,
+            intermediateSize: 64,
+            numHiddenLayers: 2,
+            numAttentionHeads: 4,
+            numKeyValueHeads: 2,
+            headDim: 8,
+            maxPositionEmbeddings: 256,
+            rmsNormEps: 0,
+            ropeTheta: 10_000.0,
+            tieWordEmbeddings: true,
+            attentionBias: false
+        )
         XCTAssertThrowsError(try cfg3.validate())
     }
 

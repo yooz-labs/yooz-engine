@@ -12,19 +12,19 @@ import Foundation
 /// type. `Sendable` + `Equatable` so it can be passed across actor
 /// boundaries inside the engine without copying caveats.
 public struct Qwen3ASRConfig: Codable, Sendable, Equatable {
-    public var numMelBins: Int
-    public var encoderLayers: Int
-    public var encoderAttentionHeads: Int
-    public var encoderFFNDim: Int
-    public var dModel: Int
-    public var downsampleHiddenSize: Int
-    public var outputDim: Int
-    public var maxSourcePositions: Int
-    public var nWindow: Int
-    public var nWindowInfer: Int
-    public var convChunkSize: Int
-    public var scaleEmbedding: Bool
-    public var activationFunction: String
+    public let numMelBins: Int
+    public let encoderLayers: Int
+    public let encoderAttentionHeads: Int
+    public let encoderFFNDim: Int
+    public let dModel: Int
+    public let downsampleHiddenSize: Int
+    public let outputDim: Int
+    public let maxSourcePositions: Int
+    public let nWindow: Int
+    public let nWindowInfer: Int
+    public let convChunkSize: Int
+    public let scaleEmbedding: Bool
+    public let activationFunction: String
 
     public init(
         numMelBins: Int = 128,
@@ -54,6 +54,47 @@ public struct Qwen3ASRConfig: Codable, Sendable, Equatable {
         self.convChunkSize = convChunkSize
         self.scaleEmbedding = scaleEmbedding
         self.activationFunction = activationFunction
+    }
+
+    /// Codable entry point — calls `validate()` so an unvalidated
+    /// instance cannot exist after a successful decode.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.numMelBins =
+            try c.decodeIfPresent(Int.self, forKey: .numMelBins) ?? 128
+        self.encoderLayers =
+            try c.decodeIfPresent(Int.self, forKey: .encoderLayers) ?? 24
+        self.encoderAttentionHeads =
+            try c.decodeIfPresent(
+                Int.self, forKey: .encoderAttentionHeads
+            ) ?? 16
+        self.encoderFFNDim =
+            try c.decodeIfPresent(Int.self, forKey: .encoderFFNDim) ?? 4096
+        self.dModel =
+            try c.decodeIfPresent(Int.self, forKey: .dModel) ?? 1024
+        self.downsampleHiddenSize =
+            try c.decodeIfPresent(
+                Int.self, forKey: .downsampleHiddenSize
+            ) ?? 480
+        self.outputDim =
+            try c.decodeIfPresent(Int.self, forKey: .outputDim) ?? 2048
+        self.maxSourcePositions =
+            try c.decodeIfPresent(
+                Int.self, forKey: .maxSourcePositions
+            ) ?? 1500
+        self.nWindow =
+            try c.decodeIfPresent(Int.self, forKey: .nWindow) ?? 50
+        self.nWindowInfer =
+            try c.decodeIfPresent(Int.self, forKey: .nWindowInfer) ?? 800
+        self.convChunkSize =
+            try c.decodeIfPresent(Int.self, forKey: .convChunkSize) ?? 500
+        self.scaleEmbedding =
+            try c.decodeIfPresent(Bool.self, forKey: .scaleEmbedding) ?? false
+        self.activationFunction =
+            try c.decodeIfPresent(
+                String.self, forKey: .activationFunction
+            ) ?? "gelu"
+        try self.validate()
     }
 
     enum CodingKeys: String, CodingKey {

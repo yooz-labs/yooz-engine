@@ -70,8 +70,10 @@ final class Qwen3ASRConfigTests: XCTestCase {
     }
 
     func testValidateRejectsNonDivisibleHeadDim() {
-        var cfg = Qwen3ASRConfig()
-        cfg.encoderAttentionHeads = 17
+        // Config struct now uses `let` fields, so the test composes
+        // the invalid config via the explicit initializer rather
+        // than mutating after construction.
+        let cfg = Qwen3ASRConfig(encoderAttentionHeads: 17)
         XCTAssertThrowsError(try cfg.validate()) { error in
             guard case Qwen3ASRError.invalidConfig(let msg) = error else {
                 XCTFail("expected invalidConfig, got \(error)")
@@ -82,8 +84,7 @@ final class Qwen3ASRConfigTests: XCTestCase {
     }
 
     func testValidateRejectsZeroLayers() {
-        var cfg = Qwen3ASRConfig()
-        cfg.encoderLayers = 0
+        let cfg = Qwen3ASRConfig(encoderLayers: 0)
         XCTAssertThrowsError(try cfg.validate()) { error in
             guard case Qwen3ASRError.invalidConfig = error else {
                 XCTFail("expected invalidConfig, got \(error)")
@@ -93,8 +94,8 @@ final class Qwen3ASRConfigTests: XCTestCase {
     }
 
     func testValidateRejectsNonMultipleNWindowInfer() {
-        var cfg = Qwen3ASRConfig()
-        cfg.nWindowInfer = 7  // not a multiple of nWindow*2 == 100
+        // Not a multiple of nWindow*2 == 100.
+        let cfg = Qwen3ASRConfig(nWindowInfer: 7)
         XCTAssertThrowsError(try cfg.validate()) { error in
             guard case Qwen3ASRError.invalidConfig(let msg) = error else {
                 XCTFail("expected invalidConfig, got \(error)")
@@ -105,9 +106,24 @@ final class Qwen3ASRConfigTests: XCTestCase {
     }
 
     func testValidateRejectsZeroMelBins() {
-        var cfg = Qwen3ASRConfig()
-        cfg.numMelBins = 0
+        let cfg = Qwen3ASRConfig(numMelBins: 0)
         XCTAssertThrowsError(try cfg.validate()) { error in
+            guard case Qwen3ASRError.invalidConfig = error else {
+                XCTFail("expected invalidConfig, got \(error)")
+                return
+            }
+        }
+    }
+
+    // Confirms the new `init(from:)` runs `validate()` so an
+    // unvalidated instance cannot escape decoding.
+    func testDecodeRejectsBadConfig() {
+        let badJSON = """
+        {"d_model": 1024, "encoder_attention_heads": 17}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(Qwen3ASRConfig.self, from: badJSON)
+        ) { error in
             guard case Qwen3ASRError.invalidConfig = error else {
                 XCTFail("expected invalidConfig, got \(error)")
                 return
