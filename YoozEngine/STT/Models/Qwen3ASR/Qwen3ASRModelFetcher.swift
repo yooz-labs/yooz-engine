@@ -300,7 +300,19 @@ public actor Qwen3ASRModelFetcher {
             .appendingPathComponent("YoozEngine/Models/qwen3-asr-1.7b")
     }
 
-    /// True when every required file already exists on disk.
+    /// True when every required file already exists on disk and the
+    /// post-fetch sentinel has been dropped.
+    ///
+    /// Round-2 silent-failure #B9: a previous version did existence-
+    /// only checks, so a partially-copied or truncated
+    /// `model.safetensors` (e.g. operator pre-staging the dir to
+    /// skip the 3.5 GB fetch) would short-circuit the fetcher and
+    /// the loader would either crash with "malformed safetensors"
+    /// or, worse, load garbage and return junk transcriptions.
+    /// The sentinel is dropped by `runDownload` only after every
+    /// file's size and SHA-256 (when available) have been
+    /// validated, so its presence is the single proof point that
+    /// the directory was filled by *us* with verified bytes.
     public func isModelDirReady(_ modelDir: URL) -> Bool {
         for file in Self.requiredFiles {
             let url = modelDir.appendingPathComponent(file)
@@ -308,8 +320,18 @@ public actor Qwen3ASRModelFetcher {
                 return false
             }
         }
-        return true
+        let sentinel = modelDir.appendingPathComponent(
+            Self.fetchCompleteSentinelName
+        )
+        return FileManager.default.fileExists(atPath: sentinel.path)
     }
+
+    /// Sentinel file name dropped by the fetcher after every file's
+    /// size + SHA-256 (when available) validates. Used by
+    /// `isModelDirReady` to reject pre-staged dirs that haven't
+    /// gone through the integrity check.
+    fileprivate static let fetchCompleteSentinelName: String =
+        ".yooz_qwen3_asr_fetch_complete"
 
     /// Fetch the canonical checkpoint into `modelDir`. Yields progress
     /// events on the returned `AsyncThrowingStream`. Caller awaits the
@@ -393,6 +415,15 @@ public actor Qwen3ASRModelFetcher {
             try await Qwen3ASRTokenizerPrep.prepare(modelDir: modelDir)
             continuation.yield(.tokenizerPrepFinished)
         }
+
+        // Drop the integrity sentinel only after every per-file
+        // validation passed. `isModelDirReady` consults this so a
+        // pre-staged but unvalidated dir is treated as not-ready
+        // and re-fetched (round-2 silent-failure #B9).
+        let sentinel = modelDir.appendingPathComponent(
+            Self.fetchCompleteSentinelName
+        )
+        try Data().write(to: sentinel, options: .atomic)
 
         continuation.yield(.done(modelDir: modelDir))
     }
@@ -505,11 +536,38 @@ public actor Qwen3ASRModelFetcher {
         // LFS digest. Catches mid-stream corruption that the size
         // check cannot (e.g. TLS-MITM proxy that flips bytes but
         // returns the right total length).
+        //
+        // Round-2 silent-failure #B6: silently skipping SHA when the
+        // manifest lacks an `lfs.oid` erodes the integrity guarantee
+        // for the very files (large weights) that motivated adding
+        // it. Require a digest for `*.safetensors` files; for the
+        // smaller, non-LFS JSON / text artefacts (manifest, configs,
+        // tokenizer files), accept absence with a loud warning so
+        // operators see the gap in `os_log`.
         if let expectedSha = entry.lfs?.oid {
             try validateSha256(
                 fileURL: dest,
                 expected: expectedSha,
                 path: entry.path
+            )
+        } else if entry.path.hasSuffix(".safetensors") {
+            throw Qwen3ASRError.fetchFailed(
+                .other(
+                    "Manifest entry for required safetensors file "
+                    + "\"\(entry.path)\" is missing the lfs.oid "
+                    + "digest. Refusing to accept the download "
+                    + "without an integrity check; the upstream "
+                    + "manifest schema may have shifted."
+                )
+            )
+        } else {
+            let path = entry.path
+            let warningMessage =
+                "No LFS digest for size-only validation. Acceptable "
+                + "for small JSON / text artefacts; surface this if "
+                + "it appears for a weights file."
+            logger.warning(
+                "\(path, privacy: .public): \(warningMessage, privacy: .public)"
             )
         }
 
