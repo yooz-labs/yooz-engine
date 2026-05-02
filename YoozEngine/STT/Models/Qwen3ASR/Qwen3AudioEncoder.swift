@@ -401,8 +401,10 @@ public final class Qwen3AudioEncoder: Module {
     // MARK: - Implementation
 
     /// Internal collector captures intermediate snapshots without
-    /// branching the production forward path. When `nil` is passed,
-    /// the `appendXxx` helpers compile away to no-ops.
+    /// branching the production forward path. The forward routine
+    /// guards every store with `if let trace = traceCollector`, so
+    /// when the pointer is `nil` the diagnostic stores compile away
+    /// to a single null check per cut and add zero allocation.
     fileprivate struct TraceCollector {
         var afterConv2d1: MLXArray?
         var afterConv2d2: MLXArray?
