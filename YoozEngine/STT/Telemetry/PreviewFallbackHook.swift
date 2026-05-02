@@ -108,8 +108,10 @@ public actor PreviewFallbackHook {
 
     /// Flips `true` after the cold-start path resolves — either the
     /// first preview transcribe succeeded, or fallback ran. State
-    /// machine: `false` → fallback-eligible, `true` → propagate.
-    /// Tests query the flag via `coldStartCompletedForTesting()`.
+    /// machine: `false` → fallback-eligible, `true` → either
+    /// propagate (when `previewActuallyWarmed`) or take the post-
+    /// warmup re-warm branch. Tests query the flag via
+    /// `coldStartCompletedForTesting()`.
     private var coldStartCompleted: Bool = false
 
     /// Flips `true` only when the preview path itself produced a

@@ -359,10 +359,11 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
     /// issue a Range request, (b) end with the full blob on
     /// disk, (c) emit no double-prefix corruption.
     ///
-    /// Catches the silent regression a Phase 5 fix already
-    /// addressed (Range-ignored 200 OK at the byte layer); this
-    /// test exercises the *higher-level* restart sequence the
-    /// reviewer asked about.
+    /// The byte-layer rangeIgnored guard is exercised separately
+    /// in `testFetchValidationFailsWhenServerIgnoresRangeHeader`.
+    /// This test asserts the higher-level invariant: resume after
+    /// a partial download must issue a Range request, complete the
+    /// file, and not double-prefix bytes.
     func testRestartResumePicksUpPartialFile() async throws {
         let (client, blobs) = try fixtureClient()
         let modelBlob = blobs["model.safetensors"]!

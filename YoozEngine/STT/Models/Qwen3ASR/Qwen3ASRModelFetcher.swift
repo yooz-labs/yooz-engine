@@ -230,10 +230,10 @@ public actor Qwen3ASRModelFetcher {
     /// HuggingFace repo id served from the canonical mirror.
     public static let canonicalRepo = "mlx-community/Qwen3-ASR-1.7B-8bit"
 
-    /// Files we materialize on disk. `tokenizer.json` is optional
-    /// because some checkpoint revisions ship it and others rely on
-    /// `swift-transformers` synthesizing the tokenizer at load time
-    /// from `tokenizer_config.json + vocab.json + merges.txt`.
+    /// Files we materialize on disk. `tokenizer.json` is in
+    /// `optionalFiles` because some checkpoint revisions ship it and
+    /// some don't; the prep step at first-run is the single source of
+    /// truth for tokenizer readiness — see `Qwen3ASRTokenizerPrep`.
     public static let requiredFiles: [String] = [
         "config.json",
         "model.safetensors",
@@ -248,9 +248,15 @@ public actor Qwen3ASRModelFetcher {
 
     /// Files that, when missing, do not fail the fetch.
     /// `tokenizer.json` is preferred when the upstream mirror ships
-    /// it; the prep step validates it loads but does not synthesize
-    /// it when absent — load proceeds via `tokenizer_config.json +
-    /// vocab.json + merges.txt`.
+    /// it; the prep step validates it loads via
+    /// `AutoTokenizer.from(modelFolder:)`. Today swift-transformers'
+    /// loader REQUIRES `tokenizer.json`, so when the upstream
+    /// revision omits it, prep surfaces a typed
+    /// `tokenizerValidationFailed` error at first-run rather than
+    /// silently mis-tokenizing later. We deliberately do not
+    /// synthesize the file ourselves; the canary encode in prep
+    /// catches synthesis-vs-canonical drift if a future
+    /// swift-transformers release adds the fallback path.
     public static let optionalFiles: [String] = [
         "tokenizer.json",
     ]

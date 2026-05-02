@@ -5,7 +5,8 @@ import Foundation
 /// # Preview Backend Usage — Sample Client Snippet
 ///
 /// This file demonstrates how a downstream Yooz app (Whisper, Notes,
-/// future Crisp / Remi) consumes the Phase 6 engine facilities:
+/// future Crisp / Remi) consumes the engine's preview-backend
+/// facilities:
 ///
 /// 1. Switching to the multilingual preview backend (`qwen3_asr_preview`)
 ///    via the engine's `POST /v1/stt/engine` route.
@@ -19,8 +20,8 @@ import Foundation
 ///
 /// ## Decision: telemetry consumption path
 ///
-/// Phase 6 does **not** add a new HTTP route for metrics. The recorded
-/// JSONL file lives at:
+/// The engine does **not** expose a new HTTP route for metrics. The
+/// recorded JSONL file lives at:
 ///
 /// ```
 /// ~/Library/Application Support/YoozEngine/telemetry/stt_metrics.jsonl
