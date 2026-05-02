@@ -51,10 +51,10 @@ public actor Qwen3ASRBackend {
     /// If a pipeline is loaded from a different directory, the old
     /// one is unloaded first.
     public func ensureLoaded(modelDir: URL) async throws {
-        if let pipeline, let loadedDirectory,
+        if pipeline != nil,
+           let loadedDirectory,
            loadedDirectory.standardizedFileURL == modelDir.standardizedFileURL
         {
-            _ = pipeline  // suppress unused-binding warning
             return
         }
 

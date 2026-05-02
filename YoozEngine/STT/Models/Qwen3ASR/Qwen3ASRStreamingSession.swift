@@ -223,6 +223,10 @@ public actor Qwen3ASRStreamingSession {
     /// Drop any buffered audio without running the pipeline. Used by
     /// the WS handler when a client disconnects before any audio has
     /// been streamed (or when an error closes the session early).
+    /// Idempotent: calling `discard()` on an already-finalized
+    /// session is a no-op rather than an error, so the WS handler
+    /// can defensively call it from cleanup paths without state
+    /// checks.
     public func discard() {
         buffer = []
         totalSamples = 0
