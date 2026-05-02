@@ -1,5 +1,11 @@
 # SpikeASR — Phase 1 spike (issue #47)
 
+> **Status: reference only.** Production code lives in
+> `YoozEngine/STT/Models/Qwen3ASR/`. This directory is the
+> historical Phase 1 spike preserved for the parity numbers and
+> architecture audit; it is scheduled for archival once the engine
+> migration table marks Phase 8 done.
+
 Native Swift / mlx-swift port of the Qwen3-ASR audio encoder, used to
 answer the Phase 1 question:
 
