@@ -136,10 +136,11 @@ final class Qwen3ASRStreamingSessionSmokeTests: XCTestCase {
             let end = Swift.min(idx + chunkSize, pcm.count)
             let chunk = Array(pcm[idx..<end])
             let started = Date()
-            let count = try await session.push(samples: chunk)
+            let outcome = try await session.push(samples: chunk)
             let elapsed = Date().timeIntervalSince(started) * 1_000
             maxPushLatencyMs = Swift.max(maxPushLatencyMs, elapsed)
-            XCTAssertGreaterThanOrEqual(count, end)
+            XCTAssertGreaterThanOrEqual(outcome.totalSamples, end)
+            XCTAssertEqual(outcome.accepted, chunk.count)
             idx = end
             partialCount += 1
         }

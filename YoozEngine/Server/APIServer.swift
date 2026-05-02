@@ -868,6 +868,13 @@ final class APIServer: ObservableObject {
                             )
                             qwen3StreamStartedMs =
                                 DispatchTime.now().uptimeNanoseconds / 1_000_000
+                            // Each `config` message starts a brand-new
+                            // session with an empty buffer; the cap
+                            // warning is one-shot per session, not per
+                            // WS connection, so the prior session's
+                            // flag must not silence the next session's
+                            // truncation.
+                            qwen3BufferCapWarned = false
 
                             do {
                                 let ready = try encoder.encode(
@@ -935,9 +942,9 @@ final class APIServer: ObservableObject {
                     }
 
                     if let session = qwen3Session {
-                        let beforeTotal = await session.bufferedSampleCount
+                        let outcome: Qwen3ASRStreamingSession.PushOutcome
                         do {
-                            _ = try await session.push(samples: samples)
+                            outcome = try await session.push(samples: samples)
                         } catch let sessionError as Qwen3ASRStreamingSession.SessionError {
                             await sendError(
                                 "Streaming session error: \(sessionError.description)",
@@ -952,16 +959,16 @@ final class APIServer: ObservableObject {
                             continue
                         }
                         // Detect a buffer-cap hit: push() silently
-                        // truncates past the soft cap and returns
-                        // the same total. Fire a one-shot warning
-                        // frame the first time it happens so the
-                        // client can surface "audio after Nm
-                        // discarded" without us spamming on every
-                        // subsequent receive.
-                        let afterTotal = await session.bufferedSampleCount
-                        if !qwen3BufferCapWarned
-                            && afterTotal == beforeTotal
-                        {
+                        // truncates past the soft cap. Fire a
+                        // one-shot warning frame the first time
+                        // truncation happens — including the very
+                        // first chunk that partially crosses the cap,
+                        // not just subsequent fully-rejected chunks.
+                        // The flag is reset when the client sends a
+                        // second `config` (transcript reset), so a
+                        // long dictation that re-configs mid-stream
+                        // still gets a warning per session.
+                        if outcome.truncated && !qwen3BufferCapWarned {
                             qwen3BufferCapWarned = true
                             await sendWarning(
                                 code: "buffer_cap_reached",

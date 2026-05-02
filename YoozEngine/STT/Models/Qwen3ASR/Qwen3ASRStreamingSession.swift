@@ -149,13 +149,36 @@ public actor Qwen3ASRStreamingSession {
     /// tests; not part of the WS protocol.
     public var bufferedSampleCount: Int { totalSamples }
 
-    /// Append PCM samples to the session buffer. Returns the
-    /// cumulative buffered sample count after the append. Throws if
-    /// the session has already been finalized.
+    /// Outcome of a `push(samples:)` call. Carries the post-append
+    /// cumulative total and the number of samples that were *actually*
+    /// accepted into the buffer (which may be less than the input
+    /// length when the soft cap was hit). The WS handler reads
+    /// `accepted < requested` to fire the one-shot
+    /// `buffer_cap_reached` warning frame on the chunk that crossed
+    /// the cap, not just on subsequent fully-rejected chunks.
+    public struct PushOutcome: Sendable, Equatable {
+        public let totalSamples: Int
+        public let accepted: Int
+        public let requested: Int
+
+        public var truncated: Bool { accepted < requested }
+    }
+
+    /// Append PCM samples to the session buffer. Returns a
+    /// `PushOutcome` describing how many samples were actually
+    /// accepted (post-cap truncation) and the cumulative buffered
+    /// total. Throws if the session has already been finalized.
     @discardableResult
-    public func push(samples: [Float]) throws -> Int {
+    public func push(samples: [Float]) throws -> PushOutcome {
         guard !finalized else { throw SessionError.finalized }
-        guard !samples.isEmpty else { return totalSamples }
+        let requested = samples.count
+        guard requested > 0 else {
+            return PushOutcome(
+                totalSamples: totalSamples,
+                accepted: 0,
+                requested: 0
+            )
+        }
 
         let remainingCapacity = maxBufferedSamples - totalSamples
         if remainingCapacity <= 0 {
@@ -167,17 +190,25 @@ public actor Qwen3ASRStreamingSession {
             Self.logger.warning(
                 "Qwen3 streaming session at buffer cap (\(self.maxBufferedSamples) samples); dropping further audio."
             )
-            return totalSamples
+            return PushOutcome(
+                totalSamples: totalSamples,
+                accepted: 0,
+                requested: requested
+            )
         }
 
-        let take = Swift.min(samples.count, remainingCapacity)
-        if take == samples.count {
+        let take = Swift.min(requested, remainingCapacity)
+        if take == requested {
             buffer.append(contentsOf: samples)
         } else {
             buffer.append(contentsOf: samples.prefix(take))
         }
         totalSamples += take
-        return totalSamples
+        return PushOutcome(
+            totalSamples: totalSamples,
+            accepted: take,
+            requested: requested
+        )
     }
 
     /// Run the offline pipeline on the accumulated PCM and return the

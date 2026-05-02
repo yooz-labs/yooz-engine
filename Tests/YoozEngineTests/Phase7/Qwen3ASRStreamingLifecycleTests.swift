@@ -104,15 +104,49 @@ final class Qwen3ASRStreamingLifecycleTests: XCTestCase {
         )
         let cap = [Float](repeating: 0.0, count: 16_000)
         let returned = try await session.push(samples: cap)
-        XCTAssertEqual(returned, 16_000)
+        XCTAssertEqual(returned.totalSamples, 16_000)
+        XCTAssertEqual(returned.accepted, 16_000)
+        XCTAssertFalse(returned.truncated)
 
         let extra = [Float](repeating: 0.0, count: 4_000)
         let afterCap = try await session.push(samples: extra)
         XCTAssertEqual(
-            afterCap, 16_000,
+            afterCap.totalSamples, 16_000,
             "push at cap must return the same total — that signal "
                 + "is what the WS handler uses to send a one-shot "
                 + "buffer_cap_reached warning."
+        )
+        XCTAssertEqual(afterCap.accepted, 0)
+        XCTAssertTrue(afterCap.truncated)
+    }
+
+    /// A chunk that *partially* crosses the cap must report
+    /// `truncated == true` so the WS handler fires the warning on
+    /// the first crossing chunk, not just on subsequent fully-
+    /// rejected chunks.
+    func testPushPartialTruncationReportsTruncated() async throws {
+        let session = Qwen3ASRStreamingSession(
+            languageHint: "English",
+            backend: Qwen3ASRBackend.shared,
+            sampleRate: 16_000,
+            maxBufferedSeconds: 1
+        )
+        let nearCap = [Float](repeating: 0.0, count: 12_000)
+        let first = try await session.push(samples: nearCap)
+        XCTAssertEqual(first.accepted, 12_000)
+        XCTAssertFalse(first.truncated)
+
+        // 8_000 samples request, but only 4_000 fit before the cap.
+        let crossing = [Float](repeating: 0.0, count: 8_000)
+        let outcome = try await session.push(samples: crossing)
+        XCTAssertEqual(outcome.totalSamples, 16_000)
+        XCTAssertEqual(outcome.accepted, 4_000)
+        XCTAssertEqual(outcome.requested, 8_000)
+        XCTAssertTrue(
+            outcome.truncated,
+            "the chunk that crosses the cap must report truncated; "
+                + "that's the signal the WS handler reads to fire "
+                + "buffer_cap_reached on the first crossing chunk."
         )
     }
 
