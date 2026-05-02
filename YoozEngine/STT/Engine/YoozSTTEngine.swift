@@ -532,9 +532,12 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         language: STTLanguage
     ) async -> ParakeetResult {
         do {
+            // `STTLanguage.qwen3LanguageHint` is the single source of
+            // truth for this mapping, shared with
+            // `Qwen3ASRPreviewBackendAdapter`.
             let result = try await Qwen3ASRBackend.shared.transcribe(
                 pcm: samples,
-                language: Self.qwen3LanguageHint(language)
+                language: language.qwen3LanguageHint
             )
             return ParakeetResult(
                 text: result.text,
@@ -547,32 +550,6 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
                 String(describing: error)
             )
             return .empty
-        }
-    }
-
-    /// Map an `STTLanguage` to the Qwen3-ASR canonical language label
-    /// the Phase 4 pipeline expects (e.g. `English`, `Persian`,
-    /// `Arabic`). Returns `nil` to let the model auto-detect when the
-    /// hint is ambiguous.
-    private static func qwen3LanguageHint(_ language: STTLanguage) -> String? {
-        switch language {
-        case .english:    return "English"
-        case .arabic:     return "Arabic"
-        case .persian:    return "Persian"
-        case .hebrew:     return "Hebrew"
-        case .spanish:    return "Spanish"
-        case .french:     return "French"
-        case .german:     return "German"
-        case .italian:    return "Italian"
-        case .portuguese: return "Portuguese"
-        case .dutch:      return "Dutch"
-        case .polish:     return "Polish"
-        case .russian:    return "Russian"
-        case .ukrainian:  return "Ukrainian"
-        case .chinese:    return "Chinese"
-        case .japanese:   return "Japanese"
-        case .korean:     return "Korean"
-        case .cantonese:  return "Cantonese"
         }
     }
 

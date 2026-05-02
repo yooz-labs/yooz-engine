@@ -38,6 +38,49 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
         true
     }
 
+    // MARK: - Phase 6 — Display helpers (engine-side source of truth)
+
+    /// User-facing label for the backend. Used by Whisper / Notes
+    /// UIs (which live in their own repos) so they don't drift from
+    /// the engine's canonical naming.
+    public var displayName: String {
+        switch self {
+        case .parakeet:        return "Parakeet (Recommended)"
+        case .fastConformer:   return "FastConformer (Arabic / Persian / Hebrew)"
+        case .appleSTT:        return "Apple Speech (On-device)"
+        case .qwen3ASRPreview: return "Multilingual (Preview)"
+        }
+    }
+
+    /// `true` for backends explicitly tagged as preview (the user
+    /// should be told the engine may auto-fallback). `false` for the
+    /// stable, built-in backends.
+    public var isPreview: Bool {
+        switch self {
+        case .qwen3ASRPreview: return true
+        case .parakeet, .fastConformer, .appleSTT: return false
+        }
+    }
+
+    /// Estimated first-run download size in megabytes. Returns `nil`
+    /// for built-in backends (Parakeet, Apple) that ship with the
+    /// engine and don't need a runtime fetch.
+    ///
+    /// Numbers are approximate (rounded to MB) and intended for
+    /// "Download ~3500 MB?" confirmation dialogs, not exact
+    /// progress display — `Qwen3ASRModelFetcher` streams precise
+    /// byte counts via `DownloadProgress`.
+    public var estimatedDownloadMB: Int? {
+        switch self {
+        case .parakeet:        return nil
+        case .fastConformer:   return nil
+        case .appleSTT:        return nil
+        case .qwen3ASRPreview: return 3_500
+        }
+    }
+
+    // MARK: - Languages
+
     /// Languages this backend can transcribe via the engine. The list
     /// reflects what the engine knows how to route — for `qwen3_asr_preview`
     /// the underlying model supports many more languages but the engine
