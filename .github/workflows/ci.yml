@@ -57,12 +57,12 @@ jobs:
         id: cache-metal-toolchain
         uses: actions/cache@v4
         with:
-          path: ~/Library/Developer/Xcode/MetalToolchain
+          path: ~/Library/Developer/Xcode/MetalToolchains
           key: metal-toolchain-xcode-26.2-${{ runner.os }}
 
       - name: Download Metal Toolchain
         if: steps.cache-metal-toolchain.outputs.cache-hit != 'true'
-        run: sudo xcodebuild -downloadComponent MetalToolchain
+        run: xcodebuild -downloadComponent MetalToolchain
 
       # `swift build` / `swift test` do not compile mlx-swift's Metal
       # kernel sources, so any test that exercises an MLX path crashes
