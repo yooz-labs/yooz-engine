@@ -69,29 +69,28 @@ public struct DispatchPreviewFallbackClock: PreviewFallbackClock {
 /// to the fallback backend (Parakeet) and emits a metrics record
 /// with `fellBackFromPreview = true`.
 ///
-/// **Cold-start scope.** Once the cold-start path resolves — either
-/// step 3 succeeded *or* we fell back to Parakeet for this process —
-/// the hook flips `coldStartCompleted = true` and from then on a
-/// preview transcribe failure propagates instead of triggering
-/// fallback. The user explicitly chose the preview backend; we only
-/// protect them from the cold-start cliff, not from every subsequent
-/// runtime hiccup. Flipping on fallback (rather than only on
-/// success) prevents the hook from re-attempting the cold-start
-/// machinery on every request when the underlying issue is sticky
-/// (no network, disk full, repo missing).
+/// **Warmup scope.** The hook gates on a single flag,
+/// `previewActuallyWarmed`, which flips `true` only when step 3
+/// (preview transcribe) succeeds. Until that happens, every request
+/// re-enters the cold-start path: fetcher → load → transcribe, with
+/// fallback to Parakeet on any throw. Once `previewActuallyWarmed`
+/// is `true`, post-warmup requests propagate failures as `.empty`
+/// without falling back — the user explicitly selected this backend
+/// and we do not silently shield them from runtime hiccups after
+/// the model is known-good.
 ///
-/// **Two-flag discipline.** A separate `previewActuallyWarmed` flag
-/// tracks whether the *preview* path completed an end-to-end
-/// transcribe. If the cold-start failed and fallback ran,
-/// `coldStartCompleted` flips (so we stop thrashing the cold-start
-/// machinery) but `previewActuallyWarmed` stays `false`. Subsequent
-/// requests then re-enter the post-warmup branch: that branch
-/// retries `fetcher.ensureModelOnDisk()` + `preview.ensureLoaded()`
-/// once when `previewActuallyWarmed == false`, falling back to
-/// Parakeet again on failure. Without this, a transient network
-/// blip during the very first transcribe would permanently strip
-/// the user of their preview backend selection until process
-/// restart, with green telemetry and silent `.empty` results.
+/// **Why re-attempt cold-start every request until preview warms.**
+/// A transient blip on the very first transcribe (network, disk,
+/// HF Hub 5xx) must NOT permanently strip the user's preview
+/// selection. The previous design flipped a single
+/// `coldStartCompleted` on fallback success and never re-entered
+/// the cold-start branch — a 30-second WiFi outage during request
+/// #1 silently demoted the rest of the process to Parakeet with
+/// green telemetry and empty `.text` payloads. The current design
+/// keeps trying until preview produces a result; the running
+/// counter `fallbackEngagedDueToColdStartFailure` lets dashboards
+/// see "how many times did we have to fall back" without leaking
+/// transcript content. (Round-2 silent-failure #B2.)
 public actor PreviewFallbackHook {
 
     private let logger = Logger(
@@ -106,23 +105,21 @@ public actor PreviewFallbackHook {
     private let resolver: HardwareClassResolver
     private let clock: PreviewFallbackClock
 
-    /// Flips `true` after the cold-start path resolves — either the
-    /// first preview transcribe succeeded, or fallback ran. State
-    /// machine: `false` → fallback-eligible, `true` → either
-    /// propagate (when `previewActuallyWarmed`) or take the post-
-    /// warmup re-warm branch. Tests query the flag via
-    /// `coldStartCompletedForTesting()`.
+    /// Diagnostic-only flag: flips `true` after the cold-start path
+    /// resolves at least once (either preview succeeded or fallback
+    /// ran). Not consulted for branching — the state machine gates on
+    /// `previewActuallyWarmed`. Retained because dashboards and the
+    /// `coldStartCompletedForTesting()` accessor use it to distinguish
+    /// "this hook never received a transcription request" from "we
+    /// engaged the cold-start machinery at least once".
     private var coldStartCompleted: Bool = false
 
-    /// Flips `true` only when the preview path itself produced a
-    /// successful transcribe (i.e. `coldStartCompleted` set via the
-    /// success branch, not the fallback branch). Distinguishes
-    /// "preview is warm and serving" from "we proved at least once
-    /// that the cold-start machinery ran to completion via
-    /// fallback". The post-warmup branch consults this flag to
-    /// decide whether a `.pipelineNotLoaded` failure is recoverable
-    /// (try a one-shot re-warm) vs a true post-load runtime error
-    /// (propagate).
+    /// State-machine flag: flips `true` only when the preview path
+    /// itself produced a successful transcribe. While `false`, every
+    /// request re-enters the cold-start branch (fetcher → load →
+    /// transcribe), falling back to Parakeet on any throw. Once
+    /// `true`, post-warmup requests propagate preview failures as
+    /// `.empty` without re-engaging fallback.
     private var previewActuallyWarmed: Bool = false
 
     /// Counter incremented every time the cold-start path engaged
