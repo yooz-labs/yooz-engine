@@ -1,5 +1,6 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import CryptoKit
 import Foundation
 import XCTest
 
@@ -136,29 +137,45 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
     /// Build a fake manifest + blob dictionary covering every required
     /// file plus an optional `tokenizer.json`. Each file gets a
     /// distinguishable byte payload so we can verify on-disk contents.
+    /// Safetensors files carry an `lfs.oid` SHA-256 of their payload
+    /// so the fetcher's integrity check passes; non-LFS artefacts
+    /// (manifest JSON / configs / text) intentionally have no
+    /// digest to exercise the size-only-validation warning path.
     private func fixtureClient() throws -> (MockClient, [String: Data]) {
         let allFiles =
             Qwen3ASRModelFetcher.requiredFiles
             + Qwen3ASRModelFetcher.optionalFiles
         var blobs: [String: Data] = [:]
         for path in allFiles {
-            // `model.safetensors` mocked content is just a marker plus
-            // some bytes; we never load it as a real safetensors here.
-            // Other files get plausible placeholder content (the
-            // tokenizer artifacts must still parse, so they need to
-            // be valid JSON / plain-text where required by downstream
-            // tests; this fixture is for fetcher mechanics only).
             let payload = "fixture-\(path)\n".data(using: .utf8)!
             blobs[path] = payload + Data(repeating: 0x00, count: 1024)
         }
 
-        let manifestEntries = blobs.map { path, data in
-            HFManifestEntry(
-                path: path, size: Int64(data.count), type: "file"
+        let manifestEntries = blobs.map { path, data -> HFManifestEntry in
+            let lfs: HFManifestLFS?
+            if path.hasSuffix(".safetensors") {
+                lfs = HFManifestLFS(oid: Self.sha256Hex(data))
+            } else {
+                lfs = nil
+            }
+            return HFManifestEntry(
+                path: path,
+                size: Int64(data.count),
+                type: "file",
+                lfs: lfs
             )
         }
         let manifestData = try JSONEncoder().encode(manifestEntries)
         return (MockClient(manifestData: manifestData, blobs: blobs), blobs)
+    }
+
+    /// SHA-256 hex digest helper for the test fixture. Mirrors the
+    /// production fetcher's `validateSha256` (1 MB chunks) but
+    /// computed eagerly because the test fixtures fit in memory.
+    private static func sha256Hex(_ data: Data) -> String {
+        var hasher = SHA256()
+        hasher.update(data: data)
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Tests
