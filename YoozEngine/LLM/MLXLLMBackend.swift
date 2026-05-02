@@ -390,13 +390,47 @@ actor MLXLLMBackend: LLMBackend {
                         }
                         eval(cache)
                     }
-                    // SharpAI fork's `KVCacheSimple.state` getter decodes
-                    // `polarKeys` back to fp16 and concatenates with the
-                    // hot window, so the snapshot is fork-agnostic — both
-                    // FP16-only and turbo3-active runs return a valid fp16
-                    // pair that the setter can restore. See
-                    // mlx-swift-lm/Libraries/MLXLMCommon/KVCache.swift:476-509.
-                    snapshot = cache.map(\.state)
+                    // KVCacheSimple.trim() workaround for SharpAI fork.
+                    //
+                    // The fork's `trim(_:)` only decrements `offset`; it
+                    // does NOT clear `polarKeys` / `compressedOffset`. If a
+                    // generation crossed the 2048-token activation gate,
+                    // user-side tokens were compressed into `polarKeys`.
+                    // After trimming back to `sysCount`, those compressed
+                    // user tokens still live in `polarKeys`, and the
+                    // `state` getter will decode them and concatenate with
+                    // the (now-trimmed) hot window — meaning the snapshot
+                    // contains user-side history we explicitly tried to
+                    // strip out.
+                    //
+                    // Defensive bail-out: if any layer has
+                    // `compressedOffset > sysCount`, skip the snapshot.
+                    // The next call re-computes the system prompt from
+                    // scratch, which is correct (just slower). Filed
+                    // upstream at SharpAI/mlx-swift-lm; remove this guard
+                    // once `trim(_:)` clears `polarKeys` (or once
+                    // `state` getter respects `offset` for the polar band).
+                    var compressedBeyondSys = false
+                    for layer in cache {
+                        if let simple = layer as? KVCacheSimple,
+                           simple.compressedOffset > sysCount {
+                            compressedBeyondSys = true
+                            break
+                        }
+                    }
+                    if compressedBeyondSys {
+                        logger.warning("Skipping prompt-cache snapshot: trim() cannot evict user-side compressed history (SharpAI mlx-swift-lm trim() workaround). Next call will recompute the system prompt.")
+                        snapshot = nil
+                    } else {
+                        // SharpAI fork's `KVCacheSimple.state` getter
+                        // decodes `polarKeys` back to fp16 and
+                        // concatenates with the hot window, so the
+                        // snapshot is fork-agnostic — both FP16-only and
+                        // turbo3-active runs return a valid fp16 pair the
+                        // setter can restore. See SharpAI mlx-swift-lm
+                        // KVCache.swift lines ~476-509.
+                        snapshot = cache.map(\.state)
+                    }
                 }
                 return (text, snapshot, turboEnabledCount, turboTotalCount)
             }
