@@ -148,7 +148,7 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
 
         var progressCount = 0
         var sawDone = false
-        for try await event in await fetcher.download(into: tempDir) {
+        for try await event in await fetcher.download(into: tempDir, runTokenizerPrep: false) {
             progressCount += 1
             if case .done = event { sawDone = true }
         }
@@ -191,7 +191,7 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
             atPath: dest.path, contents: Data(prefix)
         )
 
-        for try await _ in await fetcher.download(into: tempDir) {}
+        for try await _ in await fetcher.download(into: tempDir, runTokenizerPrep: false) {}
 
         XCTAssertTrue(
             client.rangeRequests.contains { $0.path == "model.safetensors" && $0.offset == 100 },
@@ -213,7 +213,7 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
         )
 
         var perFileMax: [String: Int64] = [:]
-        for try await event in await fetcher.download(into: tempDir) {
+        for try await event in await fetcher.download(into: tempDir, runTokenizerPrep: false) {
             if case let .fileBytes(path, completed, _) = event {
                 let prev = perFileMax[path] ?? 0
                 XCTAssertGreaterThanOrEqual(
@@ -239,7 +239,7 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
         let beforeReady = await fetcher.isModelDirReady(tempDir)
         XCTAssertFalse(beforeReady)
 
-        for try await _ in await fetcher.download(into: tempDir) {}
+        for try await _ in await fetcher.download(into: tempDir, runTokenizerPrep: false) {}
 
         let afterReady = await fetcher.isModelDirReady(tempDir)
         XCTAssertTrue(afterReady)
@@ -266,7 +266,7 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
             client: client,
             baseURL: URL(string: "https://mock.local")!
         )
-        for try await _ in await fetcher.download(into: tempDir) {}
+        for try await _ in await fetcher.download(into: tempDir, runTokenizerPrep: false) {}
 
         XCTAssertTrue(
             client.rangeRequests.isEmpty,
