@@ -110,6 +110,18 @@ public struct URLSessionHTTPDownloadClient: HTTPDownloadClient {
                 "HTTP \(http.statusCode) from \(url)"
             )
         }
+        // If we asked for a Range and the server returned 200 (full
+        // body) instead of 206 (Partial Content), appending its
+        // payload to our existing partial file would corrupt it.
+        // Fail loud rather than silently produce a duplicate-prefix
+        // file. Caller can retry with byteOffset=0 next time.
+        if byteOffset > 0 && http.statusCode != 206 {
+            throw Qwen3ASRError.fetchFailed(
+                "Server ignored Range header (HTTP \(http.statusCode)) "
+                    + "from \(url); cannot resume safely. Delete the "
+                    + "partial file and retry."
+            )
+        }
 
         // Append-mode write. Create the file if it doesn't exist.
         if !FileManager.default.fileExists(atPath: destination.path) {
