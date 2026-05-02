@@ -4,5 +4,6 @@ __pycache__/
 .DS_Store
 .envrc
 finetune-pipeline/outputs/
+finetune-pipeline/data
 finetune-pipeline/data/
 bench-tools/gold_standard.jsonl
