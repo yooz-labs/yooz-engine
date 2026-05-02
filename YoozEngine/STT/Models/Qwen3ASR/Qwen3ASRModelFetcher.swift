@@ -253,7 +253,7 @@ public actor Qwen3ASRModelFetcher {
     /// loader REQUIRES `tokenizer.json`, so when the upstream
     /// revision omits it, prep surfaces a typed
     /// `tokenizerValidationFailed` error at first-run rather than
-    /// silently mis-tokenizing later. We deliberately do not
+    /// silently producing wrong token IDs later. We deliberately do not
     /// synthesize the file ourselves; the canary encode in prep
     /// catches synthesis-vs-canonical drift if a future
     /// swift-transformers release adds the fallback path.
