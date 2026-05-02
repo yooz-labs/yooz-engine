@@ -606,6 +606,15 @@ final class APIServer: ObservableObject {
         wsRouter.ws("/v1/stt/stream") { inbound, outbound, context in
             let sttEngine = YoozSTTEngine.shared
             var transcriber: StreamingTranscriber?
+            // Phase 7: per-connection streaming session for the
+            // qwen3 backend. Owns its own audio buffer; the underlying
+            // backend actor serializes concurrent transcribe calls.
+            var qwen3Session: Qwen3ASRStreamingSession?
+            var qwen3Language: STTLanguage?
+            // Wall clock at session start for the telemetry record
+            // emitted on `final`. Set when the qwen3 session is
+            // configured (matches "stream start" semantics).
+            var qwen3StreamStartedMs: UInt64?
             let encoder = JSONEncoder()
 
             // Encode a WSSTTResult to JSON and send via WebSocket
@@ -634,20 +643,6 @@ final class APIServer: ObservableObject {
             }
 
             sttLogger.info("STT WebSocket client connected")
-
-            // Phase 5: Qwen3 streaming lands in Phase 7. When the
-            // qwen3_asr_preview backend is selected, send a single
-            // error frame and close cleanly. Don't pretend to stream.
-            if sttEngine.currentBackend == .qwen3ASRPreview {
-                await sendError(
-                    "Streaming not implemented for qwen3_asr_preview; "
-                        + "lands in Phase 7. Use POST /v1/stt/batch."
-                )
-                let rejectMsg = "STT WebSocket: rejected qwen3_asr_preview "
-                    + "streaming (deferred to Phase 7)"
-                sttLogger.info("\(rejectMsg)")
-                return
-            }
 
             // Use message-level API to handle fragmented frames automatically
             // Max message size: 10MB (enough for ~2.7 min of 16kHz Float32 audio)
@@ -680,6 +675,68 @@ final class APIServer: ObservableObject {
                             continue
                         }
 
+                        // Phase 7: branch on the active backend at
+                        // config time. The qwen3 path opens a
+                        // streaming session against the (already-
+                        // loaded) backend actor; the legacy path
+                        // creates a per-connection
+                        // `StreamingTranscriber` exactly as before.
+                        if sttEngine.currentBackend == .qwen3ASRPreview {
+                            // Allow only languages the backend
+                            // declares; the engine's `start` would
+                            // otherwise refuse later anyway, but
+                            // surfacing the error here keeps the
+                            // protocol response immediate.
+                            guard
+                                STTBackendID.qwen3ASRPreview.supportedLanguages
+                                    .contains(language)
+                            else {
+                                await sendError(
+                                    "Language not supported by qwen3_asr_preview: "
+                                        + language.displayName
+                                )
+                                continue
+                            }
+
+                            do {
+                                try await sttEngine.start(language: language)
+                            } catch {
+                                await sendError(
+                                    "Failed to load model: \(error.localizedDescription)"
+                                )
+                                continue
+                            }
+
+                            // Discard any prior session — clients
+                            // sending a second `config` reset the
+                            // transcript. Mirrors how the legacy
+                            // path overwrites `transcriber`.
+                            if let existing = qwen3Session {
+                                await existing.discard()
+                            }
+                            qwen3Session = Qwen3ASRStreamingSession(
+                                languageHint: language.qwen3LanguageHint
+                            )
+                            qwen3Language = language
+                            qwen3StreamStartedMs =
+                                DispatchTime.now().uptimeNanoseconds / 1_000_000
+
+                            do {
+                                let ready = try encoder.encode(
+                                    WSSTTReady(type: "ready", language: languageCode)
+                                )
+                                if let readyStr = String(data: ready, encoding: .utf8) {
+                                    try await outbound.write(.text(readyStr))
+                                }
+                            } catch {
+                                sttLogger.error("Failed to send ready message: \(error)")
+                            }
+                            sttLogger.info(
+                                "STT stream configured: language=\(languageCode), backend=qwen3_asr_preview"
+                            )
+                            continue
+                        }
+
                         do {
                             try await sttEngine.start(language: language)
                         } catch {
@@ -702,13 +759,20 @@ final class APIServer: ObservableObject {
                     }
 
                 case .binary(var buffer):
-                    // Audio data: raw Float32 samples at 16kHz
-                    guard let transcriber = transcriber else {
-                        sttLogger.warning("Audio received before config message")
+                    let byteCount = buffer.readableBytes
+                    // Reject obviously-malformed frames early. The
+                    // protocol expects a multiple of `Float32`-sized
+                    // bytes; partial-sample frames are dropped with a
+                    // typed error so the client can correct rather
+                    // than silently corrupting the buffer.
+                    if byteCount % MemoryLayout<Float>.size != 0 {
+                        await sendError(
+                            "Audio frame byte count (\(byteCount)) is not a "
+                                + "multiple of Float32 size; expected raw "
+                                + "Float32 PCM at 16 kHz mono."
+                        )
                         continue
                     }
-
-                    let byteCount = buffer.readableBytes
                     let sampleCount = byteCount / MemoryLayout<Float>.size
                     guard sampleCount > 0 else { continue }
 
@@ -722,6 +786,33 @@ final class APIServer: ObservableObject {
                         }
                     }
 
+                    if let session = qwen3Session {
+                        do {
+                            _ = try await session.push(samples: samples)
+                        } catch {
+                            await sendError(
+                                "Streaming session error: \(String(describing: error))"
+                            )
+                            continue
+                        }
+                        // Heartbeat partial — qwen3's streaming model
+                        // doesn't expose intermediate text without a
+                        // re-prefill on every chunk, so the partial
+                        // text fields stay empty until `final`.
+                        await sendResult(WSSTTResult(
+                            type: "partial",
+                            text: "",
+                            finalized: "",
+                            draft: ""
+                        ))
+                        continue
+                    }
+
+                    guard let transcriber = transcriber else {
+                        sttLogger.warning("Audio received before config message")
+                        continue
+                    }
+
                     let result = transcriber.addAudio(samples: samples)
 
                     await sendResult(WSSTTResult(
@@ -733,8 +824,62 @@ final class APIServer: ObservableObject {
                 }
             }
 
-            // Client disconnected; finalize if a transcriber is active
-            if let transcriber = transcriber {
+            // Client disconnected; finalize whichever session is active.
+            if let session = qwen3Session {
+                do {
+                    let final = try await session.finalize()
+                    await sendResult(WSSTTResult(
+                        type: "final",
+                        text: final.text,
+                        finalized: final.text,
+                        draft: ""
+                    ))
+                    // Telemetry — opt-in via EngineConfig. The sink
+                    // discards the record when the user hasn't
+                    // enabled local telemetry.
+                    let endMs = DispatchTime.now().uptimeNanoseconds / 1_000_000
+                    let elapsed: UInt32
+                    if let started = qwen3StreamStartedMs {
+                        elapsed = UInt32(min(endMs &- started, UInt64(UInt32.max)))
+                    } else {
+                        elapsed = 0
+                    }
+                    let metric = STTBackendMetrics(
+                        backend: .qwen3ASRPreview,
+                        modelVariant: STTBackendMetrics.defaultModelVariant(
+                            for: .qwen3ASRPreview
+                        ),
+                        audioDurationMs: final.audioDurationMs,
+                        timeToFirstTokenMs: nil,
+                        endToEndLatencyMs: elapsed,
+                        hardwareClass: SystemHardwareClassResolver().resolve(),
+                        fellBackFromPreview: false,
+                        timestampUTC: Date()
+                    )
+                    let sink = makeSTTMetricsSink(
+                        optedIn: EngineConfig.telemetryOptedIn,
+                        fileURL: EngineConfig.sttMetricsFileURL
+                    )
+                    await sink.record(metric)
+                } catch Qwen3ASRStreamingSession.SessionError.empty {
+                    // Client disconnected without sending audio. Emit
+                    // an empty `final` for protocol symmetry.
+                    await sendResult(WSSTTResult(
+                        type: "final",
+                        text: "",
+                        finalized: "",
+                        draft: ""
+                    ))
+                } catch {
+                    sttLogger.error(
+                        "Qwen3 streaming finalize failed: \(String(describing: error))"
+                    )
+                    await sendError(
+                        "Streaming finalize failed: \(String(describing: error))"
+                    )
+                }
+                _ = qwen3Language
+            } else if let transcriber = transcriber {
                 let finalResult = transcriber.finalize()
                 await sendResult(WSSTTResult(
                     type: "final",
