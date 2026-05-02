@@ -98,17 +98,9 @@ actor GrammarEngine {
         let counts = RuleCounts(simple: simple, pos: pos, total: total, programmatic: programmatic)
 
         if counts.isAvailable {
-            logger.info(
-                "Initialized with \(total) XML rules "
-                + "(\(simple) simple + \(pos) POS) "
-                + "+ \(programmatic) programmatic rules"
-            )
+            logger.info("Initialized with \(total) XML rules (\(simple) simple + \(pos) POS) + \(programmatic) programmatic rules")
         } else {
-            logger.error(
-                "FFI succeeded but no rules loaded; grammar correction disabled. "
-                + "simple=\(simple), pos=\(pos), "
-                + "programmatic=\(programmatic)"
-            )
+            logger.error("FFI succeeded but no rules loaded; grammar correction disabled. simple=\(simple), pos=\(pos), programmatic=\(programmatic)")
         }
 
         return counts
