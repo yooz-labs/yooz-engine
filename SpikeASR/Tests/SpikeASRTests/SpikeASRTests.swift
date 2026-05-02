@@ -42,6 +42,17 @@ final class SpikeASRTests: XCTestCase {
         XCTAssertEqual(AudioEncoder.featExtractOutputLength(3000), 390)
     }
 
+    func testFloorDivMatchesPythonSemantics() {
+        // Python: -1 // 2 == -1, -3 // 2 == -2, 5 // 2 == 2,
+        //        -5 // -2 == 2, 5 // -2 == -3, 0 // 1 == 0.
+        XCTAssertEqual(AudioEncoder.floorDiv(-1, 2), -1)
+        XCTAssertEqual(AudioEncoder.floorDiv(-3, 2), -2)
+        XCTAssertEqual(AudioEncoder.floorDiv(5, 2), 2)
+        XCTAssertEqual(AudioEncoder.floorDiv(-5, -2), 2)
+        XCTAssertEqual(AudioEncoder.floorDiv(5, -2), -3)
+        XCTAssertEqual(AudioEncoder.floorDiv(0, 1), 0)
+    }
+
     func testEncoderShapesMatchCheckpoint() {
         // Build an encoder and confirm every parameter shape lines up
         // with the audio_tower.* slice of the 1.7B-8bit checkpoint.
@@ -265,7 +276,9 @@ final class SpikeASRTests: XCTestCase {
         )
 
         // Persist the diagnostic numbers next to the artifacts so
-        // PARITY.md can quote them without rerunning the test.
+        // PARITY.md can quote them without rerunning the test. This
+        // is best-effort; a read-only artifacts directory must not
+        // fail an otherwise-passing parity check.
         let lines: String = """
             max_abs_delta=\(maxAbs)
             mean_abs_delta=\(meanAbs)
@@ -274,6 +287,6 @@ final class SpikeASRTests: XCTestCase {
         let dest = Self.parityOutputsURL
             .deletingLastPathComponent()
             .appendingPathComponent("parity_swift_metrics.txt")
-        try lines.write(to: dest, atomically: true, encoding: .utf8)
+        try? lines.write(to: dest, atomically: true, encoding: .utf8)
     }
 }
