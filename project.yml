@@ -58,6 +58,12 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine
         PRODUCT_NAME: Yooz Engine
+        # Force the Swift module name to `YoozEngine` (no underscore) so
+        # `@testable import YoozEngine` resolves. By default Xcode derives
+        # PRODUCT_MODULE_NAME from PRODUCT_NAME and replaces spaces with
+        # underscores → `Yooz_Engine`, which the test target can't import
+        # under the natural name.
+        PRODUCT_MODULE_NAME: YoozEngine
         INFOPLIST_FILE: YoozEngine/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
@@ -100,6 +106,18 @@ targets:
     platform: macOS
     sources:
       - Tests/YoozEngineTests
+    settings:
+      base:
+        # The app target sets PRODUCT_NAME to "Yooz Engine" (with a space)
+        # so the host bundle path needs the same. XcodeGen otherwise picks
+        # `YoozEngine.app` from the target name and the resolver fails with
+        # "Could not find test host."
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Yooz Engine.app/Contents/MacOS/Yooz Engine"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        # XcodeGen does not auto-generate an Info.plist for test bundles
+        # under the modern toolchain; let Xcode synthesize one so we don't
+        # have to maintain a separate Info.plist for tests.
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: YoozEngine
 
