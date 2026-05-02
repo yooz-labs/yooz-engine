@@ -76,12 +76,18 @@ jobs:
       # The grammar engine ships as an XCFramework built from Rust source
       # under `text-cleanup/`. The framework binary itself is gitignored
       # (`Vendor/YoozTextCleanup/YoozTextCleanup.xcframework`), so CI must
-      # build it before the engine target tries to link it.
+      # build it and stage it under `Vendor/YoozTextCleanup/` where the
+      # engine target expects to link it.
       - name: Build YoozTextCleanup XCFramework
         run: |
           source "$HOME/.cargo/env"
           cd text-cleanup
           bash build-xcframework.sh
+          cd ..
+          mkdir -p Vendor/YoozTextCleanup
+          rm -rf Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+          cp -R text-cleanup/build/YoozTextCleanup.xcframework Vendor/YoozTextCleanup/
+          ls -la Vendor/YoozTextCleanup/
 
       # mlx-swift Metal kernels need the Xcode Metal toolchain. Cache it
       # because download is ~1 GB and slow on a cold runner. See
