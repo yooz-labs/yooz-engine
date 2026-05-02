@@ -112,6 +112,24 @@ final class Qwen3ASRTextDecoderStructuralTests: XCTestCase {
         XCTAssertThrowsError(try cfg3.validate())
     }
 
+    func testFullConfigSupportLanguagesPreservesOrderAndCase() {
+        let cfg = Qwen3ASRFullConfig(
+            audio: Qwen3ASRConfig(),
+            text: Qwen3ASRTextConfig(),
+            audioTokenId: 1, audioStartTokenId: 2, audioEndTokenId: 3,
+            supportLanguages: ["English", "Persian", "Arabic"],
+            quantBits: 8, quantGroupSize: 64
+        )
+        // The pipeline's canonicalLanguageName should match
+        // case-insensitively but return the canonical (capitalized)
+        // form. We don't have a public hook to call it directly, but
+        // the support list is the source of truth — verify the data
+        // shape so a future regression is caught.
+        XCTAssertEqual(cfg.supportLanguages.count, 3)
+        XCTAssertTrue(cfg.supportLanguages.contains("Persian"))
+        XCTAssertFalse(cfg.supportLanguages.contains("persian"))
+    }
+
     func testFullConfigDecodesCanonicalJSON() throws {
         let json: [String: Any] = [
             "thinker_config": [

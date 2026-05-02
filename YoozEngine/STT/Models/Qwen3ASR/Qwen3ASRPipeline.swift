@@ -166,6 +166,13 @@ public final class Qwen3ASRPipeline {
 
         // 1) Strip optional `thinker.` prefix and split into audio /
         // text buckets.
+        //
+        // For tied-embedding checkpoints, `lm_head.*` is unused
+        // (the decoder ties to `model.embed_tokens`). We feed those
+        // keys into `textWeights` anyway and rely on the decoder's
+        // `sanitize` step to drop them — keeping the bucket logic
+        // straight rather than splitting a "drop-here vs drop-there"
+        // decision across two places.
         var audioWeights: [String: MLXArray] = [:]
         var textWeights: [String: MLXArray] = [:]
         for (key, value) in raw {
@@ -173,26 +180,21 @@ public final class Qwen3ASRPipeline {
             if k.hasPrefix("thinker.") {
                 k = String(k.dropFirst("thinker.".count))
             }
-            // The published checkpoint ships an unused `lm_head.*`
-            // shadow when word embeddings are tied. Drop it.
-            if k.hasPrefix("lm_head.") {
-                continue
-            }
             if k.hasPrefix("audio_tower.") {
-                // Strip the prefix here because the encoder is owned
-                // directly (no `audio_tower.*` indirection in the
-                // Swift module tree); the existing
-                // `Qwen3SafetensorsLoader.applyAudioTowerWeights` does
-                // the same.
+                // Pass the full key through; the existing
+                // `Qwen3SafetensorsLoader.applyAudioTowerWeights`
+                // strips the `audio_tower.` prefix itself before the
+                // parameter walk.
                 audioWeights[k] = value
             } else if k.hasPrefix("model.") || k.hasPrefix("lm_head.") {
-                // The decoder exposes `model` as a property and (when
-                // tied) no `lm_head`; keep the original keys so the
-                // parameter walk matches the safetensors prefix.
+                // The decoder exposes `model` as a property; keeping
+                // the original `model.*` (or `lm_head.*`) prefix lets
+                // the MLXNN parameter walk line up with the
+                // safetensors keys directly.
                 textWeights[k] = value
             } else {
                 // Unknown bucket — ignore but log so a future
-                // checkpoint format change shows up in the build log
+                // checkpoint format change shows up in the engine log
                 // rather than silently breaking parity.
                 logger.notice(
                     "Qwen3ASRPipeline: ignoring unrecognized weight key \(k, privacy: .public)"
@@ -426,12 +428,11 @@ public final class Qwen3ASRPipeline {
             return baseEmbeds
         }
 
-        // Replace each pad embedding in place. We build a fresh
-        // tensor by stacking modified rows; doing it via slice-assign
-        // on the existing tensor would mutate `baseEmbeds` in place
-        // and then participate in MLX's autograd graph. The pipeline
-        // doesn't backprop, but using a fresh tensor keeps the reference
-        // semantics clean for tests that snapshot intermediates.
+        // Replace each pad embedding by building a fresh tensor from
+        // stacked rows. MLX slice-assign on `baseEmbeds` would mutate
+        // the same buffer the embedding lookup returned; rebuilding
+        // a fresh tensor keeps `baseEmbeds` immutable so tests that
+        // snapshot intermediates see the unspliced source as-is.
         let seqLen = promptIDs.count
         let hiddenDim = baseEmbeds.dim(2)
         let flatBase = baseEmbeds.reshaped(seqLen, hiddenDim)
@@ -454,9 +455,11 @@ public final class Qwen3ASRPipeline {
     }
 
     /// Pure host-side argmax over the last position of a logits
-    /// tensor of shape `(batch, seqLen, vocab)`. Returns -1 if the
-    /// tensor is somehow empty (which `forward` won't produce, but we
-    /// surface a sentinel rather than crash).
+    /// tensor of shape `(batch, seqLen, vocab)`. The decoder's
+    /// forward path always produces a non-empty logits tensor, so
+    /// this never sees an empty argmax in practice; if it ever does,
+    /// MLX's own `item(Int32.self)` precondition will surface a
+    /// crash with the offending shape.
     func greedyArgmax(lastTokenLogits: MLXArray) -> Int {
         let lastSlice = lastTokenLogits[0, -1]  // (vocab,)
         let argmax = MLX.argMax(lastSlice, axis: -1)
