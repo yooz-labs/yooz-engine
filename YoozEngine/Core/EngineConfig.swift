@@ -23,7 +23,7 @@ public enum KVCompressionMode: String, Codable, Sendable {
 enum EngineConfig {
     static let port: Int = 19920
     static let host: String = "127.0.0.1"
-    static let version: String = "0.5.0"
+    static let version: String = "0.6.0"
 
     /// Default KV cache compression mode for new MLX LLM backends.
     ///
