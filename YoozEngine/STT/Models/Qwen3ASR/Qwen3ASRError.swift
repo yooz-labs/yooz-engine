@@ -2,6 +2,58 @@
 
 import Foundation
 
+/// Structured root-cause for a fetcher failure. Lets callers branch
+/// on the failure mode (transient transport vs server error vs
+/// integrity violation) without grepping a free-form `String`.
+public enum FetchFailure: Error, Equatable, Sendable, CustomStringConvertible {
+    /// Underlying transport failed (DNS, TLS, connection reset).
+    /// Diagnostic string is the transport error.
+    case transport(String)
+    /// Server returned a non-2xx status. Carries the status code so
+    /// retry policy can branch (e.g. 401 -> auth UI, 404 -> repo
+    /// missing, 5xx -> retry).
+    case httpStatus(code: Int, url: URL)
+    /// Server returned 200 OK to a `Range` request, ignoring the
+    /// header. We refuse to append because the response body
+    /// duplicates the prefix already on disk.
+    case rangeIgnored(url: URL)
+    /// Manifest JSON could not be decoded.
+    case manifestDecode(String)
+    /// Final byte size disagreed with the manifest. Carries the
+    /// expected/actual counts and the offending file path.
+    case sizeMismatch(path: String, expected: Int64, actual: Int64)
+    /// Streaming SHA-256 digest disagreed with the manifest's LFS
+    /// digest. Carries hex digests for diagnostic output.
+    case checksumMismatch(path: String, expected: String, actual: String)
+    /// Uncategorized fetch failure. Use sparingly; prefer adding a
+    /// dedicated case.
+    case other(String)
+
+    public var description: String {
+        switch self {
+        case .transport(let detail):
+            return "transport: \(detail)"
+        case .httpStatus(let code, let url):
+            return "HTTP \(code) from \(url)"
+        case .rangeIgnored(let url):
+            return
+                "Server ignored Range header from \(url); cannot "
+                + "resume safely. Delete the partial file and retry."
+        case .manifestDecode(let detail):
+            return "manifest decode failed: \(detail)"
+        case .sizeMismatch(let path, let expected, let actual):
+            return
+                "\(path): expected \(expected) bytes, got \(actual)"
+        case .checksumMismatch(let path, let expected, let actual):
+            return
+                "\(path): SHA-256 mismatch — expected \(expected), "
+                + "got \(actual)"
+        case .other(let detail):
+            return detail
+        }
+    }
+}
+
 /// Errors surfaced by the Qwen3-ASR audio encoder pipeline.
 ///
 /// Every error path a caller may encounter — config validation,
@@ -45,11 +97,12 @@ public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
     /// `Qwen3ASRBackend.transcribe` was called before the pipeline
     /// was loaded via `ensureLoaded(modelDir:)`.
     case pipelineNotLoaded
-    /// First-run model fetch could not contact the manifest endpoint.
-    /// The wrapped string carries the underlying transport error.
-    case fetchFailed(String)
-    /// Downloaded artifact did not match the expected size or hash.
-    case fetchValidationFailed(String)
+    /// First-run model fetch failed. Structured payload lets UI /
+    /// fallback policy branch on root cause without grepping the
+    /// description.
+    case fetchFailed(FetchFailure)
+    /// Tokenizer prep validation rejected the on-disk artifacts.
+    case tokenizerValidationFailed(String)
 
     public var description: String {
         switch self {
@@ -83,10 +136,19 @@ public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
             return
                 "Qwen3ASRError.pipelineNotLoaded: call "
                 + "Qwen3ASRBackend.ensureLoaded(modelDir:) first"
-        case .fetchFailed(let detail):
-            return "Qwen3ASRError.fetchFailed: \(detail)"
-        case .fetchValidationFailed(let detail):
-            return "Qwen3ASRError.fetchValidationFailed: \(detail)"
+        case .fetchFailed(let failure):
+            return "Qwen3ASRError.fetchFailed: \(failure.description)"
+        case .tokenizerValidationFailed(let detail):
+            return "Qwen3ASRError.tokenizerValidationFailed: \(detail)"
         }
+    }
+}
+
+// MARK: - Convenience constructors
+
+extension Qwen3ASRError {
+    /// Convenience for the most common transport-level failure.
+    public static func fetchFailed(_ detail: String) -> Qwen3ASRError {
+        .fetchFailed(.other(detail))
     }
 }

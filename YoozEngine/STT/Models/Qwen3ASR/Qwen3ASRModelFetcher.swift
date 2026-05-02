@@ -1,9 +1,23 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import CryptoKit
 import Foundation
 import os.log
 
 // MARK: - Manifest types
+
+/// LFS sub-object the Hub attaches to large blobs (model weights,
+/// merges, etc.). Present for any file that shipped via Git LFS;
+/// `nil` for inline blobs.
+public struct HFManifestLFS: Codable, Sendable, Equatable {
+    /// SHA-256 hex digest of the blob. Used to verify on-disk
+    /// integrity after a download completes.
+    public let oid: String?
+
+    public init(oid: String?) {
+        self.oid = oid
+    }
+}
 
 /// Manifest entry returned by the Hugging Face Hub
 /// `/api/models/<repo>/tree/<ref>` endpoint. The Hub returns one of
@@ -19,11 +33,20 @@ public struct HFManifestEntry: Codable, Sendable, Equatable {
     /// `file` for normal blobs; `directory` for subdirs (we filter
     /// those out).
     public let type: String
+    /// LFS payload when the blob shipped via Git LFS. Carries the
+    /// SHA-256 the fetcher uses to verify the on-disk download.
+    public let lfs: HFManifestLFS?
 
-    public init(path: String, size: Int64?, type: String = "file") {
+    public init(
+        path: String,
+        size: Int64?,
+        type: String = "file",
+        lfs: HFManifestLFS? = nil
+    ) {
         self.path = path
         self.size = size
         self.type = type
+        self.lfs = lfs
     }
 }
 
@@ -78,13 +101,24 @@ public struct URLSessionHTTPDownloadClient: HTTPDownloadClient {
     ) async throws -> Data {
         var request = URLRequest(url: url)
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await session.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw Qwen3ASRError.fetchFailed(
+                .transport("\(url): \(error.localizedDescription)")
+            )
+        }
         guard let http = response as? HTTPURLResponse else {
-            throw Qwen3ASRError.fetchFailed("Non-HTTP response from \(url)")
+            throw Qwen3ASRError.fetchFailed(
+                .transport("Non-HTTP response from \(url)")
+            )
         }
         guard (200..<300).contains(http.statusCode) else {
             throw Qwen3ASRError.fetchFailed(
-                "HTTP \(http.statusCode) from \(url)"
+                .httpStatus(code: http.statusCode, url: url)
             )
         }
         return data
@@ -101,13 +135,25 @@ public struct URLSessionHTTPDownloadClient: HTTPDownloadClient {
         if byteOffset > 0 {
             request.setValue("bytes=\(byteOffset)-", forHTTPHeaderField: "Range")
         }
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw Qwen3ASRError.fetchFailed(
+                .transport("\(url): \(error.localizedDescription)")
+            )
+        }
         guard let http = response as? HTTPURLResponse else {
-            throw Qwen3ASRError.fetchFailed("Non-HTTP response from \(url)")
+            throw Qwen3ASRError.fetchFailed(
+                .transport("Non-HTTP response from \(url)")
+            )
         }
         guard (200..<300).contains(http.statusCode) else {
             throw Qwen3ASRError.fetchFailed(
-                "HTTP \(http.statusCode) from \(url)"
+                .httpStatus(code: http.statusCode, url: url)
             )
         }
         // If we asked for a Range and the server returned 200 (full
@@ -116,11 +162,7 @@ public struct URLSessionHTTPDownloadClient: HTTPDownloadClient {
         // Fail loud rather than silently produce a duplicate-prefix
         // file. Caller can retry with byteOffset=0 next time.
         if byteOffset > 0 && http.statusCode != 206 {
-            throw Qwen3ASRError.fetchFailed(
-                "Server ignored Range header (HTTP \(http.statusCode)) "
-                    + "from \(url); cannot resume safely. Delete the "
-                    + "partial file and retry."
-            )
+            throw Qwen3ASRError.fetchFailed(.rangeIgnored(url: url))
         }
 
         // Append-mode write. Create the file if it doesn't exist.
@@ -136,14 +178,32 @@ public struct URLSessionHTTPDownloadClient: HTTPDownloadClient {
         var written: Int64 = byteOffset
         var buffer = Data()
         buffer.reserveCapacity(64 * 1024)
-        for try await byte in bytes {
-            buffer.append(byte)
-            if buffer.count >= 64 * 1024 {
-                try handle.write(contentsOf: buffer)
-                written += Int64(buffer.count)
-                progress(written)
-                buffer.removeAll(keepingCapacity: true)
+        do {
+            for try await byte in bytes {
+                // Cooperative cancellation: an outer Task.cancel()
+                // (e.g. from `AsyncThrowingStream.onTermination` in
+                // `download(into:)`) propagates to this inner await
+                // and lets us free partial-file state cleanly rather
+                // than continuing to consume bytes after the caller
+                // gave up.
+                try Task.checkCancellation()
+                buffer.append(byte)
+                if buffer.count >= 64 * 1024 {
+                    try handle.write(contentsOf: buffer)
+                    written += Int64(buffer.count)
+                    progress(written)
+                    buffer.removeAll(keepingCapacity: true)
+                }
             }
+        } catch is CancellationError {
+            if !buffer.isEmpty {
+                try? handle.write(contentsOf: buffer)
+            }
+            throw CancellationError()
+        } catch {
+            throw Qwen3ASRError.fetchFailed(
+                .transport("\(url): \(error.localizedDescription)")
+            )
         }
         if !buffer.isEmpty {
             try handle.write(contentsOf: buffer)
@@ -343,7 +403,7 @@ public actor Qwen3ASRModelFetcher {
         let path = "/api/models/\(repo)/tree/\(revision)?recursive=true"
         guard let url = URL(string: path, relativeTo: baseURL) else {
             throw Qwen3ASRError.fetchFailed(
-                "Invalid manifest URL for repo \(repo)"
+                .other("Invalid manifest URL for repo \(repo)")
             )
         }
         let data = try await client.fetchData(
@@ -356,7 +416,7 @@ public actor Qwen3ASRModelFetcher {
             return entries.filter { $0.type == "file" }
         } catch {
             throw Qwen3ASRError.fetchFailed(
-                "Manifest decode failed: \(error)"
+                .manifestDecode("\(error)")
             )
         }
     }
@@ -432,8 +492,24 @@ public actor Qwen3ASRModelFetcher {
            )[.size] as? Int64,
            actual != expected
         {
-            throw Qwen3ASRError.fetchValidationFailed(
-                "\(entry.path): expected \(expected) bytes, got \(actual)"
+            throw Qwen3ASRError.fetchFailed(
+                .sizeMismatch(
+                    path: entry.path,
+                    expected: expected,
+                    actual: actual
+                )
+            )
+        }
+
+        // Validate streaming SHA-256 when the manifest carries an
+        // LFS digest. Catches mid-stream corruption that the size
+        // check cannot (e.g. TLS-MITM proxy that flips bytes but
+        // returns the right total length).
+        if let expectedSha = entry.lfs?.oid {
+            try validateSha256(
+                fileURL: dest,
+                expected: expectedSha,
+                path: entry.path
             )
         }
 
@@ -443,5 +519,38 @@ public actor Qwen3ASRModelFetcher {
                 bytes: entry.size ?? 0
             )
         )
+    }
+
+    /// Streaming SHA-256 verification of `fileURL` against `expected`
+    /// (hex digest). Reads the file in 1 MB chunks so a 3 GB blob
+    /// doesn't pin RAM.
+    private nonisolated func validateSha256(
+        fileURL: URL,
+        expected: String,
+        path: String
+    ) throws {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        let chunk = 1 * 1024 * 1024
+        while true {
+            try Task.checkCancellation()
+            let data = try handle.read(upToCount: chunk) ?? Data()
+            if data.isEmpty { break }
+            hasher.update(data: data)
+        }
+        let actual = hasher.finalize().map {
+            String(format: "%02x", $0)
+        }.joined()
+        let normalizedExpected = expected.lowercased()
+        if actual != normalizedExpected {
+            throw Qwen3ASRError.fetchFailed(
+                .checksumMismatch(
+                    path: path,
+                    expected: normalizedExpected,
+                    actual: actual
+                )
+            )
+        }
     }
 }

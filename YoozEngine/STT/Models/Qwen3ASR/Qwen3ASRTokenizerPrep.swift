@@ -28,9 +28,9 @@ import Tokenizers
 ///     path), run the canary encode, then drop the sentinel. The
 ///     current swift-transformers `loadConfig(modelFolder:)` REQUIRES
 ///     `tokenizer.json` to be present, so this branch typically
-///     fails today; the failure is typed (`fetchValidationFailed`)
-///     so operators see the issue at first-run rather than silently
-///     mis-tokenizing.
+///     fails today; the failure is typed
+///     (`tokenizerValidationFailed`) so operators see the issue at
+///     first-run rather than silently mis-tokenizing.
 ///
 /// We deliberately do NOT synthesize `tokenizer.json` ourselves:
 /// reverse-engineering the HF tokenizer schema is a maintenance trap
@@ -60,8 +60,8 @@ public enum Qwen3ASRTokenizerPrep {
 
     /// Run the prep step. Throws `Qwen3ASRError.fileNotFound` if the
     /// fallback inputs are missing and `tokenizer.json` is also absent;
-    /// throws `Qwen3ASRError.fetchValidationFailed` if the on-disk
-    /// artifacts don't produce a valid tokenizer.
+    /// throws `Qwen3ASRError.tokenizerValidationFailed` if the
+    /// on-disk artifacts don't produce a valid tokenizer.
     public static func prepare(modelDir: URL) async throws {
         let fm = FileManager.default
         let sentinel = modelDir.appendingPathComponent(sentinelFilename)
@@ -116,21 +116,59 @@ public enum Qwen3ASRTokenizerPrep {
     }
 
     /// Try to construct a tokenizer from the on-disk artifacts. Maps
-    /// any failure to `Qwen3ASRError.fetchValidationFailed` so callers
-    /// can distinguish prep failures from network failures.
+    /// any failure to `Qwen3ASRError.tokenizerValidationFailed` so
+    /// callers can distinguish prep failures from network failures.
     private static func validateTokenizerLoads(modelDir: URL) async throws {
         #if canImport(Tokenizers)
         do {
-            _ = try await AutoTokenizer.from(modelFolder: modelDir)
+            let tokenizer = try await AutoTokenizer.from(
+                modelFolder: modelDir
+            )
+            try runCanaryEncode(tokenizer: tokenizer)
+        } catch let asrError as Qwen3ASRError {
+            throw asrError
         } catch {
-            throw Qwen3ASRError.fetchValidationFailed(
+            throw Qwen3ASRError.tokenizerValidationFailed(
                 "AutoTokenizer.from(modelFolder:) failed: \(error)"
             )
         }
         #else
-        throw Qwen3ASRError.fetchValidationFailed(
+        throw Qwen3ASRError.tokenizerValidationFailed(
             "Tokenizers package not available; cannot validate tokenizer"
         )
         #endif
     }
+
+    #if canImport(Tokenizers)
+    /// Encode a known-stable string and assert the resulting token
+    /// IDs match the captured Python reference. "Loaded without
+    /// throwing" is not the same as "produces correct token IDs";
+    /// this canary catches a future swift-transformers release that
+    /// silently mis-tokenizes the fallback inputs.
+    ///
+    /// Canary input: the literal string `"Hello"`. Captured against
+    /// the canonical `mlx-community/Qwen3-ASR-1.7B-8bit` tokenizer
+    /// (Qwen2 BPE; `Hello` encodes to a single byte-level token id
+    /// `9707`). If a future tokenizer release diverges from this
+    /// vector, `tokenizerValidationFailed` fires loudly at first-run
+    /// rather than the engine emitting subtly-wrong tokens.
+    private static func runCanaryEncode(tokenizer: any Tokenizer) throws {
+        let canary = "Hello"
+        let expected = canaryExpectedTokens
+        let actual = tokenizer.encode(text: canary)
+        guard actual == expected else {
+            throw Qwen3ASRError.tokenizerValidationFailed(
+                "Canary encode of \"\(canary)\" produced "
+                    + "\(actual); expected \(expected). The Qwen3-ASR "
+                    + "tokenizer on disk does not agree with the "
+                    + "reference. Re-pull the checkpoint or file an "
+                    + "issue."
+            )
+        }
+    }
+
+    /// Expected token IDs for the canary input. Captured from the
+    /// canonical Python reference.
+    private static let canaryExpectedTokens: [Int] = [9707]
+    #endif
 }
