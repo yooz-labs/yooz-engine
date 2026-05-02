@@ -14,15 +14,15 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
     case fastConformer = "fast_conformer"
     /// Apple SFSpeechRecognizer (on-device).
     case appleSTT = "apple_stt"
-    /// Qwen3-ASR 1.7B 8-bit (preview, batch-only in Phase 5).
+    /// Qwen3-ASR 1.7B 8-bit (preview; multilingual; non-causal
+    /// encoder so streaming partial text is empty until `final`).
     case qwen3ASRPreview = "qwen3_asr_preview"
 
     /// Whether this backend currently exposes a streaming endpoint.
-    /// All four backends now stream over `WS /v1/stt/stream`. The
-    /// `qwen3_asr_preview` path was added in Phase 7 (issue #61); its
-    /// "partial" frames are heartbeats — the model's non-causal
-    /// encoder produces text only on `final` — but the protocol
-    /// surface is the same as Parakeet / FastConformer.
+    /// All four backends stream over `WS /v1/stt/stream`. The
+    /// `qwen3_asr_preview` path's "partial" frames are heartbeats —
+    /// the model's non-causal encoder produces text only on `final` —
+    /// but the protocol surface is the same as Parakeet / FastConformer.
     public var supportsStreaming: Bool {
         switch self {
         case .parakeet, .fastConformer:
@@ -35,13 +35,21 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
     }
 
     /// Whether this backend currently exposes a batch endpoint.
+    /// Exhaustive switch — adding a streaming-only backend forces a
+    /// compile error here so we cannot silently lie about batch
+    /// capability.
     public var supportsBatch: Bool {
-        // All four backends support batch; the streaming-only flag is
-        // the differentiator.
-        true
+        switch self {
+        case .parakeet, .fastConformer:
+            true
+        case .appleSTT:
+            true
+        case .qwen3ASRPreview:
+            true
+        }
     }
 
-    // MARK: - Phase 6 — Display helpers (engine-side source of truth)
+    // MARK: - Display helpers (engine-side source of truth)
 
     /// User-facing label for the backend. Used by Whisper / Notes
     /// UIs (which live in their own repos) so they don't drift from
@@ -87,7 +95,7 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
     /// Languages this backend can transcribe via the engine. The list
     /// reflects what the engine knows how to route — for `qwen3_asr_preview`
     /// the underlying model supports many more languages but the engine
-    /// only exposes the ones it has fixtures for in Phase 5.
+    /// only exposes the canonical set used in parity work.
     public var supportedLanguages: [STTLanguage] {
         switch self {
         case .parakeet:
@@ -101,8 +109,8 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
             // engine's known set.
             return STTLanguage.allCases
         case .qwen3ASRPreview:
-            // Qwen3-ASR is multilingual; the engine routes the canonical
-            // set used in Phase 4 parity work.
+            // Qwen3-ASR is multilingual; the engine routes the
+            // canonical set used in parity work.
             return [.english, .arabic, .persian]
         }
     }

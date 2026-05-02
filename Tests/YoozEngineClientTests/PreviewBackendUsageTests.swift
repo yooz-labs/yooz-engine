@@ -71,7 +71,15 @@ final class PreviewBackendUsageTests: XCTestCase {
         )
         let data = try JSONEncoder().encode(request)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        XCTAssertEqual(json?["backend"] as? String, "qwen3_asr_preview")
+        // Wire field name matches the engine's `STTEnginePostRequest`
+        // shape: `{"engine": "qwen3_asr_preview"}`. Asserting the
+        // wrong key (e.g. `"backend"`) would let the snippet ship a
+        // payload the engine rejects with 400 invalid_request.
+        XCTAssertEqual(json?["engine"] as? String, "qwen3_asr_preview")
+        XCTAssertNil(
+            json?["backend"],
+            "wire format must use `engine`, not `backend`"
+        )
     }
 
     // MARK: - Reading metrics off disk

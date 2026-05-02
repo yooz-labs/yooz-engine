@@ -47,9 +47,8 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
     /// in milliseconds.
     public let endToEndLatencyMs: UInt32
 
-    /// Coarse hardware class of the host machine. Bucketed (M1, M2,
-    /// M3, M4, Apple-Silicon-unknown, Intel, unknown) so dashboards
-    /// cannot fingerprint a specific machine.
+    /// Coarse hardware bucket — see `HardwareClass`. Bucketed so
+    /// dashboards cannot fingerprint a specific machine.
     public let hardwareClass: HardwareClass
 
     /// `true` when this transcription is the result of an
@@ -82,10 +81,11 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
 
     // MARK: - Codable
 
-    /// Snake-cased JSON keys. The full set is asserted by the privacy
-    /// test — adding a key here without updating the test is a hard
-    /// CI failure.
-    private enum CodingKeys: String, CodingKey {
+    /// Snake-cased JSON keys. The privacy test reads
+    /// `canonicalJSONKeys` (derived from this enum) so adding a case
+    /// here without updating the test is a hard CI failure — single
+    /// source of truth.
+    fileprivate enum CodingKeys: String, CodingKey, CaseIterable {
         case backend
         case modelVariant = "model_variant"
         case audioDurationMs = "audio_duration_ms"
@@ -96,19 +96,12 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
         case timestampUTC = "timestamp_utc"
     }
 
-    /// Canonical set of JSON keys this record produces. The privacy
-    /// test reads this exact set; adding a field here without
-    /// updating the test will fail loudly.
-    public static let canonicalJSONKeys: Set<String> = [
-        "backend",
-        "model_variant",
-        "audio_duration_ms",
-        "time_to_first_token_ms",
-        "end_to_end_latency_ms",
-        "hardware_class",
-        "fell_back_from_preview",
-        "timestamp_utc",
-    ]
+    /// Canonical set of JSON keys this record produces. Derived from
+    /// `CodingKeys.allCases` so adding a Swift field automatically
+    /// updates the wire-shape tripwire used by the privacy test.
+    public static let canonicalJSONKeys: Set<String> = Set(
+        CodingKeys.allCases.map(\.rawValue)
+    )
 }
 
 extension STTBackendMetrics {

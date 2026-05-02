@@ -49,15 +49,16 @@ public enum PreviewBackendUsageExample {
 
     // MARK: - 1. Switch to preview backend
 
-    /// HTTP request body for `POST /v1/stt/engine`. The engine accepts
-    /// any value of `STTBackendIdentifier`; this client uses the
-    /// canonical `qwen3_asr_preview` raw value to switch into the
-    /// preview multilingual backend.
+    /// HTTP request body for `POST /v1/stt/engine`. The wire field
+    /// name is `engine` (matching the engine's `STTEnginePostRequest`
+    /// shape). The engine validates the value against
+    /// `STTBackendID.allCases` and rejects unknown identifiers with a
+    /// 400 `invalid_engine` error.
     public struct STTBackendSwitchRequest: Codable {
-        public let backend: String
+        public let engine: String
 
         public init(backend: STTBackendIdentifier) {
-            self.backend = backend.rawValue
+            self.engine = backend.rawValue
         }
     }
 
