@@ -92,8 +92,6 @@ targets:
       - target: YoozEngine
       - package: hummingbird
         product: HummingbirdTesting
-      - package: hummingbird-websocket
-        product: HummingbirdWSTesting
 
 schemes:
   YoozEngine:
