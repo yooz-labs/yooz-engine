@@ -1,4 +1,5 @@
 // swift-tools-version: 5.9
+// swiftlint:disable line_length
 
 import PackageDescription
 
@@ -49,7 +50,20 @@ let package = Package(
         .package(
             url: "https://github.com/ml-explore/mlx-swift",
             from: "0.21.2"
-        )
+        ),
+        // Phase 4: Qwen3 text decoder + tokenizer-aware chat template
+        // are reused from mlx-swift-lm + swift-transformers. The
+        // engine Xcode project already pulls these in via project.yml;
+        // SwiftPM needs them too so the headless parity tests can
+        // exercise the full bridge.
+        .package(
+            url: "https://github.com/ml-explore/mlx-swift-lm",
+            from: "2.30.3"
+        ),
+        .package(
+            url: "https://github.com/huggingface/swift-transformers",
+            from: "1.1.6"
+        ),
     ],
     targets: [
         .target(
@@ -67,6 +81,8 @@ let package = Package(
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             path: "YoozEngine/STT/Models/Qwen3ASR",
             exclude: ["MelFrontend"]
@@ -87,6 +103,8 @@ let package = Package(
                 "Qwen3ASR",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             path: "Tests/YoozEngineTests/Qwen3ASR"
         ),
