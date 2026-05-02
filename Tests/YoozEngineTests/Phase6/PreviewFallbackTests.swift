@@ -346,6 +346,31 @@ final class PreviewFallbackTests: XCTestCase {
 
     // MARK: - Audio duration calculation
 
+    func testAudioDurationMsZeroSampleRateReturnsZero() async {
+        let fetcher = SpyFetcher(shouldThrow: false)
+        let preview = SpyPreviewBackend()
+        let fallback = StubFallback(text: "n/a")
+        let sink = InMemoryMetricsSink()
+        let hook = makeHook(
+            fetcher: fetcher,
+            preview: preview,
+            fallback: fallback,
+            sink: sink
+        )
+
+        // Defensive guard: zero sample rate would otherwise divide
+        // by zero. The hook returns 0 ms instead of trapping.
+        _ = await hook.attemptPreviewWithFallback(
+            samples: [Float](repeating: 0.0, count: 16_000),
+            language: .english,
+            sampleRate: 0
+        )
+
+        let metrics = await sink.snapshot()
+        XCTAssertEqual(metrics.count, 1)
+        XCTAssertEqual(metrics[0].audioDurationMs, 0)
+    }
+
     func testAudioDurationMsReflectsSampleCount() async {
         let fetcher = SpyFetcher(shouldThrow: false)
         let preview = SpyPreviewBackend()
