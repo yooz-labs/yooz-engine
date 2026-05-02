@@ -56,6 +56,14 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
     /// preview cold-start failure. `false` for every other run.
     public let fellBackFromPreview: Bool
 
+    /// `true` when the streaming session tore down via an exception
+    /// path (oversized frame, abrupt drop, mid-stream cancel) rather
+    /// than a clean `finalize()`. Carried as a separate bool — not as
+    /// a suffix on `modelVariant` — so dashboards grouping by
+    /// `model_variant` keep one bucket per backend instead of
+    /// silently splitting clean vs aborted runs.
+    public let streamAborted: Bool
+
     /// UTC timestamp of the metric event.
     public let timestampUTC: Date
 
@@ -67,6 +75,7 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
         endToEndLatencyMs: UInt32,
         hardwareClass: HardwareClass,
         fellBackFromPreview: Bool,
+        streamAborted: Bool = false,
         timestampUTC: Date
     ) {
         self.backend = backend
@@ -76,6 +85,7 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
         self.endToEndLatencyMs = endToEndLatencyMs
         self.hardwareClass = hardwareClass
         self.fellBackFromPreview = fellBackFromPreview
+        self.streamAborted = streamAborted
         self.timestampUTC = timestampUTC
     }
 
@@ -93,6 +103,7 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
         case endToEndLatencyMs = "end_to_end_latency_ms"
         case hardwareClass = "hardware_class"
         case fellBackFromPreview = "fell_back_from_preview"
+        case streamAborted = "stream_aborted"
         case timestampUTC = "timestamp_utc"
     }
 
