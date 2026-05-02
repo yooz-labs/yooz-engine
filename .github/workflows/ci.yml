@@ -39,13 +39,30 @@ jobs:
   client-sdk:
     name: Client SDK Build + Test
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+
+      # mlx-swift's Metal kernels need the Metal toolchain to build
+      # via `xcodebuild`. `swift test` driving an MLX path otherwise
+      # fails at runtime with `Failed to load the default metallib`.
+      # Phase-1 spike DECISION.md flagged this; we cache the
+      # downloaded toolchain so subsequent runs skip the multi-minute
+      # download.
+      - name: Cache Metal Toolchain
+        id: cache-metal-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/MetalToolchain
+          key: metal-toolchain-xcode-26.2-${{ runner.os }}
+
+      - name: Download Metal Toolchain
+        if: steps.cache-metal-toolchain.outputs.cache-hit != 'true'
+        run: sudo xcodebuild -downloadComponent MetalToolchain
 
       - name: Build
         run: swift build
