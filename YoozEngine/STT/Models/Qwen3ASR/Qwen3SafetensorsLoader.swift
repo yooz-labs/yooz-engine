@@ -108,6 +108,18 @@ public enum Qwen3SafetensorsLoader {
             }
         }
 
+        // Reject extra `audio_tower.*` keys the encoder does not
+        // declare. MLXNN's `update(verify: [.all])` would catch
+        // this further downstream, but it surfaces a generic
+        // string error; we want the caller to see the offending
+        // key directly via the typed enum.
+        let expectedKeys = Set(expectations.keys)
+        for providedKey in stripped.keys where !expectedKeys.contains(
+            providedKey
+        ) {
+            throw Qwen3ASRError.unexpectedTensor(providedKey)
+        }
+
         // 3) Apply weights via the standard MLXNN path.
         let nested = ModuleParameters.unflattened(stripped)
         try encoder.update(parameters: nested, verify: [.all])
