@@ -842,7 +842,9 @@ final class APIServer: ObservableObject {
             // (e.g. `protocol`, `stream_aborted`) without parsing
             // `message`. Best-effort: if the connection has already
             // gone, this is a no-op.
-            func sendError(_ message: String, code: String? = nil) async {
+            func sendError(
+                _ message: String, code: WSSTTErrorCode? = nil
+            ) async {
                 do {
                     let json = try encoder.encode(
                         WSSTTError(
@@ -935,19 +937,28 @@ final class APIServer: ObservableObject {
                         config = try JSONDecoder().decode(WSSTTConfig.self, from: data)
                     } catch {
                         sttLogger.warning("Invalid text message: \(error)")
-                        await sendError("Invalid message format")
+                        await sendError(
+                            "Invalid message format",
+                            code: .invalidMessageFormat
+                        )
                         continue
                     }
 
                     if config.type == "config" {
                         let languageCode = config.language ?? "en"
                         guard let language = STTLanguage.fromCode(languageCode) else {
-                            await sendError("Unknown language: \(languageCode)")
+                            await sendError(
+                                "Unknown language: \(languageCode)",
+                                code: .unknownLanguage
+                            )
                             continue
                         }
 
                         guard language.isImplemented else {
-                            await sendError("Language not implemented: \(language.displayName)")
+                            await sendError(
+                                "Language not implemented: \(language.displayName)",
+                                code: .languageNotImplemented
+                            )
                             continue
                         }
 
@@ -969,7 +980,8 @@ final class APIServer: ObservableObject {
                             else {
                                 await sendError(
                                     "Language not supported by qwen3_asr_preview: "
-                                        + language.displayName
+                                        + language.displayName,
+                                    code: .languageNotSupportedByBackend
                                 )
                                 continue
                             }
@@ -978,7 +990,8 @@ final class APIServer: ObservableObject {
                                 try await sttEngine.start(language: language)
                             } catch {
                                 await sendError(
-                                    "Failed to load model: \(error.localizedDescription)"
+                                    "Failed to load model: \(error.localizedDescription)",
+                                    code: .modelLoadFailed
                                 )
                                 continue
                             }
@@ -1022,7 +1035,10 @@ final class APIServer: ObservableObject {
                         do {
                             try await sttEngine.start(language: language)
                         } catch {
-                            await sendError("Failed to load model: \(error.localizedDescription)")
+                            await sendError(
+                                "Failed to load model: \(error.localizedDescription)",
+                                code: .modelLoadFailed
+                            )
                             continue
                         }
 
@@ -1051,7 +1067,8 @@ final class APIServer: ObservableObject {
                         await sendError(
                             "Audio frame byte count (\(byteCount)) is not a "
                                 + "multiple of Float32 size; expected raw "
-                                + "Float32 PCM at 16 kHz mono."
+                                + "Float32 PCM at 16 kHz mono.",
+                            code: .invalidAudioFrame
                         )
                         continue
                     }
@@ -1075,13 +1092,13 @@ final class APIServer: ObservableObject {
                         } catch let sessionError as Qwen3ASRStreamingSession.SessionError {
                             await sendError(
                                 "Streaming session error: \(sessionError.description)",
-                                code: "session_error"
+                                code: .sessionError
                             )
                             continue
                         } catch {
                             await sendError(
                                 "Streaming session error: \(error.localizedDescription)",
-                                code: "session_error"
+                                code: .sessionError
                             )
                             continue
                         }
@@ -1167,7 +1184,7 @@ final class APIServer: ObservableObject {
                 )
                 await sendError(
                     "Stream aborted: \(error.localizedDescription)",
-                    code: "stream_aborted"
+                    code: .streamAborted
                 )
                 if let session = qwen3Session {
                     let audioMs = await session.audioDurationMs
@@ -1220,7 +1237,7 @@ final class APIServer: ObservableObject {
                     )
                     await sendError(
                         "Streaming finalize failed: \(sessionError.description)",
-                        code: "finalize_failed"
+                        code: .finalizeFailed
                     )
                     let metric = buildQwen3Metric(
                         audioMs: await session.audioDurationMs,
@@ -1234,7 +1251,7 @@ final class APIServer: ObservableObject {
                     )
                     await sendError(
                         "Streaming finalize failed: \(error.localizedDescription)",
-                        code: "finalize_failed"
+                        code: .finalizeFailed
                     )
                     let metric = buildQwen3Metric(
                         audioMs: await session.audioDurationMs,

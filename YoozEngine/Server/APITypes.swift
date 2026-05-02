@@ -112,15 +112,47 @@ struct WSSTTResult: Encodable {
     let draft: String
 }
 
+/// Stable wire-level error codes the engine emits over WS. The
+/// `rawValue` is what crosses the wire; clients branch on it. Kept
+/// as a typed enum (mirroring `WSSTTWarningCode`) so the compiler
+/// catches typos at the emit-site — a free-form `String` like
+/// `"sesion_error"` would silently break client branching.
+enum WSSTTErrorCode: String, Encodable, Sendable, CaseIterable {
+    /// Inbound text frame failed JSON decode (`WSSTTConfig`).
+    case invalidMessageFormat = "invalid_message_format"
+    /// `config.language` does not map to a known `STTLanguage`.
+    case unknownLanguage = "unknown_language"
+    /// Language is known but not implemented for any backend yet.
+    case languageNotImplemented = "language_not_implemented"
+    /// The active backend (`qwen3_asr_preview`) does not support
+    /// the requested language.
+    case languageNotSupportedByBackend = "language_not_supported_by_backend"
+    /// `sttEngine.start(language:)` threw — the per-backend load
+    /// path failed (model fetch, weight load, tokenizer prep).
+    case modelLoadFailed = "model_load_failed"
+    /// Inbound binary frame is not a whole-`Float32` multiple.
+    case invalidAudioFrame = "invalid_audio_frame"
+    /// Qwen3 streaming session raised a typed `SessionError`
+    /// during `push`.
+    case sessionError = "session_error"
+    /// The WS message loop tore down via an exception path
+    /// (oversized frame, abrupt disconnect, framer decode).
+    case streamAborted = "stream_aborted"
+    /// `finalize()` threw — the model produced no transcript or
+    /// the post-processing path failed mid-stream.
+    case finalizeFailed = "finalize_failed"
+}
+
 struct WSSTTError: Encodable {
     let type: String  // "error"
     let message: String
-    /// Stable error code so clients can branch without parsing
+    /// Typed error code so clients can branch without parsing
     /// `message`. Optional to keep the wire format backward-
-    /// compatible with older consumers.
-    let code: String?
+    /// compatible with older consumers; the wire still carries the
+    /// snake_case rawValue.
+    let code: WSSTTErrorCode?
 
-    init(type: String, message: String, code: String? = nil) {
+    init(type: String, message: String, code: WSSTTErrorCode? = nil) {
         self.type = type
         self.message = message
         self.code = code
