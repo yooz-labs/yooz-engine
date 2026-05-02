@@ -17,14 +17,22 @@ import Tokenizers
 /// `Qwen3ASRTokenizerPrep.prepare(modelDir:)` is that step.
 ///
 /// Behavior:
-///   - If `tokenizer.json` already exists, no-op.
-///   - Otherwise, validate `tokenizer_config.json`, `vocab.json`,
-///     and `merges.txt` are present, then load via
-///     `AutoTokenizer.from(modelFolder:)` to confirm the on-disk
-///     artifacts produce a working tokenizer.
-///   - Drop a sentinel `.yooz_tokenizer_prepped` so a future run
-///     doesn't retry the validation load even if `tokenizer.json`
-///     is still absent.
+///   - Sentinel fast-path: if `.yooz_tokenizer_prepped` is present,
+///     no-op.
+///   - If `tokenizer.json` already exists, validate it loads via
+///     `AutoTokenizer.from(modelFolder:)`, drop the sentinel, return.
+///     This is the path the canonical mlx-community checkpoint takes
+///     today.
+///   - Otherwise, validate the fallback inputs (`tokenizer_config.json`,
+///     `vocab.json`, `merges.txt`) are on disk and surface
+///     `Qwen3ASRError.fetchValidationFailed` if the loader rejects
+///     them. The current swift-transformers `loadConfig(modelFolder:)`
+///     REQUIRES `tokenizer.json` to be present, so this branch will
+///     fail until either (a) a future swift-transformers release
+///     synthesizes the tokenizer from the fallback inputs, or (b) we
+///     bundle a deterministic builder. Either way the failure is
+///     loud and typed; operators see the issue at first-run rather
+///     than silently mis-tokenizing.
 ///
 /// Idempotent: running prep twice on a prepared directory makes no
 /// filesystem changes the second time.
