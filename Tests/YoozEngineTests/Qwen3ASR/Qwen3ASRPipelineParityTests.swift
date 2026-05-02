@@ -219,15 +219,17 @@ final class Qwen3ASRPipelineParityTests: XCTestCase {
     }
 
     /// 2. Decoder prefill parity — given the same audio_features and
-    /// prompt as the Python reference, the argmax over the last
-    /// position of the prefill logits must equal the canonical first
-    /// generated token (`language` = id 11528).
+    /// prompt as the Python reference, the first generated token must
+    /// be `language` (id 11528). We assert by transcribing with
+    /// `maxNewTokens: 1` and walking the canonical reference's
+    /// generated_token_ids stream: token #0 (= 11528) is the
+    /// language tag, token #1 (= 6364) is "English", token #2
+    /// (= 151704) is `<asr_text>`. The pipeline strips the language
+    /// preamble, so a `maxNewTokens: 1` run yields zero "content"
+    /// tokens and `result.numAudioTokens` must match the reference
+    /// (cross-checks the audio_tower path was actually exercised).
     func testDecoderPrefillArgmaxMatchesReference() async throws {
         try Self.skipUnlessArtifactsAvailable()
-        try XCTSkipUnless(
-            FileManager.default.fileExists(atPath: Self.decoderOutputsURL.path),
-            "Decoder parity outputs missing — re-run dump_decoder_parity.py"
-        )
 
         let reference = try Self.loadCanonicalReference()
         let pipeline = try await Self.loadPipeline()
@@ -237,15 +239,20 @@ final class Qwen3ASRPipelineParityTests: XCTestCase {
             pcm: pcm, language: nil, maxNewTokens: 1
         )
 
-        // First produced token (before language extraction) must be
-        // 11528 ("language"). The transcribe path strips the
-        // preamble, so we re-verify against generatedTokens which
-        // includes only the post-`<asr_text>` body — therefore we
-        // compare via `numAudioTokens` instead and ensure the *audio
-        // features path* produced the right count.
         XCTAssertEqual(
             result.numAudioTokens, reference.numAudioTokens,
-            "audio_tower output token count diverged"
+            "audio_tower output token count diverged from reference"
+        )
+        // With maxNewTokens=1 the model emits exactly one token
+        // before the loop exits. The reference's first generated
+        // token is 11528 ("language"); the language preamble parser
+        // doesn't trigger because `<asr_text>` was never sampled,
+        // so generatedTokens contains the raw stream and we can
+        // assert directly on the first token.
+        XCTAssertEqual(
+            result.generatedTokens.first, reference.generatedTokenIds.first,
+            "First sampled token diverged from reference (expected the "
+                + "'language' tag id 11528)"
         )
     }
 
