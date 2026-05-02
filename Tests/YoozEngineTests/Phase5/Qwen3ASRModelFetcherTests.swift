@@ -475,4 +475,85 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
             "Already-complete dir must issue no full-file requests; got \(client.fullRequests)"
         )
     }
+
+    /// SHA-256 mismatch on a safetensors file MUST surface as a typed
+    /// `FetchFailure.checksumMismatch`, not be silently swallowed. A
+    /// future regression that disabled SHA verification would let
+    /// byte-flipped weights ship to disk; this test is the regression
+    /// gate. (Round-2 silent-failure #B6 closure.)
+    func testRejectsTamperedSafetensorsWithChecksumMismatch() async throws {
+        let allFiles =
+            Qwen3ASRModelFetcher.requiredFiles
+            + Qwen3ASRModelFetcher.optionalFiles
+        var blobs: [String: Data] = [:]
+        for path in allFiles {
+            let payload = "fixture-\(path)\n".data(using: .utf8)!
+            blobs[path] = payload + Data(repeating: 0x00, count: 1024)
+        }
+
+        // Build the manifest with a *deliberately wrong* SHA for
+        // every safetensors file — the fetcher should refuse to
+        // accept the on-disk bytes after download because the
+        // hash will not match.
+        let bogusSha = String(repeating: "0", count: 64)
+        let manifestEntries = blobs.map { path, data -> HFManifestEntry in
+            let lfs: HFManifestLFS?
+            if path.hasSuffix(".safetensors") {
+                lfs = HFManifestLFS(oid: bogusSha)
+            } else {
+                lfs = nil
+            }
+            return HFManifestEntry(
+                path: path,
+                size: Int64(data.count),
+                type: "file",
+                lfs: lfs
+            )
+        }
+        let manifestData = try JSONEncoder().encode(manifestEntries)
+        let client = MockClient(manifestData: manifestData, blobs: blobs)
+
+        let fetcher = Qwen3ASRModelFetcher(
+            client: client,
+            baseURL: URL(string: "https://mock.local")!
+        )
+
+        do {
+            for try await _ in await fetcher.download(
+                into: tempDir, runTokenizerPrep: false
+            ) {
+                // Drain. The throw happens during checksum verify
+                // post-download; we expect to not reach a `.done`.
+            }
+            XCTFail(
+                "Expected checksumMismatch to throw; the fetcher must "
+                    + "not accept safetensors whose computed SHA-256 "
+                    + "differs from the manifest's lfs.oid."
+            )
+        } catch let Qwen3ASRError.fetchFailed(payload) {
+            switch payload {
+            case .checksumMismatch(let path, let expected, _):
+                XCTAssertTrue(
+                    path.hasSuffix(".safetensors"),
+                    "checksumMismatch must fire for a safetensors file; "
+                        + "got \(path)"
+                )
+                XCTAssertEqual(
+                    expected, bogusSha,
+                    "Expected hash should equal the (bogus) lfs.oid we "
+                        + "planted in the manifest"
+                )
+            default:
+                XCTFail(
+                    "Expected .checksumMismatch FetchFailure; got "
+                        + "\(payload)"
+                )
+            }
+        } catch {
+            XCTFail(
+                "Expected Qwen3ASRError.fetchFailed(.checksumMismatch); "
+                    + "got \(error)"
+            )
+        }
+    }
 }
