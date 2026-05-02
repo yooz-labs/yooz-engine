@@ -89,6 +89,32 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
         }
     }
 
+    /// Always-fails client used to exercise the error-mode matrix.
+    /// Returns the supplied error from `fetchData(url:headers:)`
+    /// (which the real fetcher calls for the manifest endpoint).
+    private final class StaticErrorClient: HTTPDownloadClient,
+        @unchecked Sendable
+    {
+        let manifestError: Error
+        init(manifestError: Error) { self.manifestError = manifestError }
+
+        func fetchData(
+            url: URL, headers: [String: String]
+        ) async throws -> Data {
+            throw manifestError
+        }
+
+        func downloadFile(
+            url: URL,
+            destination: URL,
+            byteOffset: Int64,
+            expectedTotalBytes: Int64?,
+            progress: @Sendable (Int64) -> Void
+        ) async throws {
+            throw manifestError
+        }
+    }
+
     // MARK: - Helpers
 
     private var tempDir: URL!
@@ -243,6 +269,160 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
 
         let afterReady = await fetcher.isModelDirReady(tempDir)
         XCTAssertTrue(afterReady)
+    }
+
+    // MARK: - HTTP error mode matrix
+
+    /// Inject an HTTP 404 from the manifest endpoint. The fetcher
+    /// must surface a typed `Qwen3ASRError.fetchFailed` with the
+    /// `.httpStatus` payload — never a silent success.
+    func testManifestHTTP404PropagatesAsTypedError() async throws {
+        let mock = StaticErrorClient(
+            manifestError: Qwen3ASRError.fetchFailed(
+                .httpStatus(
+                    code: 404,
+                    url: URL(string: "https://mock.local")!
+                )
+            )
+        )
+        let fetcher = Qwen3ASRModelFetcher(
+            client: mock,
+            baseURL: URL(string: "https://mock.local")!
+        )
+
+        do {
+            for try await _ in await fetcher.download(
+                into: tempDir, runTokenizerPrep: false
+            ) {}
+            XCTFail("Expected fetchFailed for 404 manifest")
+        } catch let asrError as Qwen3ASRError {
+            guard case .fetchFailed(let failure) = asrError else {
+                return XCTFail("Expected .fetchFailed, got \(asrError)")
+            }
+            guard case .httpStatus(let code, _) = failure else {
+                return XCTFail(
+                    "Expected .httpStatus payload, got \(failure)"
+                )
+            }
+            XCTAssertEqual(code, 404)
+        }
+
+        let ready = await fetcher.isModelDirReady(tempDir)
+        XCTAssertFalse(
+            ready,
+            "isModelDirReady must remain false after a fetch error."
+        )
+    }
+
+    /// Inject an HTTP 401 (auth required / token expired). Verifies
+    /// the same typed-error path as 404 — the fetcher does not
+    /// branch on status code, the typed payload preserves it for
+    /// the consumer.
+    func testManifestHTTP401PropagatesAsTypedError() async throws {
+        let mock = StaticErrorClient(
+            manifestError: Qwen3ASRError.fetchFailed(
+                .httpStatus(
+                    code: 401,
+                    url: URL(string: "https://mock.local")!
+                )
+            )
+        )
+        let fetcher = Qwen3ASRModelFetcher(
+            client: mock,
+            baseURL: URL(string: "https://mock.local")!
+        )
+
+        do {
+            for try await _ in await fetcher.download(
+                into: tempDir, runTokenizerPrep: false
+            ) {}
+            XCTFail("Expected fetchFailed for 401 manifest")
+        } catch let asrError as Qwen3ASRError {
+            guard case .fetchFailed(let failure) = asrError else {
+                return XCTFail("Expected .fetchFailed, got \(asrError)")
+            }
+            guard case .httpStatus(let code, _) = failure else {
+                return XCTFail(
+                    "Expected .httpStatus payload, got \(failure)"
+                )
+            }
+            XCTAssertEqual(code, 401)
+        }
+    }
+
+    // MARK: - Restart-resume
+
+    /// Real restart-resume: instantiate a fetcher, consume the
+    /// stream up to the first `fileBytes` event, drop the stream
+    /// (mid-download). Instantiate a NEW fetcher (singleton-
+    /// discarded) and download again. The second pass must (a)
+    /// issue a Range request, (b) end with the full blob on
+    /// disk, (c) emit no double-prefix corruption.
+    ///
+    /// Catches the silent regression a Phase 5 fix already
+    /// addressed (Range-ignored 200 OK at the byte layer); this
+    /// test exercises the *higher-level* restart sequence the
+    /// reviewer asked about.
+    func testRestartResumePicksUpPartialFile() async throws {
+        let (client, blobs) = try fixtureClient()
+        let modelBlob = blobs["model.safetensors"]!
+        // Pre-write a partial copy on disk to simulate "killed
+        // mid-download a previous run". The first fetcher would
+        // resume from that offset.
+        let dest = tempDir.appendingPathComponent("model.safetensors")
+        let partialBytes = 500
+        let partial = modelBlob.prefix(partialBytes)
+        try Data(partial).write(to: dest)
+
+        // First fetcher: drop the stream after a few events, do
+        // NOT consume it to completion. Cancellation propagates
+        // via `continuation.onTermination`.
+        do {
+            let firstFetcher = Qwen3ASRModelFetcher(
+                client: client,
+                baseURL: URL(string: "https://mock.local")!
+            )
+            var consumed = 0
+            for try await event in await firstFetcher.download(
+                into: tempDir, runTokenizerPrep: false
+            ) {
+                consumed += 1
+                if case .fileBytes = event {
+                    if consumed > 1 { break }
+                }
+            }
+        }
+
+        // Second fetcher: identical args, should (a) see the
+        // partial on disk, (b) issue a Range request from the
+        // existing offset, (c) end with the full blob.
+        let secondFetcher = Qwen3ASRModelFetcher(
+            client: client,
+            baseURL: URL(string: "https://mock.local")!
+        )
+        for try await _ in await secondFetcher.download(
+            into: tempDir, runTokenizerPrep: false
+        ) {}
+
+        // model.safetensors must end up exactly as the canonical
+        // blob — no duplication, no truncation.
+        let final = try Data(contentsOf: dest)
+        XCTAssertEqual(
+            final, modelBlob,
+            "Restart-resume produced corrupt model.safetensors."
+        )
+
+        // At least one Range request must have been issued for
+        // model.safetensors during the run (the second fetcher
+        // saw the partial on disk).
+        let ranges = client.rangeRequests.filter {
+            $0.path == "model.safetensors"
+        }
+        XCTAssertFalse(
+            ranges.isEmpty,
+            "Restart-resume must issue at least one Range request "
+                + "for the partially-downloaded model file."
+        )
     }
 
     /// Skip-when-already-complete: fetcher should NOT issue any

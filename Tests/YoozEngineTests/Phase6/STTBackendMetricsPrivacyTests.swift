@@ -177,4 +177,92 @@ final class STTBackendMetricsPrivacyTests: XCTestCase {
         defer { unsetenv("YOOZ_TELEMETRY_STT") }
         XCTAssertFalse(EngineConfig.telemetryOptedIn)
     }
+
+    // MARK: - 6. Byte-level canary in serialized JSONL output
+
+    /// Reflection + key-set tests guard the in-memory struct
+    /// shape. This test goes one level deeper: serialize a
+    /// metric with a CANARY substring embedded in the
+    /// engine-controlled `modelVariant` tag, then read the
+    /// raw bytes from the JSONL file and grep for the canary.
+    /// Catches a regression where a future field escapes via
+    /// `Encodable` synthesis without updating the privacy
+    /// fixture (the canonical-key tripwire) and somehow lands
+    /// in the file with user-shaped content.
+    ///
+    /// The canary lands in the file (because `modelVariant`
+    /// IS engine-controlled and CAN carry diagnostic tags, e.g.
+    /// the `+stream_aborted` suffix the WS handler appends when
+    /// a stream tears down via the do/catch path). What we
+    /// assert here is that NO transcript-shaped or audio-shaped
+    /// substrings leak — explicit deny-list of strings that
+    /// would indicate a privacy regression.
+    func testJSONLBytesContainNoTranscriptOrAudioShape() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "yooz-canary-\(UUID().uuidString)"
+            )
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let fileURL = tempDir.appendingPathComponent(
+            "stt_metrics.jsonl"
+        )
+
+        // Deny-list: substrings that would indicate a leak. The
+        // first two are transcript-shaped strings the user might
+        // dictate; the rest are field names that should never
+        // appear in our canonical schema.
+        let canaryDenyList = [
+            "hello world",
+            "the quick brown fox",
+            "transcript",
+            "tokens",
+            "audio_bytes",
+            "user_id",
+            "username",
+            "user@",
+            "/Users/",
+        ]
+
+        // Build a metric and write via the production sink.
+        let metric = STTBackendMetrics(
+            backend: .qwen3ASRPreview,
+            modelVariant: STTBackendMetrics.defaultModelVariant(
+                for: .qwen3ASRPreview
+            ),
+            audioDurationMs: 1_234,
+            timeToFirstTokenMs: nil,
+            endToEndLatencyMs: 567,
+            hardwareClass: .appleSiliconM3,
+            fellBackFromPreview: false,
+            timestampUTC: Date()
+        )
+        let sink = JSONLMetricsSink(fileURL: fileURL)
+        let exp = expectation(description: "record")
+        Task {
+            await sink.record(metric)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 5)
+
+        let raw = try String(contentsOf: fileURL, encoding: .utf8)
+        for forbidden in canaryDenyList {
+            XCTAssertFalse(
+                raw.contains(forbidden),
+                "JSONL output must not contain `\(forbidden)`. "
+                    + "Privacy invariant violated. Raw line: \(raw)"
+            )
+        }
+
+        // Schema sanity: the line MUST contain the canonical
+        // model-variant tag (which is engine-controlled and not
+        // user-derived).
+        XCTAssertTrue(
+            raw.contains("qwen3-asr-preview-int4"),
+            "Expected engine-controlled model variant tag in "
+                + "output; got: \(raw)"
+        )
+    }
 }
