@@ -1,0 +1,2 @@
+model,context_len,mode,decode_tokens,load_s,prefill_s,ttft_ms,decode_tps,kv_bytes,kv_mib,kv_bytes_tight,kv_mib_tight,kv_bytes_packed_est,kv_mib_packed_est,rss_start_mib,rss_peak_mib,head_dim,n_kv_heads,n_layers,decoded_preview
+qwen3-1.7b-ojus-4bit,4096,fp16,63,0.624,2.6069,2606.95,100.825,998244352,952.0,954204160,910.0,954204160,910.0,18.6,1716.5,128,8,28, detection in low-latency speech pipelines has to balance responsiveness against

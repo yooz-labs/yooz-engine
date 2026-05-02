@@ -1,0 +1,10 @@
+{
+  "model": "mlx-qwen3-1.7b-instruct-ojus-4bit",
+  "context": 3990,
+  "mode": "turbo3",
+  "secret": "QUASAR-37419-FIRESTONE",
+  "response": "QUASAR-37419-FIRESTONE",
+  "found_secret": true,
+  "load_s": 0.722,
+  "generation_s": 15.51
+}

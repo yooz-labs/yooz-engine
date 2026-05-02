@@ -1,0 +1,2 @@
+model,context_len,mode,decode_tokens,load_s,prefill_s,ttft_ms,decode_tps,kv_bytes,kv_mib,kv_bytes_tight,kv_mib_tight,kv_bytes_packed_est,kv_mib_packed_est,rss_start_mib,rss_peak_mib,head_dim,n_kv_heads,n_layers,decoded_preview
+qwen3-1.7b-ojus-4bit,1024,turbo3,63,0.689,9.7204,9720.44,3.323,77594624,74.0,77594624,74.0,62969984,60.05,18.5,1280.8,128,8,28, rates. Latency budgets for always-on services on Apple Silicon are bounded by t
