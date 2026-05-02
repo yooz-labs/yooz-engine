@@ -131,6 +131,16 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             return
         }
 
+        try await loadParakeetModel(language: language)
+    }
+
+    /// Load the Parakeet/FastConformer model for `language` without
+    /// touching `currentBackend`. Used by the auto-fallback adapter so
+    /// the hook can run a single Parakeet transcription without
+    /// permanently flipping the engine's backend selection — the
+    /// user's preview pick is honored at next process start (or after
+    /// a manual `POST /v1/stt/engine`).
+    public func loadParakeetModel(language: STTLanguage) async throws {
         // Check if already loaded with same language
         if model != nil && currentLanguage == language {
             NSLog("YoozSTTEngine: Already started with language %@", language.rawValue)
@@ -526,23 +536,18 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
     /// Run a Qwen3-ASR batch transcription. Returns a `ParakeetResult`
     /// so callers (the existing HTTP layer) don't have to branch on
-    /// the backend type.
+    /// the backend type. Errors are SWALLOWED — the swallow is
+    /// historical (preserved for callers that don't care about
+    /// distinguishing failure modes); new code should call
+    /// `batchTranscribeQwen3Throwing(...)` and map the typed error.
     public func batchTranscribeQwen3(
         samples: [Float],
         language: STTLanguage
     ) async -> ParakeetResult {
         do {
-            // `STTLanguage.qwen3LanguageHint` is the single source of
-            // truth for this mapping, shared with
-            // `Qwen3ASRPreviewBackendAdapter`.
-            let result = try await Qwen3ASRBackend.shared.transcribe(
-                pcm: samples,
-                language: language.qwen3LanguageHint
-            )
-            return ParakeetResult(
-                text: result.text,
-                finalized: result.text,
-                draft: ""
+            return try await batchTranscribeQwen3Throwing(
+                samples: samples,
+                language: language
             )
         } catch {
             NSLog(
@@ -551,6 +556,27 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             )
             return .empty
         }
+    }
+
+    /// Run a Qwen3-ASR batch transcription, propagating the typed
+    /// `Qwen3ASRError` (or any other underlying error) so the
+    /// HTTP layer can map cases to the right status code.
+    public func batchTranscribeQwen3Throwing(
+        samples: [Float],
+        language: STTLanguage
+    ) async throws -> ParakeetResult {
+        // `STTLanguage.qwen3LanguageHint` is the single source of
+        // truth for this mapping, shared with
+        // `Qwen3ASRPreviewBackendAdapter`.
+        let result = try await Qwen3ASRBackend.shared.transcribe(
+            pcm: samples,
+            language: language.qwen3LanguageHint
+        )
+        return ParakeetResult(
+            text: result.text,
+            finalized: result.text,
+            draft: ""
+        )
     }
 
     // MARK: - Private Methods

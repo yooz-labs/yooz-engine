@@ -69,11 +69,16 @@ public struct DispatchPreviewFallbackClock: PreviewFallbackClock {
 /// to the fallback backend (Parakeet) and emits a metrics record
 /// with `fellBackFromPreview = true`.
 ///
-/// **Cold-start scope.** Once step 3 has succeeded once, the hook
-/// flips `hasSucceededOnce = true` and from then on a transcribe
-/// failure propagates instead of triggering fallback. The user
-/// explicitly chose the preview backend; we only protect them from
-/// the cold-start cliff, not from every subsequent runtime hiccup.
+/// **Cold-start scope.** Once the cold-start path resolves — either
+/// step 3 succeeded *or* we fell back to Parakeet for this process —
+/// the hook flips `coldStartCompleted = true` and from then on a
+/// preview transcribe failure propagates instead of triggering
+/// fallback. The user explicitly chose the preview backend; we only
+/// protect them from the cold-start cliff, not from every subsequent
+/// runtime hiccup. Flipping on fallback (rather than only on
+/// success) prevents the hook from re-attempting the cold-start
+/// machinery on every request when the underlying issue is sticky
+/// (no network, disk full, repo missing).
 public actor PreviewFallbackHook {
 
     private let logger = Logger(
@@ -88,9 +93,12 @@ public actor PreviewFallbackHook {
     private let resolver: HardwareClassResolver
     private let clock: PreviewFallbackClock
 
-    /// Flips `true` after the first successful preview transcription.
-    /// State machine: `false` → fallback-eligible, `true` → propagate.
-    private var hasSucceededOnce: Bool = false
+    /// Flips `true` after the cold-start path resolves — either the
+    /// first preview transcribe succeeded, or fallback ran. State
+    /// machine: `false` → fallback-eligible, `true` → propagate.
+    /// Renamed from `hasSucceededOnce` for accuracy; tests may still
+    /// query the flag via `hasSucceededOnceForTesting()`.
+    private var coldStartCompleted: Bool = false
 
     public init(
         fetcher: PreviewModelFetcherAdapter,
@@ -128,8 +136,13 @@ public actor PreviewFallbackHook {
         }
     }
 
-    /// Test-only accessor.
-    func hasSucceededOnceForTesting() -> Bool { hasSucceededOnce }
+    /// Test-only accessor — true once the cold-start path has
+    /// resolved (success or fallback).
+    func hasSucceededOnceForTesting() -> Bool { coldStartCompleted }
+
+    /// Alias — `true` once the cold-start path has resolved (either
+    /// preview succeeded or fallback ran).
+    func coldStartCompletedForTesting() -> Bool { coldStartCompleted }
 
     /// Run a transcription through the preview backend, with
     /// auto-fallback on cold-start failure.
@@ -146,14 +159,14 @@ public actor PreviewFallbackHook {
 
         // Cold-start fallback path: protect the first transcribe call
         // from fetch / load / transcribe failures.
-        if !hasSucceededOnce {
+        if !coldStartCompleted {
             do {
                 try await fetcher.ensureModelOnDisk()
                 try await preview.ensureLoaded()
                 let result = try await preview.transcribe(
                     samples: samples, language: language
                 )
-                hasSucceededOnce = true
+                coldStartCompleted = true
                 await emitMetric(
                     backend: .qwen3ASRPreview,
                     audioMs: audioMs,
@@ -172,6 +185,14 @@ public actor PreviewFallbackHook {
                 let result = await fallback.transcribe(
                     samples: samples, language: language
                 )
+                // Flip even on fallback so the hook stops thrashing
+                // the cold-start path when the underlying issue is
+                // sticky. Subsequent requests in this process go
+                // directly to the post-warmup branch (preview
+                // failures propagate, no further fallback) — the
+                // user's preview selection is honored at next
+                // process start.
+                coldStartCompleted = true
                 await emitMetric(
                     backend: .parakeet,
                     audioMs: audioMs,
@@ -337,13 +358,19 @@ public struct ParakeetFallbackAdapter: FallbackBackendAdapter {
         language: STTLanguage
     ) async -> ParakeetResult {
         // The Parakeet path expects the model to be loaded for the
-        // requested language. `start` is idempotent for the same
-        // language and cheap once loaded.
+        // requested language. `loadParakeetModel` is idempotent for
+        // the same language and cheap once loaded.
+        //
+        // We do NOT call `setBackend(.parakeet)` here. The fallback
+        // is a per-request escape hatch; flipping `currentBackend`
+        // would silently strip the user of their preview selection
+        // for every subsequent request without going through
+        // `POST /v1/stt/engine`. The hook's `coldStartCompleted`
+        // flag (in `PreviewFallbackHook`) is the one piece of
+        // state that survives across requests and is enough to
+        // prevent thrashing.
         do {
-            // Switch the engine off the preview backend so subsequent
-            // calls go straight through Parakeet.
-            await engine.setBackend(.parakeet)
-            try await engine.start(language: language)
+            try await engine.loadParakeetModel(language: language)
         } catch {
             // The fallback itself failed to start. Log loudly — the
             // hook can't surface this any other way (`FallbackBackendAdapter`
