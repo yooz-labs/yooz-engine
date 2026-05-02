@@ -117,6 +117,14 @@ public actor Qwen3ASRStreamingSession {
     private var buffer: [Float] = []
     private var totalSamples: Int = 0
     private var finalized: Bool = false
+    /// Cached at first `push()` (lazily, since the constructor is
+    /// synchronous and `Qwen3ASRBackend.isLoaded` is async). Stays
+    /// `nil` for sessions that never pushed any audio. The `finalize`
+    /// path uses this to distinguish "we observed a loaded backend
+    /// when the session was active" (so a later
+    /// `pipelineNotLoaded` is `backendChangedDuringStream`) from
+    /// "never loaded" (so it's `backendNotLoaded`).
+    private var observedBackendLoaded: Bool? = nil
 
     // MARK: - Init
 
@@ -169,7 +177,7 @@ public actor Qwen3ASRStreamingSession {
     /// accepted (post-cap truncation) and the cumulative buffered
     /// total. Throws if the session has already been finalized.
     @discardableResult
-    public func push(samples: [Float]) throws -> PushOutcome {
+    public func push(samples: [Float]) async throws -> PushOutcome {
         guard !finalized else { throw SessionError.finalized }
         let requested = samples.count
         guard requested > 0 else {
@@ -178,6 +186,14 @@ public actor Qwen3ASRStreamingSession {
                 accepted: 0,
                 requested: 0
             )
+        }
+
+        // Seed `observedBackendLoaded` once on the first non-empty
+        // push so `finalize` can disambiguate `pipelineNotLoaded`
+        // ("backend changed mid-stream" vs "never loaded"). Cheap
+        // actor hop; only runs once.
+        if observedBackendLoaded == nil {
+            observedBackendLoaded = await backend.isLoaded
         }
 
         let remainingCapacity = maxBufferedSamples - totalSamples
@@ -240,12 +256,24 @@ public actor Qwen3ASRStreamingSession {
             )
         } catch let error as Qwen3ASRError where error == .pipelineNotLoaded {
             // `pipelineNotLoaded` mid-finalize means the singleton
-            // backend was unloaded under us — most commonly by a
-            // concurrent `POST /v1/stt/engine` switch. We had
-            // buffered audio (totalSamples > 0 was the precondition
-            // for entering this branch), so this isn't the
-            // "never-loaded" case.
-            throw SessionError.backendChangedDuringStream
+            // backend is not loaded right now. Two distinct sub-
+            // cases — disambiguate via `observedBackendLoaded` which
+            // was seeded on the first `push`:
+            //
+            // - we saw a loaded backend earlier (`true`): the
+            //   backend was unloaded under us, most commonly by a
+            //   concurrent `POST /v1/stt/engine` switch. Surface as
+            //   `backendChangedDuringStream` so the WS handler can
+            //   tell the user "your selection changed; reconnect".
+            // - we never saw a loaded backend (`false` or `nil`):
+            //   the session was constructed against an unloaded
+            //   backend (operator error, wrong call ordering).
+            //   Surface as `backendNotLoaded` so the operator-facing
+            //   diagnostic points at the right root cause.
+            if observedBackendLoaded == true {
+                throw SessionError.backendChangedDuringStream
+            }
+            throw SessionError.backendNotLoaded
         } catch {
             throw SessionError.underlying(error)
         }
