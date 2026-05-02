@@ -19,20 +19,26 @@ quality numbers.
 
 - **Phase 3 (integration):** mlx-swift-lm has no audio module and
   cannot load Qwen3-ASR today; a native Swift port is 3-6 weeks of
-  work. Recommended path is a Python sidecar (`mlx-audio`) running
-  inside YoozEngine, similar to the existing Parakeet worker.
+  work and is the only integration path. Tracked under
+  **epic #46 — native MLX-Swift port of the Qwen3-Omni audio encoder
+  + log-mel frontend + encoder-decoder bridge.** Yooz Engine is
+  graduating from Python; there is no Python-sidecar fallback. The
+  engine ships `qwen3_asr_preview` only when the Swift port lands.
   Detail in `results/INTEGRATION_DESIGN.md` and
   `results/MLX_SWIFT_COMPAT.md`.
 
 ## Single-model verdict (the issue's headline question)
 
 **Ship Qwen3-ASR-1.7B as an opt-in `qwen3_asr_preview` backend, not
-as the default `auto` path.** Default stays Parakeet TDT for English
-and other Parakeet-supported languages; Arabic flips its language
-default to Qwen3-ASR-1.7B (the one language where it clearly wins
-at comparable latency to FastConformer-ar); Persian stays on
-FastConformer-fa pending a head-to-head; Hebrew stays on
-FastConformer-he indefinitely (Qwen3-ASR does not support Hebrew).
+as the default `auto` path — and only after the native MLX-Swift
+port lands (epic #46).** Default stays Parakeet TDT for English and
+other Parakeet-supported languages. Arabic stays on FastConformer-ar
+until a head-to-head against Qwen3-ASR-1.7B settles it (FastConformer-ar
+was not measured in Phase 2 — Swift-only, no Python API; Qwen3-ASR
+Arabic on yooz-arabic is 6.7% WER, but the comparison is not yet
+apples-to-apples). Persian stays on FastConformer-fa pending its own
+head-to-head. Hebrew stays on FastConformer-he indefinitely
+(Qwen3-ASR does not support Hebrew, 82.8% WER).
 
 The 4.6x latency multiplier on a 5 s clip is too risky to drop on
 top of Whisper / Notes voice-keyboard UX as a default. RTFX stays at
@@ -41,14 +47,16 @@ is unmeasured. The preview earns a default flip only after telemetry
 clears the graduation criteria in `results/INTEGRATION_DESIGN.md`
 (P50 RTFX, WER parity, no regression complaints, streaming WER
 measured). Telemetry is local-only, opt-in, performance signals only;
-no transcript content.
+no transcript content. Yooz Engine is graduating from Python — no
+Python sidecar, no hybrid path; the preview backend exists only when
+the Swift port does.
 
 ## Layout
 
 ```
 research/issue-12/
   README.md                                  -- this file
-  MLX_SWIFT_COMPAT.md                        -- definitive no-go for native Swift today
+  MLX_SWIFT_COMPAT.md                        -- scope + accepted cost of the native Swift port (epic #46)
   scripts/
     bootstrap_env.sh                         -- one-shot S1 venv + model download
     bench_phase1_latency.py                  -- 2/5/15 s clip latency for all 4 models

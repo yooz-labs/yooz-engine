@@ -1,8 +1,16 @@
 # Qwen3-ASR — MLX-Swift / mlx-swift-lm compatibility
 
-**Verdict: NO. mlx-swift-lm cannot load Qwen3-ASR today.** A direct
-mlx-swift integration is a nontrivial port (an entirely new audio-encoder
-subsystem plus model-class wiring), not a config tweak.
+**Verdict: native MLX-Swift port required, and it is the integration
+path.** mlx-swift-lm has no audio module today (no `MLXASR`, no
+Qwen3-Omni / Qwen3-ASR model class, no Swift mel-frontend), so a
+direct off-the-shelf `mlx-swift` load is not possible. That work — a
+new audio-encoder subsystem plus model-class wiring — is the entire
+scope of **epic #46**, accepted at an estimated 3–6 weeks for offline
+plus 1–2 weeks for streaming. Yooz Engine is graduating from Python;
+no Python sidecar will ship from `YoozEngine.app`. The 3–6-week porting
+cost is accepted because the engine has no other viable shape, and
+because the research below shows the architecture maps cleanly onto
+existing MLX-Swift primitives (Conv2d, attention, KV cache).
 
 ## Evidence
 
@@ -99,16 +107,21 @@ plus another 1–2 weeks for streaming, assuming we have a reference
 Python harness producing identical intermediate tensors to validate
 against.
 
-## Recommended near-term path
+## Path forward
 
-For Phase 5/6 of the engine roadmap, **do not block on mlx-swift**.
-Two pragmatic options:
+Yooz Engine is graduating from Python. Every engine inference path
+must be MLX-native Swift, and Qwen3-ASR is not exempted. Of the three
+options the team considered:
 
-| Option | Effort | Pros | Cons |
-| --- | --- | --- | --- |
-| **A. Python sidecar via existing yooz-stt-engine `.venv`** | 1–2 days | Reuses the venv we already ship for Parakeet; `mlx_audio.stt.load` already supports Qwen3-ASR | Adds a Python dependency for the Qwen3 backend; cold-start ~3–5 s on first call |
-| **B. Wait for upstream mlx-swift-lm Qwen3-Omni support** | unknown | Native; smallest engine binary | Apple/MLX team has not announced an audio-encoder roadmap for mlx-swift-lm; we'd be blocked indefinitely |
-| **C. In-house Swift port** | 3–6 weeks | Native, fastest, no Python dep at runtime | Largest engineering cost; risk of architecture drift if upstream config changes |
+| Option | Effort | Status |
+| --- | --- | --- |
+| **A. Python sidecar via existing yooz-stt-engine `.venv`** | 1–2 days | **Rejected.** Conflicts with the engine's Python-graduation direction. |
+| **B. Wait for upstream mlx-swift-lm Qwen3-Omni support** | unknown | **Rejected.** Apple/MLX team has not announced an audio-encoder roadmap for mlx-swift-lm; we will not block on it. |
+| **C. In-house Swift port** | 3–6 weeks offline + 1–2 weeks streaming | **Selected.** Tracked under epic #46. |
 
-The benchmark harness in `scripts/bench_qwen3_asr.py` is built for option
-A so we can answer the quality question before committing to option C.
+The benchmark harness in `scripts/bench_phase1_latency.py` and
+`scripts/bench_phase2_quality.py` is the Python reference *for
+validation only*, used to verify that the Swift kernels produce
+identical or near-identical intermediate tensors at every stage
+(mel features, encoder output, decoder logits). The harness is not a
+shipping component and never enters `YoozEngine.app`.

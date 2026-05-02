@@ -47,10 +47,15 @@ forking. The shape is:
    `stt.backend = "qwen3_asr_preview"`, and is labeled as
    *Multilingual (Preview / alpha)* in client UI so users opt in with
    eyes open.
-3. **Arabic flips to Qwen3-ASR-1.7B as its default.** This is the
-   one language where Qwen3-ASR clearly wins (6.7% WER vs FastConformer-ar
-   on equivalent material) at latency comparable to what Arabic users
-   were already paying with FastConformer. No regression, real upgrade.
+3. **Arabic flips to Qwen3-ASR-1.7B as its default, conditional on a
+   FastConformer-ar head-to-head.** Qwen3-ASR-1.7B Arabic is 6.7% WER
+   on the yooz-arabic 25-utterance set; FastConformer-ar was not
+   measured in Phase 2 (Swift-only, no Python API). The flip ships
+   only after the engine HTTP service runs FastConformer-ar against
+   the same 25 utterances and Qwen3-ASR wins by >= 3 pp WER at
+   comparable or better latency. Until that head-to-head lands,
+   Arabic stays on FastConformer-ar; users can opt into the preview
+   to try Qwen3-ASR Arabic early.
 4. **Persian stays on FastConformer-fa** until the head-to-head
    follow-up resolves it. Qwen3-ASR Persian (28.3% WER) is usable
    but unproven against the current production model on Persian-only
@@ -113,19 +118,20 @@ diagnostics.
 
 | Component | Approx size |
 | --- | ---: |
-| `mlx-community/Qwen3-ASR-1.7B-8bit` weights | 2.3 GB |
-| Python venv (mlx-audio + mlx + transformers + tokenizers + numpy + scipy) | ~1.2 GB |
-| Worker code | <1 MB |
-| **Total cost added on first preview use** | **~3.5 GB** |
+| Qwen3-ASR-1.7B-8bit weights (MLX-compatible safetensors) | ~2.3 GB |
+| Swift port code (`MLXASR` + adapter + streaming session) | <1 MB |
+| **Total cost added on first preview use** | **~2.3 GB** |
 
-`YoozEngine.app` does not bundle these. On the first transcription
-request that resolves to `qwen3_asr_preview` (or to Arabic, once
-that flip is shipped), the engine surfaces a download prompt with
-size, expected duration, and a progress bar before any transcription
-runs. Weights land in
+The Swift-native path replaces the prior Python-sidecar bundle math:
+no venv, no `transformers`, no `mlx-audio`, no `tokenizers`, no
+`scipy` — just the MLX safetensors and Swift code. `YoozEngine.app`
+does not bundle the weights. On the first transcription request that
+resolves to `qwen3_asr_preview`, the engine surfaces a download prompt
+with size, expected duration, and a progress bar before any
+transcription runs. Weights land in
 `~/Library/Application Support/Yooz/engine/models/qwen3-asr-1.7b-8bit/`.
 Subsequent launches are instant. We optionally ship a 0.6B-4bit
-variant (~700 MB) for slow-network users who want to try the preview
+variant (~400 MB) for slow-network users who want to try the preview
 without committing to the full download.
 
 ## Graduation criteria
@@ -155,41 +161,52 @@ multilingual preview becomes the default for *multilingual* users
 non-Parakeet language) first. English-only stays on Parakeet
 indefinitely under the current numbers.
 
-## Decision tree: how to integrate
+## Integration path: native MLX-Swift only
 
-```
-                Need Qwen3-ASR in YoozEngine?
-                            |
-         +------------------+------------------+
-         |                                     |
-   Want native Swift?              OK with Python sidecar?
-         |                                     |
-   mlx-swift Qwen3-ASR              Reuse stt-engine .venv path
-       port required                  + add a worker subprocess
-         |                                     |
-   3-6 weeks of work                  1-2 days of work
-   (see MLX_SWIFT_COMPAT.md)         (just like the Parakeet
-                                      mlx-audio path today)
-```
+Integration is tracked under **epic #46 — native MLX-Swift port of
+the Qwen3-Omni audio encoder + log-mel frontend + encoder-decoder
+bridge**. The engine ships `qwen3_asr_preview` only when that Swift
+port lands. Yooz Engine is graduating from Python; every inference
+path in the engine must be MLX-native Swift, and Qwen3-ASR is not
+exempted.
 
-### Recommendation
+What the Swift port has to deliver, distilled from `MLX_SWIFT_COMPAT.md`:
 
-**Phase 6 plan: ship Qwen3-ASR-1.7B as an opt-in Python-backed STT
-backend in YoozEngine, alongside Parakeet (Swift, native).** Default
-remains Parakeet; Arabic flips its language default to the preview
-backend; Persian and Hebrew untouched.
+1. **`MLXASR` library (new) inside `mlx-swift-lm` or vendored in
+   YoozEngine.** No equivalent exists upstream today.
+2. **`Qwen3AudioEncoder` in Swift/MLX.** Conv2d frontend (3 stride-2
+   layers, 128 mel bins, 480-dim hidden), sinusoidal positional
+   embeddings, 24 chunked-attention encoder layers (1024-dim, 16-head,
+   4096 ffn), the Qwen3-Omni-specific block-attention mask, and the
+   two output projections producing the 2048-d audio token stream.
+3. **`Qwen3ASRModel` Swift wiring.** Interleaves audio tokens
+   (`audio_token_id=151676`, `audio_start=151669`, `audio_end=151670`)
+   into the Qwen3 text decoder via the existing `Qwen3.swift` path
+   in `mlx-swift-lm`, threading through `MLXLMCommon`'s KV cache and
+   sampler.
+4. **Swift-side log-mel frontend.** 128 bins, 25 ms / 10 ms frames,
+   matching the HF `WhisperFeatureExtractor` variant Qwen3 uses.
+   The current `STT/Audio/AudioPreprocessor.swift` (80 mel bins,
+   NeMo config, hand-written for Parakeet/FastConformer) does not
+   match and cannot be reused as-is.
+5. **`Qwen3ASRModelAdapter: STTModel`** in `YoozEngine/STT/Models/Qwen3ASR/`,
+   following the existing Parakeet adapter pattern.
+6. **Streaming session** (`Qwen3ASRStreamingSession`) wrapping
+   `Qwen3ASRModel`'s incremental encode + decode loop, parallel to
+   `FastConformerStreamingSessionAdapter`.
+7. **Forced-aligner sibling** (separate ~0.6B Swift port) only after
+   the offline path is shipping.
 
-Rationale:
+Estimated effort, per `MLX_SWIFT_COMPAT.md`: 3-6 weeks for offline
++ another 1-2 weeks for streaming, comparable to the original
+Parakeet TDT port, contingent on a Python reference harness producing
+identical intermediate tensors so we can validate the Swift kernels
+against ground truth at every stage. The benchmark harness committed
+in `scripts/` is that reference.
 
-1. The Phase 5 thin-client architecture already isolates the
-   YoozEngine service; adding a Python subprocess for one backend
-   does not affect bundle size for downstream apps.
-2. mlx-audio already ships qwen3_asr; we don't carry custom Python.
-3. The community-maintained `mlx-community/Qwen3-ASR-1.7B-8bit` is
-   the canonical drop-in (don't pin `aufklarer/...` — see Phase 1
-   notes about the missing preprocessor_config.json).
-4. A native Swift port stays on the roadmap as Phase 7 once
-   `mlx-swift-lm` ships an audio-encoder library.
+There is **no Python sidecar plan**, no hybrid path, no "ship A now
+then B later". The preview backend does not exist in the engine
+until the Swift port does.
 
 ## Backend selection API
 
@@ -272,23 +289,15 @@ POST /v1/stt/engine
 { "backend": "qwen3asr_preview" }    -> 200 { "current": "qwen3asr_preview" }
 ```
 
-### Implementation outline
+### Implementation outline (epic #46, Swift-native)
 
-1. **Subprocess worker** patterned after `yooz-benchmark/benchmarks/stt_worker.py`:
+1. **`MLXASR` Swift library**, vendored in `YoozEngine` (or upstreamed
+   to `mlx-swift-lm` if the Apple/MLX team accepts a contribution).
+   Holds the Qwen3-Omni audio encoder, the log-mel frontend, and the
+   audio-token bridge into the existing `Qwen3.swift` text decoder
+   from `MLXLLM/Models`.
 
-   ```
-   YoozEngine.app/Contents/Resources/qwen3_asr_worker/
-       .venv/                          (uv-managed at first launch or shipped)
-       worker.py                       (loads mlx-audio Qwen3-ASR once;
-                                        speaks the same DONE/ERROR\t protocol
-                                        as the existing Parakeet worker)
-   ```
-
-   - First launch: trigger `setup.sh` that creates `.venv` and `pip install`s.
-   - Persistent worker bound to a Unix domain socket (`/tmp/yooz-engine/qwen3.sock`).
-   - Lifetime: tied to `YoozEngine.app`. Worker exits with engine.
-
-2. **Swift adapter** in `YoozEngine/STT/Models/Qwen3ASR/`:
+2. **Swift `Qwen3ASRModelAdapter`** in `YoozEngine/STT/Models/Qwen3ASR/`:
 
    ```swift
    final class Qwen3ASRModelAdapter: STTModel {
@@ -301,19 +310,29 @@ POST /v1/stt/engine
    }
    ```
 
-   - Sends 16 kHz Float arrays as raw bytes over the socket; receives
-     transcription text + (optional) timestamps.
-   - Reuses the Audio/AudioPreprocessor only for resampling; the Python
-     side does the log-mel itself.
+   - Consumes 16 kHz `[Float]` directly. The Swift log-mel is computed
+     in-process via the new `MLXASR` frontend (128 bins, Whisper-style
+     framing); the existing `STT/Audio/AudioPreprocessor.swift` is for
+     Parakeet/FastConformer and is not on this path.
 
-3. **Streaming session**: the worker exposes the existing
-   `model.stream_transcribe(...)` generator, framed over the socket
-   with newline-delimited JSON. A `Qwen3ASRStreamingSession` Swift
-   class plays the same role as `FastConformerStreamingSessionAdapter`.
+3. **Streaming session**: `Qwen3ASRStreamingSession` wraps the
+   incremental encode + decode loop of `Qwen3ASRModel`, plays the same
+   role as `FastConformerStreamingSessionAdapter`. No subprocess, no
+   IPC; runs in-process on the engine's dispatch queue.
 
-4. **No mlx-swift-lm dependency added.** Build variant matrix from
-   the AGENTS.md table is unchanged for the Lite/Whisper variants;
-   only the full `YoozEngine` variant gains the Qwen3 worker.
+4. **Build variants.** The Qwen3-ASR backend joins the full
+   `YoozEngine` variant only. Whisper-helper and Lite variants do not
+   gain it (consistent with the AGENTS.md build-variant matrix). Bundle
+   size impact on the `YoozEngine` target is the Swift code itself
+   (small) plus the on-demand weights download — no Python venv, no
+   subprocess footprint.
+
+5. **Validation strategy.** The Python harness in `scripts/` is the
+   ground-truth reference. The Swift port is validated by running the
+   same audio through both paths and asserting bitwise / near-bitwise
+   equivalence at each stage (mel features, encoder output, decoder
+   logits) before any release-train build. The harness is *not* a
+   shipping component; it lives in the research tree only.
 
 ## Risks and open questions
 
@@ -333,7 +352,11 @@ POST /v1/stt/engine
   request, evict Parakeet if it hasn't been used for N seconds. This
   matters more under the preview rollout (more users will have both
   models warm than under a full replacement).
-- **No `mlx-swift-lm` Qwen3-Omni audio encoder.** A native Swift port
-  is multi-week work; do not block Phase 6 on this. Track upstream
-  via `ml-explore/mlx-swift-lm` `MLXLLM/Models` directory and
-  consider revisiting once an `MLXASR` library lands.
+- **No `mlx-swift-lm` Qwen3-Omni audio encoder upstream.** This is
+  the largest piece of work and the gating item for the entire
+  preview backend; epic #46 owns it. We are not blocking on
+  upstream — the port is in scope for Yooz Engine, with the option
+  to upstream to `mlx-swift-lm` afterwards. Track upstream signals
+  on `ml-explore/mlx-swift-lm` `MLXLLM/Models` and `MLXVLM/Models`
+  in case Apple/MLX adds an `MLXASR` library, but do not depend on
+  it.

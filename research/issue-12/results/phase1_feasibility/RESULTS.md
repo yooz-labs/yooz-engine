@@ -121,10 +121,16 @@ ratio (0.31 / 0.15 = 2.0x).
    either is viable for batch and short-form dictation. Real-time
    streaming on the 1.7B at 16x RTFX is fine for typical 1–2 s VAD
    chunks; below ~0.5 s chunks the per-call overhead would dominate.
-3. **mlx-swift is NOT a viable path today.** See `MLX_SWIFT_COMPAT.md`.
-   The Swift LLM stack has no audio-encoder library; a port would
-   require re-implementing Qwen3-Omni's chunked Conv2d audio encoder
-   and the audio-token interleaving used by the Qwen3 text decoder.
+3. **Native MLX-Swift port is the integration path.** mlx-swift-lm
+   has no audio-encoder library today, so the Swift LLM stack cannot
+   load Qwen3-ASR off the shelf. That gap defines the work, not a
+   blocker: chunked Conv2d audio encoder, log-mel frontend, and the
+   audio-token interleaving consumed by the Qwen3 text decoder all
+   port cleanly onto existing MLX-Swift primitives. The 3–6-week
+   porting cost is accepted because Yooz Engine is graduating from
+   Python and no Python sidecar will ship in `YoozEngine.app`. The
+   port is tracked under epic #46; see `MLX_SWIFT_COMPAT.md` for
+   the full scope.
 
 ## Next
 
