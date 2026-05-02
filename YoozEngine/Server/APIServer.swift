@@ -610,7 +610,6 @@ final class APIServer: ObservableObject {
             // qwen3 backend. Owns its own audio buffer; the underlying
             // backend actor serializes concurrent transcribe calls.
             var qwen3Session: Qwen3ASRStreamingSession?
-            var qwen3Language: STTLanguage?
             // Wall clock at session start for the telemetry record
             // emitted on `final`. Set when the qwen3 session is
             // configured (matches "stream start" semantics).
@@ -717,7 +716,6 @@ final class APIServer: ObservableObject {
                             qwen3Session = Qwen3ASRStreamingSession(
                                 languageHint: language.qwen3LanguageHint
                             )
-                            qwen3Language = language
                             qwen3StreamStartedMs =
                                 DispatchTime.now().uptimeNanoseconds / 1_000_000
 
@@ -789,9 +787,14 @@ final class APIServer: ObservableObject {
                     if let session = qwen3Session {
                         do {
                             _ = try await session.push(samples: samples)
+                        } catch let sessionError as Qwen3ASRStreamingSession.SessionError {
+                            await sendError(
+                                "Streaming session error: \(sessionError.description)"
+                            )
+                            continue
                         } catch {
                             await sendError(
-                                "Streaming session error: \(String(describing: error))"
+                                "Streaming session error: \(error.localizedDescription)"
                             )
                             continue
                         }
@@ -870,15 +873,21 @@ final class APIServer: ObservableObject {
                         finalized: "",
                         draft: ""
                     ))
-                } catch {
+                } catch let sessionError as Qwen3ASRStreamingSession.SessionError {
                     sttLogger.error(
-                        "Qwen3 streaming finalize failed: \(String(describing: error))"
+                        "Qwen3 streaming finalize failed: \(sessionError.description)"
                     )
                     await sendError(
-                        "Streaming finalize failed: \(String(describing: error))"
+                        "Streaming finalize failed: \(sessionError.description)"
+                    )
+                } catch {
+                    sttLogger.error(
+                        "Qwen3 streaming finalize failed: \(error.localizedDescription)"
+                    )
+                    await sendError(
+                        "Streaming finalize failed: \(error.localizedDescription)"
                     )
                 }
-                _ = qwen3Language
             } else if let transcriber = transcriber {
                 let finalResult = transcriber.finalize()
                 await sendResult(WSSTTResult(

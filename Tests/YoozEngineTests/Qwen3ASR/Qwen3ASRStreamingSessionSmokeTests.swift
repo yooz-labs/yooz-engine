@@ -160,10 +160,12 @@ final class Qwen3ASRStreamingSessionSmokeTests: XCTestCase {
         XCTAssertEqual(finalized.language, "English")
     }
 
-    /// 2. Two concurrent sessions on the same backend actor must each
-    /// produce the canonical text. Asserts per-session isolation: the
-    /// two sessions own distinct buffers and the backend serializes
-    /// transcribe calls without cross-contamination.
+    /// 2. Two concurrent sessions on the same backend actor must
+    /// each produce the right transcription. Stream A buffers the
+    /// full canonical clip; stream B buffers the first half. The
+    /// two transcriptions differ in the second clause; cross-
+    /// contamination (shared buffer, leaked state across the actor
+    /// boundary) would surface as B matching A's full text.
     func testConcurrentStreamingSessionsAreIsolated() async throws {
         try Qwen3ASRTestEnvironment.skipUnlessSafeForTCC()
         try XCTSkipUnless(
@@ -183,19 +185,28 @@ final class Qwen3ASRStreamingSessionSmokeTests: XCTestCase {
             CanonicalReference.self, from: referenceData
         )
         let pcm = try Self.loadPCM(from: Self.canonicalAudio)
+        let pcmA = pcm
+        let pcmB = Array(pcm.prefix(pcm.count / 2))
 
         try await Qwen3ASRBackend.shared.ensureLoaded(
             modelDir: Self.checkpointDir
         )
 
-        // Spin up two sessions concurrently; push interleaved chunks
-        // to mimic two real WS connections that are racing each other
-        // through the actor.
-        async let outcomeA = Self.runSessionEndToEnd(pcm: pcm)
-        async let outcomeB = Self.runSessionEndToEnd(pcm: pcm)
+        async let outcomeA = Self.runSessionEndToEnd(pcm: pcmA)
+        async let outcomeB = Self.runSessionEndToEnd(pcm: pcmB)
         let (a, b) = try await (outcomeA, outcomeB)
-        XCTAssertEqual(a.text, reference.transcriptionText)
-        XCTAssertEqual(b.text, reference.transcriptionText)
+        XCTAssertEqual(
+            a.text, reference.transcriptionText,
+            "Stream A (full audio) should match the canonical reference"
+        )
+        XCTAssertNotEqual(
+            b.text, reference.transcriptionText,
+            "Stream B (half audio) must NOT match the full-audio reference"
+        )
+        XCTAssertFalse(
+            b.text.isEmpty,
+            "Stream B must still produce a non-empty transcription"
+        )
     }
 
     /// 3. Cancellation: a session that finalizes after only half the
