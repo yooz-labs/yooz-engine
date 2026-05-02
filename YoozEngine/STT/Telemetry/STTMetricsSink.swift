@@ -42,6 +42,11 @@ public actor JSONLMetricsSink: STTMetricsSink {
 
     private let fileURL: URL
     private let encoder: JSONEncoder
+    /// Number of consecutive write failures since the last success.
+    /// Useful for an operator-facing health surface (`/v1/health`)
+    /// without flooding the log on a stuck disk: we log loudly only
+    /// on the first failure of a streak.
+    private var consecutiveWriteFailures: Int = 0
 
     public init(fileURL: URL) {
         self.fileURL = fileURL
@@ -59,15 +64,31 @@ public actor JSONLMetricsSink: STTMetricsSink {
             try ensureParentDirectoryExists()
             let payload = try encoder.encode(metric)
             try appendLine(payload)
+            consecutiveWriteFailures = 0
         } catch {
             // The sink runs on every transcribe call. A telemetry
-            // write failure must NEVER surface to the caller; just
-            // log and move on.
-            logger.error(
-                "Failed to record STT metric: \(String(describing: error), privacy: .public)"
-            )
+            // write failure must NEVER surface to the caller. We log
+            // loudly only on the first failure of a streak so a
+            // stuck disk doesn't flood the log; the
+            // `consecutiveWriteFailures` counter is the operator
+            // signal (queryable via `failureCount()`).
+            consecutiveWriteFailures += 1
+            if consecutiveWriteFailures == 1 {
+                logger.error(
+                    "Failed to record STT metric (first of streak): \(String(describing: error), privacy: .public)"
+                )
+            } else {
+                logger.debug(
+                    "Failed to record STT metric (streak=\(self.consecutiveWriteFailures)): \(String(describing: error), privacy: .public)"
+                )
+            }
         }
     }
+
+    /// Number of consecutive write failures since the last success.
+    /// Zero means the sink is healthy. Exposed for operator-facing
+    /// health endpoints; never read on the hot transcribe path.
+    public func failureCount() -> Int { consecutiveWriteFailures }
 
     /// Used by tests to assert "no file written when opted out". Not
     /// part of the public surface.
