@@ -338,19 +338,33 @@ final class PreviewFallbackTests: XCTestCase {
         let completed = await hook.coldStartCompletedForTesting()
         XCTAssertTrue(
             completed,
-            "Cold-start state must flip to completed after a "
-                + "fallback so the hook stops thrashing the cold-start "
-                + "path on every subsequent request when the "
-                + "underlying issue is sticky. The user's preview "
-                + "selection is honored at next process start."
+            "Cold-start state machine must record a completed "
+                + "attempt after fallback (success or failure of "
+                + "preview marks one resolved cold-start)."
+        )
+        let warmed = await hook.previewActuallyWarmedForTesting()
+        XCTAssertFalse(
+            warmed,
+            "previewActuallyWarmed must stay false after a "
+                + "fallback — preview never produced a transcribe. "
+                + "Without this distinction, a transient cold-start "
+                + "blip would permanently strip the user's preview "
+                + "selection (round-2 silent-failure #B2)."
+        )
+        let fallbackCount = await hook.fallbackEngagedCountForTesting()
+        XCTAssertEqual(
+            fallbackCount, 1,
+            "Counter must increment exactly once per fallback "
+                + "engagement."
         )
     }
 
-    func testNoFurtherFallbackAfterColdStartCompleted() async {
-        // First request: fetcher throws, hook falls back, flips
-        // coldStartCompleted = true. Second request goes to the
-        // post-warmup branch — preview transcribe failure must NOT
-        // re-trigger fallback.
+    func testColdStartReAttemptedUntilPreviewWarms() async {
+        // First request: fetcher throws, fallback runs.
+        // Second request (still no preview success): cold-start
+        // re-attempts. This is the round-2 #B2 fix — without it, a
+        // transient first-request failure permanently strips
+        // preview for the rest of the process.
         let fetcher = SpyFetcher(shouldThrow: true)
         let preview = SpyPreviewBackend(throwOnSubsequentTranscribe: true)
         let fallback = StubFallback(text: "fallback")
@@ -362,23 +376,71 @@ final class PreviewFallbackTests: XCTestCase {
             sink: sink
         )
 
-        // First request: fetcher throws, falls back.
-        _ = await hook.attemptPreviewWithFallback(
+        // First request: cold-start fails, fallback runs.
+        let first = await hook.attemptPreviewWithFallback(
             samples: [Float](repeating: 0.0, count: 16_000),
             language: .english
         )
+        XCTAssertTrue(first.fellBack)
 
-        // Second request: post-warmup branch. Preview's transcribe
-        // throws; hook propagates with empty result, no fallback.
-        let outcome = await hook.attemptPreviewWithFallback(
+        // Second request: re-attempts cold-start (still failing),
+        // falls back again. The counter increments to reflect the
+        // second engagement.
+        let second = await hook.attemptPreviewWithFallback(
+            samples: [Float](repeating: 0.0, count: 16_000),
+            language: .english
+        )
+        XCTAssertTrue(
+            second.fellBack,
+            "Cold-start path re-attempts every request until the "
+                + "preview path succeeds at least once (round-2 "
+                + "silent-failure #B2)."
+        )
+        let fallbackCount = await hook.fallbackEngagedCountForTesting()
+        XCTAssertEqual(
+            fallbackCount, 2,
+            "Counter increments on each cold-start engagement; "
+                + "tests / dashboards see 'how many times did we "
+                + "have to fall back' without leaking transcript "
+                + "content."
+        )
+    }
+
+    func testNoFallbackAfterPreviewWarmed() async {
+        // Once preview itself produces a transcribe, subsequent
+        // failures propagate as `.empty` rather than re-engaging
+        // fallback. The user explicitly selected this backend; we
+        // do not silently shield them from runtime hiccups after
+        // warmup.
+        let fetcher = SpyFetcher(shouldThrow: false)
+        let preview = SpyPreviewBackend(throwOnSubsequentTranscribe: true)
+        let fallback = StubFallback(text: "fallback")
+        let sink = InMemoryMetricsSink()
+        let hook = makeHook(
+            fetcher: fetcher,
+            preview: preview,
+            fallback: fallback,
+            sink: sink
+        )
+
+        // First request: preview succeeds.
+        let first = await hook.attemptPreviewWithFallback(
+            samples: [Float](repeating: 0.0, count: 16_000),
+            language: .english
+        )
+        XCTAssertFalse(first.fellBack)
+
+        // Second request: post-warmup branch, preview throws.
+        // Hook propagates as empty, no fallback.
+        let second = await hook.attemptPreviewWithFallback(
             samples: [Float](repeating: 0.0, count: 16_000),
             language: .english
         )
         XCTAssertFalse(
-            outcome.fellBack,
+            second.fellBack,
             "Post-warmup transcribe failure must NOT trigger fallback."
         )
-        XCTAssertEqual(outcome.backendUsed, .qwen3ASRPreview)
+        XCTAssertEqual(second.backendUsed, .qwen3ASRPreview)
     }
 
     // MARK: - Audio duration calculation
