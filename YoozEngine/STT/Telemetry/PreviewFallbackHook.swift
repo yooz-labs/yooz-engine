@@ -79,6 +79,19 @@ public struct DispatchPreviewFallbackClock: PreviewFallbackClock {
 /// success) prevents the hook from re-attempting the cold-start
 /// machinery on every request when the underlying issue is sticky
 /// (no network, disk full, repo missing).
+///
+/// **Two-flag discipline.** A separate `previewActuallyWarmed` flag
+/// tracks whether the *preview* path completed an end-to-end
+/// transcribe. If the cold-start failed and fallback ran,
+/// `coldStartCompleted` flips (so we stop thrashing the cold-start
+/// machinery) but `previewActuallyWarmed` stays `false`. Subsequent
+/// requests then re-enter the post-warmup branch: that branch
+/// retries `fetcher.ensureModelOnDisk()` + `preview.ensureLoaded()`
+/// once when `previewActuallyWarmed == false`, falling back to
+/// Parakeet again on failure. Without this, a transient network
+/// blip during the very first transcribe would permanently strip
+/// the user of their preview backend selection until process
+/// restart, with green telemetry and silent `.empty` results.
 public actor PreviewFallbackHook {
 
     private let logger = Logger(
@@ -96,9 +109,27 @@ public actor PreviewFallbackHook {
     /// Flips `true` after the cold-start path resolves — either the
     /// first preview transcribe succeeded, or fallback ran. State
     /// machine: `false` → fallback-eligible, `true` → propagate.
-    /// Renamed from `hasSucceededOnce` for accuracy; tests may still
-    /// query the flag via `hasSucceededOnceForTesting()`.
+    /// Tests query the flag via `coldStartCompletedForTesting()`.
     private var coldStartCompleted: Bool = false
+
+    /// Flips `true` only when the preview path itself produced a
+    /// successful transcribe (i.e. `coldStartCompleted` set via the
+    /// success branch, not the fallback branch). Distinguishes
+    /// "preview is warm and serving" from "we proved at least once
+    /// that the cold-start machinery ran to completion via
+    /// fallback". The post-warmup branch consults this flag to
+    /// decide whether a `.pipelineNotLoaded` failure is recoverable
+    /// (try a one-shot re-warm) vs a true post-load runtime error
+    /// (propagate).
+    private var previewActuallyWarmed: Bool = false
+
+    /// Counter incremented every time the cold-start path engaged
+    /// the fallback adapter due to preview failure. Exposed via
+    /// `fallbackEngagedCountForTesting()`. Lets dashboards (when we
+    /// add a metric exporter) and tests distinguish "preview always
+    /// worked" (counter == 0) from "preview required a fallback at
+    /// least once" (counter > 0) without reading transcript content.
+    private var fallbackEngagedDueToColdStartFailure: Int = 0
 
     public init(
         fetcher: PreviewModelFetcherAdapter,
@@ -137,12 +168,21 @@ public actor PreviewFallbackHook {
     }
 
     /// Test-only accessor — true once the cold-start path has
-    /// resolved (success or fallback).
-    func hasSucceededOnceForTesting() -> Bool { coldStartCompleted }
-
-    /// Alias — `true` once the cold-start path has resolved (either
-    /// preview succeeded or fallback ran).
+    /// resolved (either preview succeeded or fallback ran).
     func coldStartCompletedForTesting() -> Bool { coldStartCompleted }
+
+    /// Test-only accessor — true once the *preview* path produced a
+    /// successful end-to-end transcribe. Distinct from
+    /// `coldStartCompletedForTesting()`, which also flips on
+    /// fallback.
+    func previewActuallyWarmedForTesting() -> Bool { previewActuallyWarmed }
+
+    /// Test-only accessor — number of times the cold-start path
+    /// fell back to Parakeet because the preview path threw.
+    /// Stays at zero on the happy path.
+    func fallbackEngagedCountForTesting() -> Int {
+        fallbackEngagedDueToColdStartFailure
+    }
 
     /// Run a transcription through the preview backend, with
     /// auto-fallback on cold-start failure.
@@ -167,6 +207,7 @@ public actor PreviewFallbackHook {
                     samples: samples, language: language
                 )
                 coldStartCompleted = true
+                previewActuallyWarmed = true
                 await emitMetric(
                     backend: .qwen3ASRPreview,
                     audioMs: audioMs,
@@ -185,14 +226,17 @@ public actor PreviewFallbackHook {
                 let result = await fallback.transcribe(
                     samples: samples, language: language
                 )
-                // Flip even on fallback so the hook stops thrashing
-                // the cold-start path when the underlying issue is
-                // sticky. Subsequent requests in this process go
-                // directly to the post-warmup branch (preview
-                // failures propagate, no further fallback) — the
-                // user's preview selection is honored at next
-                // process start.
+                // Flip `coldStartCompleted` even on fallback so the
+                // hook stops thrashing the cold-start path when the
+                // underlying issue is sticky. But leave
+                // `previewActuallyWarmed` at `false` — the post-warmup
+                // branch reads that flag to decide whether to attempt
+                // a single re-warm before propagating preview
+                // failures. This avoids the "transient network blip
+                // during first transcribe permanently strips preview"
+                // silent-failure surface (round-2 #B2).
                 coldStartCompleted = true
+                fallbackEngagedDueToColdStartFailure += 1
                 await emitMetric(
                     backend: .parakeet,
                     audioMs: audioMs,
@@ -207,9 +251,58 @@ public actor PreviewFallbackHook {
             }
         }
 
-        // Post-warmup path: failures propagate. We deliberately do
-        // NOT call `fallback.transcribe` here — the user has already
-        // had one successful preview run and chose this backend.
+        // Post-warmup path. Two sub-cases distinguished by
+        // `previewActuallyWarmed`:
+        //
+        // 1. preview is warm: failures propagate as `.empty` after
+        //    a metric record. The user's selection is honored.
+        //
+        // 2. preview is NOT warm (cold-start fell back): try a
+        //    single re-warm (fetcher + ensureLoaded) before the
+        //    transcribe; on any failure, fall back to Parakeet
+        //    again. This recovers from transient cold-start
+        //    failures without forcing a process restart.
+        if !previewActuallyWarmed {
+            do {
+                try await fetcher.ensureModelOnDisk()
+                try await preview.ensureLoaded()
+                let result = try await preview.transcribe(
+                    samples: samples, language: language
+                )
+                previewActuallyWarmed = true
+                await emitMetric(
+                    backend: .qwen3ASRPreview,
+                    audioMs: audioMs,
+                    started: started,
+                    fellBack: false
+                )
+                return Outcome(
+                    result: result,
+                    fellBack: false,
+                    backendUsed: .qwen3ASRPreview
+                )
+            } catch {
+                logger.warning(
+                    "Preview re-warm failed (\(String(describing: error), privacy: .public)); falling back to Parakeet again"
+                )
+                let result = await fallback.transcribe(
+                    samples: samples, language: language
+                )
+                fallbackEngagedDueToColdStartFailure += 1
+                await emitMetric(
+                    backend: .parakeet,
+                    audioMs: audioMs,
+                    started: started,
+                    fellBack: true
+                )
+                return Outcome(
+                    result: result,
+                    fellBack: true,
+                    backendUsed: .parakeet
+                )
+            }
+        }
+
         do {
             let result = try await preview.transcribe(
                 samples: samples, language: language
