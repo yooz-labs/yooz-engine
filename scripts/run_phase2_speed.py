@@ -45,7 +45,7 @@ RESULTS_DIR = Path("/Volumes/S1/yooz/research/issue-9/results/phase2_speed")
 PROMPT_INPUTS = [
     ("short", "let us meet tomorrow at nine am"),
     ("medium", (
-        "we are realeasing version zero point four point zero next week and "
+        "we are releasing version zero point four point zero next week and "
         "we need to make sure all the tests pass before then because the team "
         "is depending on this release for the demo"
     )),
