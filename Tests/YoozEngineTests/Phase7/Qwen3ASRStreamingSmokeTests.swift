@@ -464,8 +464,11 @@ final class Qwen3ASRStreamingSmokeTests: XCTestCase {
     }
 
     /// 3. Concurrent stream isolation: two simultaneous connections
-    /// receive their own audio. Run them in parallel and assert each
-    /// gets the right transcription.
+    /// receive different audio, assert each gets only its own
+    /// transcription. We use the full canonical clip for stream A
+    /// and the first half for stream B. The two transcriptions
+    /// differ in the second clause; cross-contamination would show
+    /// up as B getting A's full text (or vice versa).
     @MainActor
     func testConcurrentStreamsAreIsolated() async throws {
         try Self.skipUnlessReady()
@@ -475,12 +478,8 @@ final class Qwen3ASRStreamingSmokeTests: XCTestCase {
             CanonicalReference.self, from: referenceData
         )
         let pcm = try Self.loadPCM(from: Self.canonicalAudio)
-        // For the second concurrent stream, use the SAME audio. Two
-        // independent sessions transcribing the same PCM must each
-        // produce the canonical text — anything else proves the
-        // sessions are sharing state.
         let pcmA = pcm
-        let pcmB = pcm
+        let pcmB = Array(pcm.prefix(pcm.count / 2))
 
         try await Self.withQwen3Server {
             async let outcomeA = Self.runStream(
@@ -491,8 +490,20 @@ final class Qwen3ASRStreamingSmokeTests: XCTestCase {
             )
             let a = try await outcomeA
             let b = try await outcomeB
-            XCTAssertEqual(a.text, reference.transcriptionText)
-            XCTAssertEqual(b.text, reference.transcriptionText)
+            XCTAssertEqual(
+                a.text, reference.transcriptionText,
+                "Stream A (full audio) should produce the canonical reference"
+            )
+            XCTAssertNotEqual(
+                b.text, reference.transcriptionText,
+                "Stream B (half audio) should NOT match the full-audio "
+                    + "canonical reference; matching means sessions are "
+                    + "sharing buffers."
+            )
+            XCTAssertFalse(
+                b.text.isEmpty,
+                "Stream B must still produce a non-empty transcription"
+            )
         }
     }
 
