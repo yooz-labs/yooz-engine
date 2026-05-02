@@ -134,7 +134,13 @@ final class APIServer: ObservableObject {
     /// Map a Qwen3-ASR backend error to the right HTTP error
     /// response. Mirrors the parakeet/fast_conformer error mapping
     /// so clients get a consistent shape across backends.
-    private nonisolated func mapQwen3BatchError(
+    ///
+    /// `FetchFailure` payloads are demuxed into distinct HTTP codes
+    /// so clients can branch on root cause: 401 for auth, 404 for
+    /// repo missing, 502 for transient transport, 422 for local
+    /// integrity violations (size/checksum mismatch), 500 for
+    /// programmer error (`.other`, manifest decode bugs).
+    nonisolated func mapQwen3BatchError(
         _ error: Qwen3ASRError
     ) -> Response {
         switch error {
@@ -174,17 +180,90 @@ final class APIServer: ObservableObject {
                 message: error.description,
                 code: "model_load_failed"
             )
-        case .fetchFailed:
-            return errorResponse(
-                status: .badGateway,
-                message: error.description,
-                code: "model_fetch_failed"
-            )
+        case .fetchFailed(let failure):
+            return mapFetchFailure(failure, message: error.description)
         case .tokenizerValidationFailed(let detail):
             return errorResponse(
                 status: .internalServerError,
                 message: detail,
                 code: "tokenizer_validation_failed"
+            )
+        }
+    }
+
+    /// Demux a structured `FetchFailure` payload into its HTTP code.
+    /// Shared between `/v1/stt/batch` and `/v1/stt/load` so clients
+    /// see a single mapping regardless of which endpoint surfaced
+    /// the failure.
+    nonisolated func mapFetchFailure(
+        _ failure: FetchFailure,
+        message: String? = nil
+    ) -> Response {
+        let body = message ?? failure.description
+        switch failure {
+        case .httpStatus(let code, _):
+            switch code {
+            case 401:
+                return errorResponse(
+                    status: .unauthorized,
+                    message: body,
+                    code: "model_fetch_unauthorized"
+                )
+            case 404:
+                return errorResponse(
+                    status: .notFound,
+                    message: body,
+                    code: "model_fetch_not_found"
+                )
+            case 500..<600:
+                return errorResponse(
+                    status: .badGateway,
+                    message: body,
+                    code: "model_fetch_upstream_5xx"
+                )
+            default:
+                return errorResponse(
+                    status: .badGateway,
+                    message: body,
+                    code: "model_fetch_failed"
+                )
+            }
+        case .checksumMismatch, .sizeMismatch:
+            // Local integrity violation. Not a transient gateway
+            // problem; retrying the same gateway will likely
+            // surface the same bytes. Surface as 422 with a
+            // dedicated code so retry policy doesn't spin.
+            return errorResponse(
+                status: .unprocessableContent,
+                message: body,
+                code: "model_corruption_detected"
+            )
+        case .rangeIgnored:
+            return errorResponse(
+                status: .conflict,
+                message: body,
+                code: "model_fetch_resume_failed"
+            )
+        case .manifestDecode:
+            return errorResponse(
+                status: .badGateway,
+                message: body,
+                code: "model_manifest_invalid"
+            )
+        case .other:
+            // Internal contract violation (typo'd repo URL, etc.) —
+            // not a gateway problem. 500 so it surfaces as a server
+            // bug rather than an upstream blame.
+            return errorResponse(
+                status: .internalServerError,
+                message: body,
+                code: "model_fetch_internal_error"
+            )
+        case .transport:
+            return errorResponse(
+                status: .badGateway,
+                message: body,
+                code: "model_fetch_failed"
             )
         }
     }
@@ -509,10 +588,26 @@ final class APIServer: ObservableObject {
 
         // STT: Status
         router.get("/v1/stt/status") { _, _ in
-            let running = sttEngine.isRunning
+            // `isCurrentBackendLoaded()` is backend-aware: for
+            // Parakeet/FastConformer/AppleSTT it reads `model != nil`
+            // (same as `isRunning`); for `qwen3_asr_preview` it
+            // reads the actor's `isLoaded` flag. Without this, after
+            // a fallback the engine would report `loaded: true` for
+            // qwen3_asr_preview while only the Parakeet model is in
+            // memory — see round-2 silent-failure #B4.
+            let backendLoaded = await sttEngine.isCurrentBackendLoaded()
+            // Surface the language the *currently-selected* backend
+            // is loaded for. For qwen3 the backend actor doesn't
+            // expose a per-language state today, so we report the
+            // engine's `currentLanguage` (which the WS / batch
+            // handlers use for the Qwen3 hint) when the backend is
+            // loaded; nil otherwise.
+            let language: String? = backendLoaded
+                ? sttEngine.currentLanguage.rawValue
+                : nil
             return STTStatusResponse(
-                loaded: running,
-                language: running ? sttEngine.currentLanguage.rawValue : nil,
+                loaded: backendLoaded,
+                language: language,
                 streaming: sttEngine.isStreaming
             )
         }
@@ -559,6 +654,14 @@ final class APIServer: ObservableObject {
                             // completes. Streaming progress to clients
                             // is a future enhancement (issue #59).
                         }
+                    } catch let asrError as Qwen3ASRError {
+                        // Route through the same demux as
+                        // /v1/stt/batch so a fetch failure surfaces
+                        // the same HTTP code regardless of which
+                        // endpoint the client hit.
+                        return mapQwen3BatchError(asrError)
+                    } catch let fetchFailure as FetchFailure {
+                        return mapFetchFailure(fetchFailure)
                     } catch {
                         return errorResponse(
                             status: .internalServerError,
@@ -575,6 +678,12 @@ final class APIServer: ObservableObject {
                         try await Qwen3ASRTokenizerPrep.prepare(
                             modelDir: modelDir
                         )
+                    } catch let asrError as Qwen3ASRError {
+                        // Same mapping as the batch path so the wire
+                        // shape is consistent
+                        // (`tokenizer_validation_failed` /
+                        // `model_fetch_failed` / etc).
+                        return mapQwen3BatchError(asrError)
                     } catch {
                         return errorResponse(
                             status: .internalServerError,
