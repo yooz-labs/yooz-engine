@@ -132,13 +132,25 @@ struct WSSTTReady: Encodable {
     let language: String
 }
 
+/// Stable wire-level warning codes the engine emits over WS. The
+/// `rawValue` is what crosses the wire; clients branch on it. Kept
+/// as a typed enum so the compiler catches typos at the engine
+/// emit-site (a free-form `String` like
+/// `"buffer_cap_reachd"` would silently break client branching).
+enum WSSTTWarningCode: String, Encodable, Sendable, CaseIterable {
+    /// The streaming session's audio buffer hit its soft cap;
+    /// additional audio is being discarded. The transcript on
+    /// `final` reflects the buffered audio only.
+    case bufferCapReached = "buffer_cap_reached"
+}
+
 /// One-shot non-fatal warning frame. Used when the engine wants to
 /// keep the stream alive but signal a soft-capacity event (e.g. the
 /// session buffer cap was reached and additional audio is being
 /// dropped).
 struct WSSTTWarning: Encodable {
     let type: String  // "warning"
-    let code: String
+    let code: WSSTTWarningCode
     let message: String
 }
 

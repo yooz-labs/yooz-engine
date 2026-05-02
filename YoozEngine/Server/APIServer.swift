@@ -856,8 +856,13 @@ final class APIServer: ObservableObject {
                 }
             }
 
-            // Send a one-shot non-fatal warning frame.
-            func sendWarning(code: String, message: String) async {
+            // Send a one-shot non-fatal warning frame. `code` is a
+            // typed enum; the wire still carries the snake_case
+            // rawValue ("buffer_cap_reached", etc.) so clients
+            // don't see a wire-shape change.
+            func sendWarning(
+                code: WSSTTWarningCode, message: String
+            ) async {
                 do {
                     let json = try encoder.encode(
                         WSSTTWarning(
@@ -1093,7 +1098,7 @@ final class APIServer: ObservableObject {
                         if outcome.truncated && !qwen3BufferCapWarned {
                             qwen3BufferCapWarned = true
                             await sendWarning(
-                                code: "buffer_cap_reached",
+                                code: .bufferCapReached,
                                 message:
                                     "Audio buffer reached the streaming "
                                     + "cap. Additional audio is being "
