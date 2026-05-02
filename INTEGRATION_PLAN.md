@@ -67,12 +67,10 @@ M-series Mac as the eventual deployment target.
   Latest checkpoint saved: `0002500_adapters.safetensors` at val loss
   **0.252** (5/12 epochs). Loss trend was still flat-to-slightly-down,
   but the adapter is converged enough to evaluate honestly.
-- Eval set: 500 samples from `data/light/test.jsonl` (full set is 2998;
-  capped to ship inside the available GPU window).
-
-Eval set: 500 samples from `data/light/test.jsonl` (fine-tune training
-distribution; the full set is 2998, capped to ship inside the available
-GPU window). Source: `/Volumes/S1/yooz/research/issue-9/results/phase3_finetune/qwen35-light/eval_results.json`.
+- Eval set: 500 samples from `data/light/test.jsonl` (fine-tune training
+  distribution; the full set is 2998, capped to ship inside the
+  available GPU window). Source:
+  `/Volumes/S1/yooz/research/issue-9/results/phase3_finetune/qwen35-light/eval_results.json`.
 
 | Variant | EM | JSON | Sim | Echo | Lat (ms) |
 |---|---:|---:|---:|---:|---:|

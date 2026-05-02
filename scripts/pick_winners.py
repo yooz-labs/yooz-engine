@@ -58,19 +58,33 @@ def composite_score(qual: dict, speed: dict | None) -> float:
 
 
 def main():
+    import sys
+
     quality = {s["slug"]: s for s in load(QUALITY_FILE) if "slug" in s}
     speed = {s["slug"]: s for s in load(SPEED_FILE) if "slug" in s}
 
     rows = []
     for slug, q in quality.items():
         s = speed.get(slug)
+        if slug not in DISK_MB:
+            print(
+                f"warning: pick_winners has no DISK_MB entry for '{slug}'; "
+                f"it will be excluded from tier eligibility. Add it to "
+                f"scripts/pick_winners.py.",
+                file=sys.stderr,
+            )
         disk_mb = DISK_MB.get(slug, 0)
         if s and "error" not in s:
-            lat_ms = (s.get("ttft_ms") or {}).get("median", float("inf"))
+            lat_ms = (s.get("ttft_ms") or {}).get("median")
             tps = (s.get("tokens_per_second") or {}).get("median", 0.0)
             rss_mb = s.get("rss_peak_bytes", 0) / (1024 * 1024)
         else:
-            lat_ms = float("inf")
+            print(
+                f"warning: pick_winners has no Phase 2 speed data for "
+                f"'{slug}'; it will be excluded from tier eligibility.",
+                file=sys.stderr,
+            )
+            lat_ms = None
             tps = 0.0
             rss_mb = 0.0
         score = composite_score(q, s)
@@ -79,14 +93,27 @@ def main():
             "role": q.get("role"),
             "disk_mb": disk_mb,
             "score": score,
+            # ttft_ms is None when Phase 2 data is missing — keeps the JSON
+            # spec-compliant (no Infinity) and lets downstream filter on
+            # `is None` instead of float comparisons.
             "ttft_ms": lat_ms,
             "tokens_per_second": tps,
             "rss_mb": rss_mb,
             "quality": q.get("total"),
         })
 
-    light_eligible = [r for r in rows if r["disk_mb"] and r["disk_mb"] < LIGHT_MAX_MB]
-    quality_eligible = [r for r in rows if r["disk_mb"] and r["disk_mb"] < QUALITY_MAX_MB]
+    def _eligible(rows, max_mb, max_lat):
+        out = []
+        for r in rows:
+            if not r["disk_mb"] or r["disk_mb"] >= max_mb:
+                continue
+            if r["ttft_ms"] is None or r["ttft_ms"] >= max_lat:
+                continue
+            out.append(r)
+        return out
+
+    light_eligible = _eligible(rows, LIGHT_MAX_MB, LIGHT_MAX_LAT_MS)
+    quality_eligible = _eligible(rows, QUALITY_MAX_MB, QUALITY_MAX_LAT_MS)
     light_winner = max(light_eligible, key=lambda r: r["score"], default=None)
     quality_winner = max(quality_eligible, key=lambda r: r["score"], default=None)
 
@@ -129,7 +156,7 @@ def main():
         sim = q.get("avg_semantic_similarity", float("nan")) if q else float("nan")
         ttft = r["ttft_ms"]
         tps = r["tokens_per_second"]
-        ttft_s = "-" if ttft == float("inf") else f"{ttft:.0f}"
+        ttft_s = "-" if ttft is None else f"{ttft:.0f}"
         lines.append(
             f"| {i} | {r['slug']} | {r['score']:.4f} | {r['disk_mb']} | "
             f"{ttft_s} | {tps:.1f} | {em:.1f}% | {cer:.4f} | {sim:.4f} |"
