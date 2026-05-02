@@ -26,13 +26,22 @@ quality numbers.
 
 ## Single-model verdict (the issue's headline question)
 
-**Replace Parakeet TDT and FastConformer-ar with Qwen3-ASR-1.7B as
-the default `auto` backend; keep FastConformer-fa as the Persian
-default until a head-to-head says otherwise; keep FastConformer-he
-indefinitely (Qwen3-ASR does not support Hebrew).**
+**Ship Qwen3-ASR-1.7B as an opt-in `qwen3_asr_preview` backend, not
+as the default `auto` path.** Default stays Parakeet TDT for English
+and other Parakeet-supported languages; Arabic flips its language
+default to Qwen3-ASR-1.7B (the one language where it clearly wins
+at comparable latency to FastConformer-ar); Persian stays on
+FastConformer-fa pending a head-to-head; Hebrew stays on
+FastConformer-he indefinitely (Qwen3-ASR does not support Hebrew).
 
-Latency cost is non-trivial (~5x on a 5 s clip) but RTFX stays at
-16x or better, well within real-time budget for dictation workloads.
+The 4.6x latency multiplier on a 5 s clip is too risky to drop on
+top of Whisper / Notes voice-keyboard UX as a default. RTFX stays at
+16x or better, which is fine for dictation, but streaming-mode WER
+is unmeasured. The preview earns a default flip only after telemetry
+clears the graduation criteria in `results/INTEGRATION_DESIGN.md`
+(P50 RTFX, WER parity, no regression complaints, streaming WER
+measured). Telemetry is local-only, opt-in, performance signals only;
+no transcript content.
 
 ## Layout
 
