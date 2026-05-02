@@ -18,12 +18,23 @@ packages:
   hummingbird-websocket:
     url: https://github.com/hummingbird-project/hummingbird-websocket
     from: "2.2.0"
+  # TurboQuant KV cache compression (issue #10) requires SharpAI's mlx-swift +
+  # mlx-swift-lm forks. They add MLXFast.turboQuantEncode / turboDecodeK / V
+  # plus the KVCacheSimple.turboQuantEnabled hook used by MLXLLMBackend.
+  #
+  # Both packages must track `main` together because mlx-swift-lm declares its
+  # mlx-swift dep as `branch: "main"` — pinning a revision on the leaf package
+  # collides with that branch constraint. The SharpAI bot keeps `main` rebased
+  # on Apple upstream, so this is currently safe. Recommended last-known-good:
+  #   mlx-swift:    e707b7f1610e77a32f12e3e28910d6bd3d9ffef1
+  #   mlx-swift-lm: 38d7ff2840ab6b91a84b8f168c3cc2539f9356e1
+  # When freezing for a release, snapshot Package.resolved into the repo.
   mlx-swift:
-    url: https://github.com/ml-explore/mlx-swift
-    from: "0.21.2"
+    url: https://github.com/SharpAI/mlx-swift
+    branch: "main"
   mlx-swift-lm:
-    url: https://github.com/ml-explore/mlx-swift-lm
-    from: "2.30.3"
+    url: https://github.com/SharpAI/mlx-swift-lm
+    branch: "main"
 
 targets:
   YoozEngine:
