@@ -64,8 +64,9 @@ final class Qwen3SinusoidalPositionEmbedding {
 /// `MLXFast.scaledDotProductAttention(scale: 1.0)`. Passing the
 /// scale into the fused kernel changes the order of multiplications
 /// and produces a tiny bf16 drift relative to the reference path.
-/// Phase 1 parity (9.6e-7 max-abs) confirmed this ordering; the
-/// per-layer test bar (≤1e-4) further enforces it.
+/// End-to-end parity (9.6e-7 max-abs vs Python reference) confirmed
+/// this ordering; the per-layer test bar (≤1e-4) further enforces
+/// it.
 final class Qwen3AudioAttention: Module {
     let embedDim: Int
     let numHeads: Int
@@ -180,8 +181,8 @@ final class Qwen3AudioEncoderLayer: Module {
 
 /// Captures every per-layer intermediate the production parity
 /// suite checks against the Python reference. Used only by tests
-/// and diagnostics — `Qwen3AudioEncoder.callAsFunction` returns the
-/// final hidden states for the engine path.
+/// and diagnostics — `Qwen3AudioEncoder.forward(...)` is the typed-
+/// error path the engine actually runs.
 ///
 /// Not `Sendable` because `MLXArray` itself is not Sendable; a
 /// trace is meant to live within a single thread (test fixture or
@@ -211,9 +212,9 @@ public struct Qwen3EncoderTrace {
 ///     (`encoderLayers` × pre-norm blocks)
 ///   - LayerNorm + 2-layer MLP projection to `outputDim`
 ///
-/// Phase 1 spike achieved 9.6e-7 max-abs delta against the Python
-/// reference end-to-end. This production encoder targets ≤1e-4 at
-/// every per-layer cut point.
+/// End-to-end parity is 9.6e-7 max-abs delta against the Python
+/// reference; this production encoder targets ≤1e-4 at every
+/// per-layer cut point.
 ///
 /// Forward arguments:
 ///   - `inputFeatures`: `(batch, numMelBins, numFrames)` float32
@@ -339,9 +340,9 @@ public final class Qwen3AudioEncoder: Module {
     // MARK: - Forward (engine path)
 
     /// Standard forward pass returning the final encoder hidden
-    /// states. This is the only call the Phase 4 decoder bridge
-    /// needs. Throws `Qwen3ASRError.invalidInput` on shape problems
-    /// rather than crashing the engine.
+    /// states. The encoder ↔ decoder bridge calls this directly.
+    /// Throws `Qwen3ASRError.invalidInput` on shape problems rather
+    /// than crashing the engine.
     public func forward(
         inputFeatures: MLXArray,
         featureAttentionMask: MLXArray? = nil
@@ -353,13 +354,13 @@ public final class Qwen3AudioEncoder: Module {
         )
     }
 
-    /// Compatibility wrapper preserving the spike's call signature.
-    /// New callers should prefer `forward(inputFeatures:...)` (which
-    /// exposes the typed error path) — this entry point preserves
-    /// the original `MLXArray`-returning shape so engine glue can
-    /// adopt it without a typed-error rewrite. Crashes on the same
-    /// preconditions the spike enforced; production paths must
-    /// already have validated input.
+    /// Compatibility wrapper preserving the original `MLXArray`-
+    /// returning entry point. New callers should prefer
+    /// `forward(inputFeatures:...)` (the typed-error path); this
+    /// wrapper exists so non-engine callers can adopt the encoder
+    /// without a typed-error rewrite. Crashes on shape preconditions
+    /// the encoder requires; production paths must already have
+    /// validated input.
     public func callAsFunction(
         inputFeatures: MLXArray,
         featureAttentionMask: MLXArray? = nil

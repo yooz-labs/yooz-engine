@@ -7,32 +7,35 @@ import os.log
 import Tokenizers
 #endif
 
-/// Phase 4 carryover: the canonical
-/// `mlx-community/Qwen3-ASR-1.7B-8bit` checkpoint sometimes ships
-/// `tokenizer.json`, sometimes does not (HF mirrors and revisions
-/// vary). The Phase 4 author's recommendation: "the first-run
-/// download path generates `tokenizer.json` as a one-time prep step
-/// after pulling the checkpoint, before the pipeline tries to load."
+/// First-run tokenizer validation step.
 ///
-/// `Qwen3ASRTokenizerPrep.prepare(modelDir:)` is that step.
+/// The canonical `mlx-community/Qwen3-ASR-1.7B-8bit` checkpoint
+/// sometimes ships `tokenizer.json`, sometimes does not (HF mirrors
+/// and revisions vary). `prepare(modelDir:)` runs after the fetcher
+/// lands the artifacts and before the pipeline loads the tokenizer.
 ///
 /// Behavior:
 ///   - Sentinel fast-path: if `.yooz_tokenizer_prepped` is present,
 ///     no-op.
 ///   - If `tokenizer.json` already exists, validate it loads via
-///     `AutoTokenizer.from(modelFolder:)`, drop the sentinel, return.
-///     This is the path the canonical mlx-community checkpoint takes
-///     today.
+///     `AutoTokenizer.from(modelFolder:)`, run a known-string canary
+///     encode, drop the sentinel, return. This is the path the
+///     canonical mlx-community checkpoint takes today.
 ///   - Otherwise, validate the fallback inputs (`tokenizer_config.json`,
-///     `vocab.json`, `merges.txt`) are on disk and surface
-///     `Qwen3ASRError.fetchValidationFailed` if the loader rejects
-///     them. The current swift-transformers `loadConfig(modelFolder:)`
-///     REQUIRES `tokenizer.json` to be present, so this branch will
-///     fail until either (a) a future swift-transformers release
-///     synthesizes the tokenizer from the fallback inputs, or (b) we
-///     bundle a deterministic builder. Either way the failure is
-///     loud and typed; operators see the issue at first-run rather
-///     than silently mis-tokenizing.
+///     `vocab.json`, `merges.txt`) are on disk, attempt the load via
+///     `AutoTokenizer.from(modelFolder:)` (which will use the
+///     fallback inputs if swift-transformers' loader supports that
+///     path), run the canary encode, then drop the sentinel. The
+///     current swift-transformers `loadConfig(modelFolder:)` REQUIRES
+///     `tokenizer.json` to be present, so this branch typically
+///     fails today; the failure is typed (`fetchValidationFailed`)
+///     so operators see the issue at first-run rather than silently
+///     mis-tokenizing.
+///
+/// We deliberately do NOT synthesize `tokenizer.json` ourselves:
+/// reverse-engineering the HF tokenizer schema is a maintenance trap
+/// and the canary encode catches synthesis-versus-canonical drift if
+/// a future swift-transformers ever starts producing it.
 ///
 /// Idempotent: running prep twice on a prepared directory makes no
 /// filesystem changes the second time.

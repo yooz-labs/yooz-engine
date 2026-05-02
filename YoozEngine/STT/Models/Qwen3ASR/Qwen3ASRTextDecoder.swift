@@ -264,7 +264,7 @@ public final class Qwen3ASRTextDecoderInner: Module {
 /// forward (`callAsEmbeddings(...) -> logits`) used by the audio
 /// bridge. Conforms to `LanguageModel` from `MLXLMCommon` so the
 /// engine can reuse `TokenIterator` machinery if it ever wants
-/// pure-text generation (Phase 5+ may piggyback this for diagnostics).
+/// pure-text generation (engine glue can piggyback this for diagnostics).
 public final class Qwen3ASRTextDecoder: Module, LanguageModel,
     KVCacheDimensionProvider
 {
@@ -334,10 +334,10 @@ public final class Qwen3ASRTextDecoder: Module, LanguageModel,
     // MARK: - LanguageModel conformance
 
     /// Default `prepare` runs the entire prompt through the decoder
-    /// and hands the iterator the last token's logits. Phase 4 uses
-    /// the embeddings path directly (audio splicing happens *before*
-    /// the decoder runs), so this conformance only matters for
-    /// pure-text uses of the decoder — e.g. Phase 6+ diagnostics that
+    /// and hands the iterator the last token's logits. The pipeline
+    /// uses the embeddings path directly (audio splicing happens
+    /// *before* the decoder runs), so this conformance only matters
+    /// for pure-text uses of the decoder — e.g. diagnostics that
     /// drop it into the stock `TokenIterator`.
     public func prepare(
         _ input: LMInput,

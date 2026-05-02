@@ -3,18 +3,18 @@
 import Foundation
 import os.log
 
-/// Singleton actor wrapping the Phase 4 `Qwen3ASRPipeline` so the
-/// engine can hold one pipeline instance alive across many HTTP
-/// requests. The pipeline itself is a `final class` carrying MLX
-/// state that is not `Sendable`; isolating it inside an actor is
-/// exactly the pattern Phase 4's docs ask for.
+/// Singleton actor wrapping the `Qwen3ASRPipeline` so the engine
+/// can hold one pipeline instance alive across many HTTP requests.
+/// The pipeline itself is a `final class` carrying MLX state that is
+/// not `Sendable`; isolating it inside an actor is the standard
+/// pattern for non-Sendable native model state.
 ///
 /// Lifecycle:
 ///   1. `prepare(modelDir:)` — verify the model directory is ready
 ///      (files present, tokenizer prepped). No network IO.
 ///   2. `ensureLoaded(modelDir:)` — lazy-load the pipeline. Repeated
 ///      calls with the same directory are no-ops.
-///   3. `transcribe(pcm:language:)` — Phase 4's batch API.
+///   3. `transcribe(pcm:language:)` — batch transcribe.
 ///   4. `unload()` — drop the pipeline, freeing MLX memory.
 public actor Qwen3ASRBackend {
 
@@ -70,7 +70,7 @@ public actor Qwen3ASRBackend {
         logger.info("Qwen3-ASR pipeline ready")
     }
 
-    /// Run Phase 4's batch transcribe path. Throws
+    /// Run the batch transcribe path. Throws
     /// `Qwen3ASRError.pipelineNotLoaded` if `ensureLoaded` hasn't been
     /// called yet.
     public func transcribe(

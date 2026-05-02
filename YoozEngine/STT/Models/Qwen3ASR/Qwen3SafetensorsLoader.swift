@@ -7,16 +7,15 @@ import MLXNN
 /// Production loader for the `audio_tower.*` slice of a Qwen3-ASR
 /// safetensors checkpoint.
 ///
-/// Phase 1 deferred shape/dtype validation to MLXNN's
-/// `Module.update(parameters:verify:)`. That hides the offending
-/// key behind `MLXNN`'s opaque error string and gives the caller no
+/// `MLXNN`'s `Module.update(parameters:verify:)` reports parameter
+/// mismatches behind an opaque error string and gives the caller no
 /// way to distinguish "missing tensor" from "wrong shape" from
 /// "wrong dtype" — three distinct production failure modes.
 ///
 /// This loader pre-flights every tensor against the encoder's
 /// declared parameter map and emits a typed `Qwen3ASRError`
-/// describing the exact mismatch. Phase 4 (encoder ↔ decoder bridge)
-/// can map these directly to typed API responses without re-parsing
+/// describing the exact mismatch, so the encoder ↔ decoder bridge
+/// can map cases directly to typed API responses without re-parsing
 /// strings.
 public enum Qwen3SafetensorsLoader {
 

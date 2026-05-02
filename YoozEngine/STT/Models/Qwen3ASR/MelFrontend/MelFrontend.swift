@@ -427,8 +427,8 @@ public final class MelFrontend: Sendable {
         /// Equivalent to running `MelFrontend.computeFeatures(pcm:)` on
         /// the concatenation of every chunk pushed since session start.
         ///
-        /// After `finish()` the session is closed; further `push` calls
-        /// throw `streamingNotStarted`.
+        /// `finish()` is single-shot; calling it twice or calling
+        /// `push` after it throws `streamingSessionClosed`.
         public func finish() throws -> MelFeatures {
             guard !finished else {
                 throw MelFrontendError.streamingSessionClosed

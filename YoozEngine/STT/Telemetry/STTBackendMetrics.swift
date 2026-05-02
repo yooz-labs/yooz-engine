@@ -39,8 +39,8 @@ public struct STTBackendMetrics: Codable, Sendable, Equatable, Hashable {
     public let audioDurationMs: UInt32
 
     /// Time-to-first-token in milliseconds (streaming runs).
-    /// Optional: batch-only backends (Phase 5 Qwen3) leave this
-    /// `nil`.
+    /// Optional: backends that buffer-then-finalize (Qwen3 ASR
+    /// preview) leave this `nil`.
     public let timeToFirstTokenMs: UInt32?
 
     /// Wall-clock latency from request received to result returned,

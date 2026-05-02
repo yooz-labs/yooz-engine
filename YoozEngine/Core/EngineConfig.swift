@@ -78,7 +78,7 @@ enum EngineConfig {
         return caches.appendingPathComponent("live.yooz.engine")
     }()
 
-    // MARK: - Telemetry (Phase 6)
+    // MARK: - Telemetry
 
     /// Whether the user has opted into local STT telemetry. Default
     /// `false`. Driven by the `YOOZ_TELEMETRY_STT` env var:

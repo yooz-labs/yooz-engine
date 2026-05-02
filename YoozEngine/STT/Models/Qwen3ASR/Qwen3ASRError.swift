@@ -4,11 +4,11 @@ import Foundation
 
 /// Errors surfaced by the Qwen3-ASR audio encoder pipeline.
 ///
-/// Every error path that a Phase 4 caller may encounter — config
-/// validation, weight loading, malformed safetensors, runtime input
-/// shape — funnels through this type. Phase 4 (encoder ↔ decoder
-/// bridge) and the engine HTTP layer can map these to typed API
-/// errors without re-parsing strings.
+/// Every error path a caller may encounter — config validation,
+/// weight loading, malformed safetensors, runtime input shape — funnels
+/// through this type so the encoder ↔ decoder bridge and the engine
+/// HTTP layer can map cases to typed API errors without re-parsing
+/// strings.
 public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
     /// `Qwen3ASRConfig.validate()` rejected the supplied config.
     case invalidConfig(String)
@@ -33,7 +33,7 @@ public enum Qwen3ASRError: Error, Equatable, CustomStringConvertible {
     /// Checkpoint contained `audio_tower.*` keys the encoder does
     /// not declare. Surfaced rather than silently dropped because
     /// it indicates the checkpoint format diverged from the
-    /// encoder schema; Phase 4 should know.
+    /// encoder schema; the bridge layer should know.
     case unexpectedTensor(String)
     /// Underlying `MLX.loadArrays` (safetensors header) failed.
     /// Wrapped as `String` so any provider-specific error surface

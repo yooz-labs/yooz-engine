@@ -150,8 +150,19 @@ final class STTBackendMetricsPrivacyTests: XCTestCase {
     // MARK: - 5. Default config has telemetry off
 
     func testTelemetryDefaultsToOptedOut() {
-        // The default-construct path is "no env var set."
+        // The default-construct path is "no env var set." Save and
+        // restore the prior value so a developer running
+        // `YOOZ_TELEMETRY_STT=local swift test` doesn't get the env
+        // wiped out from under them for every subsequent test.
+        let priorValue = ProcessInfo.processInfo.environment[
+            "YOOZ_TELEMETRY_STT"
+        ]
         unsetenv("YOOZ_TELEMETRY_STT")
+        defer {
+            if let priorValue {
+                setenv("YOOZ_TELEMETRY_STT", priorValue, 1)
+            }
+        }
         XCTAssertFalse(EngineConfig.telemetryOptedIn)
     }
 

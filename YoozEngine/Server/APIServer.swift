@@ -393,7 +393,7 @@ final class APIServer: ObservableObject {
             }
         }
 
-        // STT: Backend selection (Phase 5)
+        // STT: Backend selection
         router.get("/v1/stt/engine") { _, _ in
             let current = sttEngine.currentBackend.rawValue
             let available = STTBackendID.allCases.map { backend in
@@ -474,8 +474,8 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            // Phase 5: when the active backend is qwen3, ensure the
-            // model directory is materialized on disk before calling
+            // When the active backend is qwen3, ensure the model
+            // directory is materialized on disk before calling
             // start(). The fetch is opt-in via `allowFetch` (default
             // true for ergonomics; CI/tests can disable it).
             if sttEngine.currentBackend == .qwen3ASRPreview {
@@ -571,10 +571,12 @@ final class APIServer: ObservableObject {
 
             let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
 
-            // Phase 5: route through Qwen3 backend when active. The
-            // backend reports an empty `ParakeetResult` on internal
-            // failures rather than throwing, mirroring Parakeet's
-            // contract for this endpoint.
+            // Route through the Qwen3 backend when active. Typed
+            // errors from the backend are mapped to HTTP error
+            // responses below; we do NOT swallow Qwen3 failures as
+            // 200 OK with empty text — the user deserves to see
+            // pipeline-not-loaded / invalid-input as a structured
+            // response, not silent emptiness.
             let result: ParakeetResult
             if sttEngine.currentBackend == .qwen3ASRPreview {
                 result = await sttEngine.batchTranscribeQwen3(
@@ -607,8 +609,8 @@ final class APIServer: ObservableObject {
         wsRouter.ws("/v1/stt/stream") { inbound, outbound, context in
             let sttEngine = YoozSTTEngine.shared
             var transcriber: StreamingTranscriber?
-            // Phase 7: per-connection streaming session for the
-            // qwen3 backend. Owns its own audio buffer; the underlying
+            // Per-connection streaming session for the qwen3
+            // backend. Owns its own audio buffer; the underlying
             // backend actor serializes concurrent transcribe calls.
             var qwen3Session: Qwen3ASRStreamingSession?
             // Wall clock at session start for the telemetry record
@@ -675,11 +677,11 @@ final class APIServer: ObservableObject {
                             continue
                         }
 
-                        // Phase 7: branch on the active backend at
-                        // config time. The qwen3 path opens a
-                        // streaming session against the (already-
-                        // loaded) backend actor; the legacy path
-                        // creates a per-connection
+                        // Branch on the active backend at config
+                        // time. The qwen3 path opens a streaming
+                        // session against the (already-loaded)
+                        // backend actor; the Parakeet/FastConformer
+                        // path creates a per-connection
                         // `StreamingTranscriber` exactly as before.
                         if sttEngine.currentBackend == .qwen3ASRPreview {
                             // Allow only languages the backend

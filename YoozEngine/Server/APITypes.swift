@@ -63,7 +63,7 @@ struct STTLoadRequest: Decodable {
     /// remote source if it is not already on disk. When false, the
     /// load fails with `model_not_found` if the directory is empty.
     /// Only consulted by backends that own a first-run fetch path
-    /// (`qwen3_asr_preview` in Phase 5); ignored otherwise.
+    /// (`qwen3_asr_preview`); ignored otherwise.
     let allowFetch: Bool?
 }
 

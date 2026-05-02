@@ -111,7 +111,7 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
         rawValue
     }
 
-    /// Canonical language label the Qwen3-ASR Phase 4 pipeline expects
+    /// Canonical language label the Qwen3-ASR pipeline expects
     /// (e.g. `English`, `Arabic`, `Persian`). The Qwen3 chat template
     /// matches on these exact strings; they're close to but not
     /// identical with `displayName` (e.g. `"Chinese"` vs

@@ -56,16 +56,16 @@ public struct Qwen3ASRTranscription: Sendable, Equatable {
 /// End-to-end Qwen3-ASR transcription pipeline in pure Swift / MLX.
 ///
 /// Owns:
-///   - the mel frontend (Phase 2)
-///   - the audio_tower encoder (Phase 3)
-///   - the Qwen3 text decoder (this phase)
+///   - the mel frontend
+///   - the audio_tower encoder
+///   - the Qwen3 text decoder
 ///   - the HuggingFace tokenizer (loaded via `swift-transformers`)
 ///
 /// Hides every MLX detail behind two entry points:
 ///   - `load(from:)` — construct from a checkpoint directory
 ///   - `transcribe(pcm:language:maxNewTokens:)` — full forward pass
 ///
-/// Phase 5 (engine HTTP wiring) calls `transcribe(...)` from the
+/// The engine HTTP wiring calls `transcribe(...)` from the
 /// `/v1/stt/batch` handler without ever touching MLX directly.
 ///
 /// `@MainActor` is *not* applied here — the pipeline is meant to live

@@ -11,7 +11,7 @@ import Foundation
 /// embeddings (so audio-tower hidden states can be spliced into the
 /// embedding stream at the `<|audio_pad|>` token positions). That
 /// path is provided by `Qwen3ASRTextDecoder` rather than the stock
-/// `MLXLLM.Qwen3` model — hence a Phase 4-local config.
+/// `MLXLLM.Qwen3` model — hence this Qwen3-ASR-local config.
 public struct Qwen3ASRTextConfig: Codable, Sendable, Equatable {
     public var modelType: String
     public var vocabSize: Int

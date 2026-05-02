@@ -172,7 +172,8 @@ public actor Qwen3ASRModelFetcher {
 
     /// Files we materialize on disk. `tokenizer.json` is optional
     /// because some checkpoint revisions ship it and others rely on
-    /// the prep step — see the Phase 4 carryover note.
+    /// `swift-transformers` synthesizing the tokenizer at load time
+    /// from `tokenizer_config.json + vocab.json + merges.txt`.
     public static let requiredFiles: [String] = [
         "config.json",
         "model.safetensors",
@@ -185,8 +186,11 @@ public actor Qwen3ASRModelFetcher {
         "chat_template.json",
     ]
 
-    /// Files that, when missing, do not fail the fetch. The prep
-    /// step generates `tokenizer.json` if absent.
+    /// Files that, when missing, do not fail the fetch.
+    /// `tokenizer.json` is preferred when the upstream mirror ships
+    /// it; the prep step validates it loads but does not synthesize
+    /// it when absent — load proceeds via `tokenizer_config.json +
+    /// vocab.json + merges.txt`.
     public static let optionalFiles: [String] = [
         "tokenizer.json",
     ]
