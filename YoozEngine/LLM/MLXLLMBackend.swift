@@ -43,6 +43,19 @@ protocol TurboQuantCapable: AnyObject {
 extension KVCacheSimple: TurboQuantCapable {}
 #endif
 
+#if canImport(MLXLMCommon)
+/// Per-generate-call result captured inside the `container.perform`
+/// closure and returned to the actor for post-processing. Lifted into a
+/// struct so the closure return type stays under the swiftlint
+/// `large_tuple` cap (4 fields would otherwise trigger the rule).
+private struct GenerateResult {
+    let text: String
+    let kvSnapshot: [[MLXArray]]?
+    let turboEnabled: Int
+    let turboTotal: Int
+}
+#endif
+
 /// MLX-Swift backend for Yooz LLM models.
 /// Supports both embedded (Yooz-Light) and downloaded (Yooz-Quality) models.
 /// Implements system prompt KV cache optimization to skip re-computing the
@@ -297,10 +310,12 @@ actor MLXLLMBackend: LLMBackend {
             let gatePassed = promptTokenCount >= 2048
             self.lastActivationGatePassed = gatePassed
             if kvCompressionMode == .turbo3 && !gatePassed {
-                logger.info("turbo3 requested but prompt tokens=\(promptTokenCount) < activation gate (2048); generation will use FP16. This is expected for TouchUp / chat-turn workloads.")
+                logger.info(
+                    "turbo3 requested but prompt tokens=\(promptTokenCount) < activation gate (2048); generation will use FP16 (expected for TouchUp / chat-turn workloads)."
+                )
             }
 
-            let (response, kvSnapshot, turboEnabled, turboTotal): (String, [[MLXArray]]?, Int, Int) = try await container.perform { context in
+            let result: GenerateResult = try await container.perform { context in
                 // Create fresh KV cache and restore cached system prompt state if available
                 var cache = context.model.newCache(parameters: params)
                 if let savedState = savedKVState {
@@ -348,7 +363,9 @@ actor MLXLLMBackend: LLMBackend {
                         let typeList = skippedTypes.isEmpty
                             ? "<no layers>"
                             : Array(Set(skippedTypes)).joined(separator: ", ")
-                        logger.error("turbo3 requested but no TurboQuantCapable cache layers found (cache types=[\(typeList)]). Compression will not activate; falling back to FP16.")
+                        logger.error(
+                            "turbo3 requested but no TurboQuantCapable cache layers found (cache types=[\(typeList)]); compression will not activate, falling back to FP16."
+                        )
                     } else if !skippedTypes.isEmpty {
                         let typeList = Array(Set(skippedTypes)).joined(separator: ", ")
                         logger.warning("turbo3: enabled on \(turboEnabledCount)/\(turboTotalCount) layers; skipped types=[\(typeList)]")
@@ -380,7 +397,7 @@ actor MLXLLMBackend: LLMBackend {
 
                 // Trim the cache back to the system prompt tokens and
                 // snapshot for next call's prompt-cache reuse.
-                var snapshot: [[MLXArray]]? = nil
+                var snapshot: [[MLXArray]]?
                 if sysCount > 0 {
                     let currentOffset = cache.first?.offset ?? 0
                     let trimAmount = currentOffset - sysCount
@@ -419,7 +436,9 @@ actor MLXLLMBackend: LLMBackend {
                         }
                     }
                     if compressedBeyondSys {
-                        logger.warning("Skipping prompt-cache snapshot: trim() cannot evict user-side compressed history (SharpAI mlx-swift-lm trim() workaround). Next call will recompute the system prompt.")
+                        logger.warning(
+                            "Skipping prompt-cache snapshot: SharpAI trim() cannot evict user-side compressed history. Next call recomputes the system prompt."
+                        )
                         snapshot = nil
                     } else {
                         // SharpAI fork's `KVCacheSimple.state` getter
@@ -432,16 +451,21 @@ actor MLXLLMBackend: LLMBackend {
                         snapshot = cache.map(\.state)
                     }
                 }
-                return (text, snapshot, turboEnabledCount, turboTotalCount)
+                return GenerateResult(
+                    text: text,
+                    kvSnapshot: snapshot,
+                    turboEnabled: turboEnabledCount,
+                    turboTotal: turboTotalCount
+                )
             }
 
             // Surface the TurboQuant outcome on the actor for tests /
             // health-style observability.
-            self.lastTurboLayersEnabled = turboEnabled
-            self.lastTurboLayersTotal = turboTotal
+            self.lastTurboLayersEnabled = result.turboEnabled
+            self.lastTurboLayersTotal = result.turboTotal
 
             // Update cached state
-            if let snapshot = kvSnapshot {
+            if let snapshot = result.kvSnapshot {
                 cachedPromptKVState = snapshot
                 cachedPromptTokenCount = sysCount
                 cachedSystemPrompt = systemPrompt
@@ -450,8 +474,8 @@ actor MLXLLMBackend: LLMBackend {
                 }
             }
 
-            logger.debug("Generation complete, got \(response.count) chars")
-            return postProcessResponse(response, originalInput: prompt)
+            logger.debug("Generation complete, got \(result.text.count) chars")
+            return postProcessResponse(result.text, originalInput: prompt)
         } catch {
             cachedPromptKVState = nil
             cachedPromptTokenCount = 0
