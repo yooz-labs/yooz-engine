@@ -102,3 +102,18 @@ targets:
       - Tests/YoozEngineTests
     dependencies:
       - target: YoozEngine
+
+schemes:
+  YoozEngine:
+    build:
+      targets:
+        YoozEngine: all
+        YoozEngineTests: [test]
+    test:
+      targets:
+        - YoozEngineTests
+      gatherCoverageData: false
+    run:
+      config: Debug
+    archive:
+      config: Release
