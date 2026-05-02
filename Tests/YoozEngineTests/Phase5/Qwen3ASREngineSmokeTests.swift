@@ -1,8 +1,6 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
 import Foundation
-import Hummingbird
-import HummingbirdTesting
 import XCTest
 
 @testable import YoozEngine
@@ -13,10 +11,10 @@ import XCTest
 /// route returns the same transcription text as the Phase 4
 /// canonical reference.
 ///
-/// macOS TCC blocks the GUI test host from reading `/Volumes/S1`
-/// without an interactive prompt. This suite is therefore built to
-/// run from `swift test` directly OR via `xcodebuild test` after the
-/// user has accepted the file-access prompt; otherwise it skips.
+/// Boots a real `APIServer` on its localhost port and dials it via
+/// `URLSession`, mirroring `Qwen3ASREngineRouteTests`. We avoid
+/// `HummingbirdTesting` for the same Logging-resolution linker
+/// reason documented there.
 final class Qwen3ASREngineSmokeTests: XCTestCase {
 
     private static var checkpointDir: URL {
@@ -105,7 +103,7 @@ final class Qwen3ASREngineSmokeTests: XCTestCase {
         )
         let pcm = try Self.loadCanonicalPCM()
 
-        // Point the engine at the canonical checkpoint via the env-var
+        // Point the engine at the canonical checkpoint via env-var
         // override so we don't need to copy 3.5 GB of weights for the
         // test.
         setenv("YOOZ_QWEN3_ASR_DIR", Self.checkpointDir.path, 1)
@@ -119,51 +117,64 @@ final class Qwen3ASREngineSmokeTests: XCTestCase {
         }
 
         let server = APIServer()
-        let router = server.makeTestRouter()
-        let app = Application(router: router)
-
-        try await app.test(.router) { client in
-            // Load the model first (populates the actor with the
-            // checkpoint).
-            struct LoadBody: Encodable {
-                let language: String
-                let allowFetch: Bool
-            }
-            let loadBody = try JSONEncoder().encode(
-                LoadBody(language: "en", allowFetch: false)
-            )
-            try await client.execute(
-                uri: "/v1/stt/load",
-                method: .post,
-                body: ByteBuffer(data: loadBody)
-            ) { res in
-                XCTAssertEqual(res.status, .ok, "Load failed: \(String(buffer: res.body))")
-            }
-
-            // Run batch transcription.
-            struct BatchBody: Encodable {
-                let samples: [Float]
-                let language: String
-            }
-            let batchBody = try JSONEncoder().encode(
-                BatchBody(samples: pcm, language: "en")
-            )
-            try await client.execute(
-                uri: "/v1/stt/batch",
-                method: .post,
-                body: ByteBuffer(data: batchBody)
-            ) { res in
-                XCTAssertEqual(res.status, .ok)
-                let decoded = try JSONDecoder().decode(
-                    BatchSTTResponse.self, from: Data(buffer: res.body)
-                )
-                XCTAssertEqual(
-                    decoded.text,
-                    reference.transcriptionText,
-                    "Qwen3 batch transcription diverged from Phase 4 reference"
-                )
-                XCTAssertEqual(decoded.language, "en")
-            }
+        try await server.start()
+        defer {
+            Task { @MainActor in await server.stop() }
         }
+
+        let baseURL = URL(
+            string: "http://\(EngineConfig.host):\(EngineConfig.port)"
+        )!
+
+        // 1) Load model (qwen3 backend, allow_fetch=false because we
+        // pre-populated YOOZ_QWEN3_ASR_DIR).
+        struct LoadBody: Encodable {
+            let language: String
+            let allowFetch: Bool
+        }
+        var loadReq = URLRequest(
+            url: baseURL.appendingPathComponent("/v1/stt/load")
+        )
+        loadReq.httpMethod = "POST"
+        loadReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        loadReq.httpBody = try JSONEncoder().encode(
+            LoadBody(language: "en", allowFetch: false)
+        )
+        // Long timeout: the model takes ~1 s to load on M-series.
+        loadReq.timeoutInterval = 120
+        let (loadBody, loadResp) = try await URLSession.shared.data(
+            for: loadReq
+        )
+        XCTAssertEqual(
+            (loadResp as? HTTPURLResponse)?.statusCode, 200,
+            "Load failed: \(String(data: loadBody, encoding: .utf8) ?? "")"
+        )
+
+        // 2) Batch transcription.
+        struct BatchBody: Encodable {
+            let samples: [Float]
+            let language: String
+        }
+        var batchReq = URLRequest(
+            url: baseURL.appendingPathComponent("/v1/stt/batch")
+        )
+        batchReq.httpMethod = "POST"
+        batchReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        batchReq.httpBody = try JSONEncoder().encode(
+            BatchBody(samples: pcm, language: "en")
+        )
+        batchReq.timeoutInterval = 60
+        let (batchBody, batchResp) = try await URLSession.shared.data(
+            for: batchReq
+        )
+        XCTAssertEqual((batchResp as? HTTPURLResponse)?.statusCode, 200)
+        let decoded = try JSONDecoder().decode(
+            BatchSTTResponse.self, from: batchBody
+        )
+        XCTAssertEqual(
+            decoded.text, reference.transcriptionText,
+            "Qwen3 batch transcription diverged from Phase 4 reference"
+        )
+        XCTAssertEqual(decoded.language, "en")
     }
 }
