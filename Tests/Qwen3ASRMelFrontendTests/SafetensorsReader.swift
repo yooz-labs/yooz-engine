@@ -56,9 +56,9 @@ enum SafetensorsReader {
         let payload: Data
 
         /// Read a `Float32` tensor by name, validating shape if given.
-        func float32(_ name: String, expectedShape: [Int]? = nil) throws
-            -> (values: [Float], shape: [Int])
-        {
+        func float32(
+            _ name: String, expectedShape: [Int]? = nil
+        ) throws -> (values: [Float], shape: [Int]) {
             guard let entry = entries[name] else {
                 throw Error.missingTensor(name)
             }
@@ -92,9 +92,9 @@ enum SafetensorsReader {
         }
 
         /// Read an `Int32` tensor by name.
-        func int32(_ name: String, expectedShape: [Int]? = nil) throws
-            -> (values: [Int32], shape: [Int])
-        {
+        func int32(
+            _ name: String, expectedShape: [Int]? = nil
+        ) throws -> (values: [Int32], shape: [Int]) {
             guard let entry = entries[name] else {
                 throw Error.missingTensor(name)
             }

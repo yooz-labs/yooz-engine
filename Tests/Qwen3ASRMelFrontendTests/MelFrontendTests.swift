@@ -255,6 +255,69 @@ final class MelFrontendTests: XCTestCase {
         }
     }
 
+    func testStreamingSessionClosedAfterFinish() throws {
+        // After `finish()` the session is single-shot: subsequent
+        // `push` and a second `finish` must throw, not silently
+        // produce a stale `MelFeatures` from the previous run.
+        let frontend = MelFrontend()
+        let session = frontend.makeStreamingSession()
+        let chunk = [Float](repeating: 0.1, count: 16_000)
+        _ = try session.push(pcm: chunk, sampleRate: 16_000)
+        _ = try session.finish()
+
+        XCTAssertThrowsError(
+            try session.push(pcm: chunk, sampleRate: 16_000)
+        ) { error in
+            XCTAssertEqual(
+                error as? MelFrontendError, .streamingSessionClosed
+            )
+        }
+        XCTAssertThrowsError(try session.finish()) { error in
+            XCTAssertEqual(
+                error as? MelFrontendError, .streamingSessionClosed
+            )
+        }
+    }
+
+    func testStreamingSessionRejectsEmptyOnFinish() throws {
+        // A session that never received any samples must surface
+        // `emptyInput` on finish, not produce all-silence mel features
+        // (which the encoder would silently accept).
+        let frontend = MelFrontend()
+        let session = frontend.makeStreamingSession()
+        XCTAssertThrowsError(try session.finish()) { error in
+            XCTAssertEqual(error as? MelFrontendError, .emptyInput)
+        }
+    }
+
+    func testFrontendInstanceCanProcessMultipleUtterances() throws {
+        // Frontend caches the Hann window + DFT bases at init; verify
+        // those caches are reusable across calls and don't accumulate
+        // any per-utterance state.
+        let frontend = MelFrontend()
+        var utterance1 = [Float](repeating: 0, count: 8_000)
+        var utterance2 = [Float](repeating: 0, count: 8_000)
+        for i in 0..<8_000 {
+            let t = Float(i) / 16_000.0
+            utterance1[i] = sin(2.0 * .pi * 440.0 * t)
+            utterance2[i] = sin(2.0 * .pi * 880.0 * t)
+        }
+        let r1a = try frontend.computeFeatures(
+            pcm: utterance1, sampleRate: 16_000
+        )
+        let r2 = try frontend.computeFeatures(
+            pcm: utterance2, sampleRate: 16_000
+        )
+        let r1b = try frontend.computeFeatures(
+            pcm: utterance1, sampleRate: 16_000
+        )
+        // Same input twice -> bit-identical output.
+        XCTAssertEqual(r1a.features, r1b.features)
+        XCTAssertEqual(r1a.attentionMask, r1b.attentionMask)
+        // Different input -> different output (sanity).
+        XCTAssertNotEqual(r1a.features, r2.features)
+    }
+
     func testHandlesSubFrameInput() throws {
         // Audio shorter than a single frame: Whisper pads to 30 s with
         // zeros, so the mel frontend is just running on a 480k-sample
@@ -269,10 +332,18 @@ final class MelFrontendTests: XCTestCase {
         )
         XCTAssertEqual(result.numTotalFrames, 3000)
         XCTAssertEqual(result.numValidFrames, 0)  // 100 / 160 == 0
-        // No NaN/Inf anywhere.
+        // No NaN/Inf anywhere, and bounded to the post-normalisation
+        // window. After `(log_spec + 4)/4` with log_spec clipped to
+        // `[log_max - 8, log_max]`, the output range is exactly
+        // `[(log_max - 4)/4, (log_max + 4)/4]`. For tiny inputs
+        // log_max is small (close to log10(mel_floor) = -10), so the
+        // window collapses to roughly [-1.5, +1.0]; bound a touch
+        // wider for safety.
         for v in result.features {
             XCTAssertFalse(v.isNaN, "mel value NaN on sub-frame input")
             XCTAssertFalse(v.isInfinite, "mel value inf on sub-frame input")
+            XCTAssertGreaterThan(v, -2.0)
+            XCTAssertLessThan(v, 2.0)
         }
     }
 

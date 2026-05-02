@@ -5,8 +5,10 @@ import Foundation
 public enum MelFrontendError: Error, CustomStringConvertible, Equatable {
     case unsupportedSampleRate(actual: Int, expected: Int)
     case emptyInput
-    case streamingChunkTooSmall(samples: Int, frameLength: Int)
-    case streamingNotStarted
+    /// `push` or `finish` was called on a streaming session that has
+    /// already produced its output. Sessions are single-shot; create a
+    /// new one with `MelFrontend.makeStreamingSession()` to continue.
+    case streamingSessionClosed
 
     public var description: String {
         switch self {
@@ -16,11 +18,7 @@ public enum MelFrontendError: Error, CustomStringConvertible, Equatable {
                 + " Resample upstream — the Qwen3-ASR audio tower was trained on 16 kHz."
         case .emptyInput:
             return "MelFrontend cannot process zero-sample audio."
-        case .streamingChunkTooSmall(let samples, let frameLength):
-            return
-                "MelFrontend streaming chunk has \(samples) samples but frame_length is"
-                + " \(frameLength); call `finish()` to flush the partial buffer or feed more samples."
-        case .streamingNotStarted:
+        case .streamingSessionClosed:
             return
                 "MelFrontend streaming session has been finished; create a new one to continue."
         }
@@ -123,20 +121,27 @@ public struct MelFrontendConfig: Sendable, Equatable {
 /// numpy path) on which the Qwen3-ASR audio tower was trained. The
 /// `MelFrontendTests` parity gate enforces a max-abs-delta of 1e-4
 /// against the reference dump on multiple clips (silence, synthetic
-/// speech, synthetic music, real recorded speech).
+/// speech, synthetic music, real recorded speech); measured deltas
+/// land at ~2.4e-7 (single-precision unit roundoff) once the float64
+/// STFT lands in float32 mel power.
 ///
 /// Implementation notes:
-///   - The DFT is implemented as a precomputed real cosine / sine
-///     basis multiplied against the windowed frames via
-///     `cblas_sgemm`. This matches `np.fft.rfft` to single-precision
-///     within the parity bar and avoids both the vDSP_DFT length
-///     restriction (length 400 is not a supported radix) and the
-///     accuracy risk of an ad-hoc Bluestein implementation. For 30 s
-///     of audio the matmul is ~1.2 GFLOP — comfortably real-time on
-///     Apple Silicon.
+///   - The DFT is implemented as two precomputed real cosine / sine
+///     bases multiplied against the windowed frames via `cblas_dgemm`
+///     (double-precision GEMM). vDSP_DFT does not support length 400
+///     (not a `f * 2^n` radix with f in {1, 3, 5, 15}), and an ad-hoc
+///     Bluestein wrapper would add review surface for no measured
+///     accuracy gain. The double-precision matmul mirrors the numpy
+///     reference exactly: rfft + |X|^2 are float64 and only the final
+///     mel power is narrowed to float32.
 ///   - The Hann window is the *periodic* variant
 ///     (`np.hanning(N+1)[:-1]`), not the symmetric one — Whisper's
 ///     `window_function("hann", periodic=True)` default.
+///   - The waveform is centered with reflect-padding by
+///     `frameLength / 2` samples on each side
+///     (`spectrogram(center=True, pad_mode="reflect")`). This is what
+///     produces 3001 STFT frames out of 480 000 padded samples; the
+///     last frame is dropped to land on the encoder's expected 3000.
 ///   - `.max() - 8.0` clipping is computed per utterance over the
 ///     padded log-mel grid, exactly as the reference numpy path does.
 public final class MelFrontend: Sendable {
@@ -196,9 +201,10 @@ public final class MelFrontend: Sendable {
         // DFT basis in float64. The numpy reference promotes the
         // waveform + window to float64 before running rfft, then casts
         // the final mel output back to float32. Mirroring that order
-        // (float64 STFT, float32 mel projection + log clip) keeps the
-        // worst-case mel parity at ~5e-6 even for broadband real-world
-        // clips where many bins cancel.
+        // (float64 STFT, float32 mel projection + log clip) puts the
+        // measured mel parity at ~2.4e-7 max-abs across silence /
+        // synthetic-speech / synthetic-music / real-speech clips —
+        // single-precision unit roundoff after the float32 cast.
         let bins = numFrequencyBins
         var cosD = [Double](repeating: 0.0, count: N * bins)
         var sinD = [Double](repeating: 0.0, count: N * bins)
@@ -292,6 +298,11 @@ public final class MelFrontend: Sendable {
         //    `computeFeatures` call, so the same buffer applies.
         let numFrames =
             (centeredLength - frameLength) / hopLength + 1
+        let layout = FrameLayout(
+            numFrames: numFrames,
+            frameLength: frameLength,
+            hopLength: hopLength
+        )
         var frames = [Double](
             repeating: 0.0, count: numFrames * frameLength
         )
@@ -299,29 +310,30 @@ public final class MelFrontend: Sendable {
             input: centered,
             output: &frames,
             window: windowDouble,
-            numFrames: numFrames,
-            frameLength: frameLength,
-            hopLength: hopLength
+            layout: layout
         )
 
         // 4) Real DFT via two double-precision GEMMs, then power
         //    spectrum (Re^2 + Im^2) materialised as float32. This
         //    mirrors the numpy reference, which runs the rfft and the
         //    `np.abs(...)**2` step in float64 before casting.
+        //    `power` shape: (numFrames, numFrequencyBins).
         var power = [Float](
             repeating: 0.0, count: numFrames * numFrequencyBins
         )
         Self.realPowerSpectrogram(
-            frames: frames,
-            cosBasis: cosBasis,
-            sinBasis: sinBasis,
-            power: &power,
-            numFrames: numFrames,
-            frameLength: frameLength,
-            numFrequencyBins: numFrequencyBins
+            inputs: STFTInputs(
+                frames: frames,
+                cosBasis: cosBasis,
+                sinBasis: sinBasis,
+                numFrames: numFrames,
+                frameLength: frameLength,
+                numFrequencyBins: numFrequencyBins
+            ),
+            power: &power
         )
 
-        // 4) Drop the last frame. Reference: `log_spec[:, :-1]` after
+        // 5) Drop the last frame. Reference: `log_spec[:, :-1]` after
         //    log-mel. Equivalent (and cheaper) to drop here, before the
         //    mel projection runs.
         let numKeptFrames = numFrames - 1
@@ -330,7 +342,7 @@ public final class MelFrontend: Sendable {
             "Internal invariant: kept frame count must match config.numTotalFrames"
         )
 
-        // 5) Mel projection: melPower = power[:, :-1].T @ filters^T,
+        // 6) Mel projection: melPower = filters @ power[:keepFrames].T,
         //    laid out as `(numMelFilters, numKeptFrames)` to match the
         //    Whisper output shape `(num_mel_filters, num_frames)`.
         var melPower = [Float](
@@ -339,19 +351,18 @@ public final class MelFrontend: Sendable {
         )
         Self.applyMelFilters(
             power: power,
-            numFrames: numFrames,           // full STFT frame count
-            keepFrames: numKeptFrames,      // first numKeptFrames are kept
+            keepFrames: numKeptFrames,
             numFrequencyBins: numFrequencyBins,
             filterBank: filterBank,
             melPower: &melPower
         )
 
-        // 6) Floor at mel_floor = 1e-10, log10, max(log_spec, log_spec.max() - 8), (x+4)/4.
+        // 7) Floor at mel_floor = 1e-10, log10, max(log_spec, log_spec.max() - 8), (x+4)/4.
         Self.logFloorAndNormalise(
             melPower: &melPower
         )
 
-        // 7) Build attention mask (num_real_frames = len(pcm) // hop).
+        // 8) Build attention mask (num_real_frames = len(pcm) // hop).
         //    Reference: `mask[: len(audio) // hop_length] = 1`.
         //    For the standard case `len(audio) == nSamples` this is
         //    `nSamples / hop = numTotalFrames` (entire mask is 1).
@@ -400,7 +411,7 @@ public final class MelFrontend: Sendable {
                 )
             }
             guard !finished else {
-                throw MelFrontendError.streamingNotStarted
+                throw MelFrontendError.streamingSessionClosed
             }
             buffer.append(contentsOf: pcm)
             totalSamples += pcm.count
@@ -420,7 +431,7 @@ public final class MelFrontend: Sendable {
         /// throw `streamingNotStarted`.
         public func finish() throws -> MelFeatures {
             guard !finished else {
-                throw MelFrontendError.streamingNotStarted
+                throw MelFrontendError.streamingSessionClosed
             }
             guard totalSamples > 0 else {
                 throw MelFrontendError.emptyInput
@@ -500,6 +511,17 @@ public final class MelFrontend: Sendable {
         }
     }
 
+    /// Frame layout shared between the windowing and STFT helpers.
+    /// Bundling these scalars keeps the helper signatures under
+    /// SwiftLint's parameter-count limit and makes the relationship
+    /// (`numFrames × frameLength` row-major buffer, hop = `hopLength`)
+    /// explicit at every call site.
+    struct FrameLayout {
+        let numFrames: Int
+        let frameLength: Int
+        let hopLength: Int
+    }
+
     /// Build the windowed-frame matrix in float64.
     /// `output[f, n] = (Double)input[f * hopLength + n] * window[n]`.
     /// Promoting to float64 before windowing matches the reference
@@ -509,15 +531,13 @@ public final class MelFrontend: Sendable {
         input: [Float],
         output: inout [Double],
         window: [Double],
-        numFrames: Int,
-        frameLength: Int,
-        hopLength: Int
+        layout: FrameLayout
     ) {
         precondition(
-            output.count == numFrames * frameLength,
+            output.count == layout.numFrames * layout.frameLength,
             "output buffer must be (numFrames, frameLength)"
         )
-        precondition(window.count == frameLength)
+        precondition(window.count == layout.frameLength)
         input.withUnsafeBufferPointer { inputPtr in
             window.withUnsafeBufferPointer { windowPtr in
                 output.withUnsafeMutableBufferPointer { outputPtr in
@@ -526,28 +546,38 @@ public final class MelFrontend: Sendable {
                         let winBase = windowPtr.baseAddress,
                         let outBase = outputPtr.baseAddress
                     else { return }
-                    for f in 0..<numFrames {
-                        let frameStart = f * hopLength
-                        let dstStart = f * frameLength
+                    for f in 0..<layout.numFrames {
+                        let frameStart = f * layout.hopLength
+                        let dstStart = f * layout.frameLength
                         // 1. Promote frame to Float64 in-place at the
                         //    output slot, then multiply by the window.
                         //    `vDSP_vspdp` widens float32 -> float64.
                         vDSP_vspdp(
                             inBase.advanced(by: frameStart), 1,
                             outBase.advanced(by: dstStart), 1,
-                            vDSP_Length(frameLength)
+                            vDSP_Length(layout.frameLength)
                         )
                         // 2. out[f, :] *= window
                         vDSP_vmulD(
                             outBase.advanced(by: dstStart), 1,
                             winBase, 1,
                             outBase.advanced(by: dstStart), 1,
-                            vDSP_Length(frameLength)
+                            vDSP_Length(layout.frameLength)
                         )
                     }
                 }
             }
         }
+    }
+
+    /// Inputs to the real-input power spectrogram kernel.
+    struct STFTInputs {
+        let frames: [Double]      // (numFrames, frameLength) row-major
+        let cosBasis: [Double]    // (frameLength, numFrequencyBins) row-major
+        let sinBasis: [Double]    // same shape as cosBasis
+        let numFrames: Int
+        let frameLength: Int
+        let numFrequencyBins: Int
     }
 
     /// Compute the real-input power spectrogram via two DGEMMs and
@@ -557,14 +587,15 @@ public final class MelFrontend: Sendable {
     /// at the end. This matches the numpy reference path
     /// (`np.abs(spectrogram) ** 2` runs in float64).
     static func realPowerSpectrogram(
-        frames: [Double],
-        cosBasis: [Double],
-        sinBasis: [Double],
-        power: inout [Float],
-        numFrames: Int,
-        frameLength: Int,
-        numFrequencyBins: Int
+        inputs: STFTInputs,
+        power: inout [Float]
     ) {
+        let frames = inputs.frames
+        let cosBasis = inputs.cosBasis
+        let sinBasis = inputs.sinBasis
+        let numFrames = inputs.numFrames
+        let frameLength = inputs.frameLength
+        let numFrequencyBins = inputs.numFrequencyBins
         precondition(power.count == numFrames * numFrequencyBins)
         let total = numFrames * numFrequencyBins
         var realPart = [Double](repeating: 0.0, count: total)
@@ -646,10 +677,11 @@ public final class MelFrontend: Sendable {
     /// `melPower[m, t] = max(mel_floor, sum_k filters[m, k] * power[t, k])`
     /// for `t = 0..<keepFrames`. Numerically equivalent to
     /// `np.maximum(mel_floor, mel_filters.T @ power[:, :keep])` in the
-    /// reference numpy path.
+    /// reference numpy path. The `power` buffer may be larger than
+    /// `keepFrames` rows (caller drops trailing frames); only the first
+    /// `keepFrames` rows are read.
     static func applyMelFilters(
         power: [Float],
-        numFrames: Int,
         keepFrames: Int,
         numFrequencyBins: Int,
         filterBank: MelFilterBank,
