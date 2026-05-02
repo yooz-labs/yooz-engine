@@ -18,8 +18,11 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
     case qwen3ASRPreview = "qwen3_asr_preview"
 
     /// Whether this backend currently exposes a streaming endpoint.
-    /// `qwen3_asr_preview` returns false for Phase 5; streaming lands
-    /// in Phase 7 (issue #58).
+    /// All four backends now stream over `WS /v1/stt/stream`. The
+    /// `qwen3_asr_preview` path was added in Phase 7 (issue #61); its
+    /// "partial" frames are heartbeats — the model's non-causal
+    /// encoder produces text only on `final` — but the protocol
+    /// surface is the same as Parakeet / FastConformer.
     public var supportsStreaming: Bool {
         switch self {
         case .parakeet, .fastConformer:
@@ -27,7 +30,7 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
         case .appleSTT:
             true
         case .qwen3ASRPreview:
-            false
+            true
         }
     }
 
