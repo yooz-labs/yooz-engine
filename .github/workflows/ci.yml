@@ -52,3 +52,57 @@ jobs:
 
       - name: Test
         run: swift test
+
+  engine-app:
+    name: Engine App Build + Test
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # mlx-swift Metal kernels need the Xcode Metal toolchain. Cache it
+      # because download is ~1 GB and slow on a cold runner. See
+      # PR #50 / DECISION.md for the original spike.
+      - name: Cache Metal Toolchain
+        id: cache-metal
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/MetalToolchains
+          key: metal-toolchain-${{ runner.os }}-xcode-26.2
+
+      - name: Download Metal Toolchain
+        if: steps.cache-metal.outputs.cache-hit != 'true'
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # `MLXHuggingFaceMacros` (the `#huggingFaceTokenizerLoader` macro) is an
+      # external Swift macro. CLI / non-interactive xcodebuild needs
+      # `-skipMacroValidation` to bypass the per-machine trust prompt.
+      - name: Build engine app
+        run: |
+          xcodebuild \
+            -project YoozEngine.xcodeproj \
+            -scheme YoozEngine \
+            -configuration Debug \
+            -skipMacroValidation \
+            -destination 'platform=macOS' \
+            build
+
+      - name: Run engine unit tests
+        run: |
+          xcodebuild \
+            -project YoozEngine.xcodeproj \
+            -scheme YoozEngine \
+            -configuration Debug \
+            -skipMacroValidation \
+            -destination 'platform=macOS' \
+            test
