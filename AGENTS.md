@@ -60,9 +60,34 @@ yooz-engine/
 
 ```bash
 xcodegen generate
-xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine -configuration Debug build
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
+  -configuration Debug -skipMacroValidation build
 open build/Debug/Yooz\ Engine.app
 curl http://localhost:19920/v1/health
+```
+
+`-skipMacroValidation` is required from the CLI because `MLXHuggingFaceMacros`
+(used by `#huggingFaceTokenizerLoader`) is an external Swift macro that Xcode
+otherwise prompts to trust on first run. The Xcode UI handles this prompt; CLI
+and CI builds need the flag. CI sets it automatically (see
+`.github/workflows/ci.yml`).
+
+### Running tests
+
+```bash
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
+  -configuration Debug -skipMacroValidation \
+  -destination 'platform=macOS' test
+```
+
+The TurboQuant live integration test is gated behind `KVCOMPRESSION_LIVE=1`
+so CI does not need the Qwen3-1.7B weights cached. To run it locally with a
+cached model:
+
+```bash
+KVCOMPRESSION_LIVE=1 xcodebuild -project YoozEngine.xcodeproj \
+  -scheme YoozEngine -skipMacroValidation \
+  -destination 'platform=macOS' test
 ```
 
 ## API
