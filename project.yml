@@ -90,8 +90,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.tests
     dependencies:
       - target: YoozEngine
-      - package: hummingbird
-        product: HummingbirdTesting
 
 schemes:
   YoozEngine:
