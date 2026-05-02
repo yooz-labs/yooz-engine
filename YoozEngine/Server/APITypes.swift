@@ -115,11 +115,31 @@ struct WSSTTResult: Encodable {
 struct WSSTTError: Encodable {
     let type: String  // "error"
     let message: String
+    /// Stable error code so clients can branch without parsing
+    /// `message`. Optional to keep the wire format backward-
+    /// compatible with older consumers.
+    let code: String?
+
+    init(type: String, message: String, code: String? = nil) {
+        self.type = type
+        self.message = message
+        self.code = code
+    }
 }
 
 struct WSSTTReady: Encodable {
     let type: String  // "ready"
     let language: String
+}
+
+/// One-shot non-fatal warning frame. Used when the engine wants to
+/// keep the stream alive but signal a soft-capacity event (e.g. the
+/// session buffer cap was reached and additional audio is being
+/// dropped).
+struct WSSTTWarning: Encodable {
+    let type: String  // "warning"
+    let code: String
+    let message: String
 }
 
 // MARK: - LLM Types

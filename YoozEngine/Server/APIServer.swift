@@ -131,6 +131,64 @@ final class APIServer: ObservableObject {
         )
     }
 
+    /// Map a Qwen3-ASR backend error to the right HTTP error
+    /// response. Mirrors the parakeet/fast_conformer error mapping
+    /// so clients get a consistent shape across backends.
+    private nonisolated func mapQwen3BatchError(
+        _ error: Qwen3ASRError
+    ) -> Response {
+        switch error {
+        case .invalidInput(let detail):
+            return errorResponse(
+                status: .badRequest,
+                message: detail,
+                code: "invalid_input"
+            )
+        case .invalidConfig(let detail):
+            return errorResponse(
+                status: .internalServerError,
+                message: "Qwen3 config invalid: \(detail)",
+                code: "model_config_invalid"
+            )
+        case .pipelineNotLoaded:
+            return errorResponse(
+                status: .serviceUnavailable,
+                message:
+                    "Qwen3 pipeline is not loaded; call /v1/stt/load "
+                    + "before /v1/stt/batch.",
+                code: "pipeline_not_loaded"
+            )
+        case .fileNotFound, .noAudioTowerWeights:
+            return errorResponse(
+                status: .serviceUnavailable,
+                message: error.description,
+                code: "model_not_loaded"
+            )
+        case .malformedSafetensors,
+             .missingTensor,
+             .shapeMismatch,
+             .dtypeMismatch,
+             .unexpectedTensor:
+            return errorResponse(
+                status: .internalServerError,
+                message: error.description,
+                code: "model_load_failed"
+            )
+        case .fetchFailed:
+            return errorResponse(
+                status: .badGateway,
+                message: error.description,
+                code: "model_fetch_failed"
+            )
+        case .tokenizerValidationFailed(let detail):
+            return errorResponse(
+                status: .internalServerError,
+                message: detail,
+                code: "tokenizer_validation_failed"
+            )
+        }
+    }
+
     private nonisolated func parseLanguage(_ code: String?) throws -> STTLanguage {
         let languageCode = code ?? "en"
         guard let language = STTLanguage.fromCode(languageCode) else {
@@ -579,10 +637,20 @@ final class APIServer: ObservableObject {
             // response, not silent emptiness.
             let result: ParakeetResult
             if sttEngine.currentBackend == .qwen3ASRPreview {
-                result = await sttEngine.batchTranscribeQwen3(
-                    samples: body.samples,
-                    language: language
-                )
+                do {
+                    result = try await sttEngine.batchTranscribeQwen3Throwing(
+                        samples: body.samples,
+                        language: language
+                    )
+                } catch let asrError as Qwen3ASRError {
+                    return mapQwen3BatchError(asrError)
+                } catch {
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: error.localizedDescription,
+                        code: "transcription_failed"
+                    )
+                }
             } else {
                 result = await sttEngine.batchTranscribe(
                     samples: body.samples, mode: mode
@@ -605,6 +673,13 @@ final class APIServer: ObservableObject {
     private func buildWebSocketRouter() -> Router<BasicWebSocketRequestContext> {
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         let sttLogger = Logger(label: "live.yooz.engine.stt.stream")
+        // One sink instance per server lifetime — file handle stays
+        // owned by the actor. Per-request sinks would race on the
+        // file URL and confuse lifecycle ("is this sink alive?").
+        let metricsSink: any STTMetricsSink = makeSTTMetricsSink(
+            optedIn: EngineConfig.telemetryOptedIn,
+            fileURL: EngineConfig.sttMetricsFileURL
+        )
 
         wsRouter.ws("/v1/stt/stream") { inbound, outbound, context in
             let sttEngine = YoozSTTEngine.shared
@@ -617,6 +692,11 @@ final class APIServer: ObservableObject {
             // emitted on `final`. Set when the qwen3 session is
             // configured (matches "stream start" semantics).
             var qwen3StreamStartedMs: UInt64?
+            // True once we've sent the buffer-cap warning frame.
+            // The frame is one-shot per connection so a long
+            // dictation past the cap doesn't flood the client with
+            // identical warnings.
+            var qwen3BufferCapWarned = false
             let encoder = JSONEncoder()
 
             // Encode a WSSTTResult to JSON and send via WebSocket
@@ -633,10 +713,18 @@ final class APIServer: ObservableObject {
                 }
             }
 
-            // Send a JSON-encoded error message to the client
-            func sendError(_ message: String) async {
+            // Send a JSON-encoded error message to the client.
+            // `code` is a stable identifier the client can branch on
+            // (e.g. `protocol`, `stream_aborted`) without parsing
+            // `message`. Best-effort: if the connection has already
+            // gone, this is a no-op.
+            func sendError(_ message: String, code: String? = nil) async {
                 do {
-                    let json = try encoder.encode(WSSTTError(type: "error", message: message))
+                    let json = try encoder.encode(
+                        WSSTTError(
+                            type: "error", message: message, code: code
+                        )
+                    )
                     guard let jsonStr = String(data: json, encoding: .utf8) else { return }
                     try await outbound.write(.text(jsonStr))
                 } catch {
@@ -644,10 +732,69 @@ final class APIServer: ObservableObject {
                 }
             }
 
+            // Send a one-shot non-fatal warning frame.
+            func sendWarning(code: String, message: String) async {
+                do {
+                    let json = try encoder.encode(
+                        WSSTTWarning(
+                            type: "warning",
+                            code: code,
+                            message: message
+                        )
+                    )
+                    guard let jsonStr = String(data: json, encoding: .utf8) else { return }
+                    try await outbound.write(.text(jsonStr))
+                } catch {
+                    sttLogger.error("Failed to send warning: \(error)")
+                }
+            }
+
+            // Build a Qwen3 telemetry record. `audioMs` is the
+            // amount of audio actually consumed by the session
+            // (post-cap if truncation happened). `errored` flips
+            // when the stream tore down via an exception path so
+            // dashboards can distinguish clean closes from drops.
+            func buildQwen3Metric(
+                audioMs: UInt32, fellBack: Bool, errored: Bool
+            ) -> STTBackendMetrics {
+                let endMs = DispatchTime.now().uptimeNanoseconds / 1_000_000
+                let elapsed: UInt32
+                if let started = qwen3StreamStartedMs {
+                    elapsed = UInt32(min(endMs &- started, UInt64(UInt32.max)))
+                } else {
+                    elapsed = 0
+                }
+                let variant = STTBackendMetrics.defaultModelVariant(
+                    for: .qwen3ASRPreview
+                )
+                let taggedVariant = errored
+                    ? "\(variant)+stream_aborted"
+                    : variant
+                return STTBackendMetrics(
+                    backend: .qwen3ASRPreview,
+                    modelVariant: taggedVariant,
+                    audioDurationMs: audioMs,
+                    timeToFirstTokenMs: nil,
+                    endToEndLatencyMs: elapsed,
+                    hardwareClass: SystemHardwareClassResolver().resolve(),
+                    fellBackFromPreview: fellBack,
+                    timestampUTC: Date()
+                )
+            }
+
             sttLogger.info("STT WebSocket client connected")
 
-            // Use message-level API to handle fragmented frames automatically
-            // Max message size: 10MB (enough for ~2.7 min of 16kHz Float32 audio)
+            // Use message-level API to handle fragmented frames automatically.
+            // Max message size: 10MB (enough for ~2.7 min of 16kHz Float32 audio).
+            //
+            // We wrap the loop in do/catch so a thrown error inside
+            // `inbound.messages(...)` (oversized frame, abrupt
+            // disconnect mid-frame, framer decode error) does NOT
+            // bypass the cleanup block below — without this, the
+            // qwen3 session never gets `discard()`-ed, no telemetry
+            // record fires, and the audio buffer (up to ~19 MB at
+            // the 5-min cap) lingers on the actor's executor.
+            do {
             for try await message in inbound.messages(maxSize: 10 * 1024 * 1024) {
                 switch message {
                 case .text(let text):
@@ -788,18 +935,43 @@ final class APIServer: ObservableObject {
                     }
 
                     if let session = qwen3Session {
+                        let beforeTotal = await session.bufferedSampleCount
                         do {
                             _ = try await session.push(samples: samples)
                         } catch let sessionError as Qwen3ASRStreamingSession.SessionError {
                             await sendError(
-                                "Streaming session error: \(sessionError.description)"
+                                "Streaming session error: \(sessionError.description)",
+                                code: "session_error"
                             )
                             continue
                         } catch {
                             await sendError(
-                                "Streaming session error: \(error.localizedDescription)"
+                                "Streaming session error: \(error.localizedDescription)",
+                                code: "session_error"
                             )
                             continue
+                        }
+                        // Detect a buffer-cap hit: push() silently
+                        // truncates past the soft cap and returns
+                        // the same total. Fire a one-shot warning
+                        // frame the first time it happens so the
+                        // client can surface "audio after Nm
+                        // discarded" without us spamming on every
+                        // subsequent receive.
+                        let afterTotal = await session.bufferedSampleCount
+                        if !qwen3BufferCapWarned
+                            && afterTotal == beforeTotal
+                        {
+                            qwen3BufferCapWarned = true
+                            await sendWarning(
+                                code: "buffer_cap_reached",
+                                message:
+                                    "Audio buffer reached the streaming "
+                                    + "cap. Additional audio is being "
+                                    + "discarded. The transcript on "
+                                    + "`final` reflects the buffered "
+                                    + "audio only."
+                            )
                         }
                         // Heartbeat partial — qwen3's streaming model
                         // doesn't expose intermediate text without a
@@ -829,8 +1001,57 @@ final class APIServer: ObservableObject {
                     ))
                 }
             }
+            } catch is CancellationError {
+                // Outer Task was cancelled (server stop, peer
+                // dropped, etc.). Run the same cleanup as a clean
+                // disconnect so the qwen3 session is `discard()`-ed
+                // and a metric record fires with the audio actually
+                // consumed before the cancel.
+                if let session = qwen3Session {
+                    let audioMs = await session.audioDurationMs
+                    await session.discard()
+                    qwen3Session = nil
+                    let metric = buildQwen3Metric(
+                        audioMs: audioMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
+                }
+                sttLogger.info("STT WebSocket cancelled")
+                throw CancellationError()
+            } catch {
+                // The message loop threw — oversized frame past the
+                // 10 MB cap, abrupt connection drop with a partial
+                // frame in flight, framer decode error. Run the
+                // qwen3 session cleanup we would otherwise miss,
+                // emit one error frame to the client (best-effort),
+                // and emit a metric record so dashboards see the
+                // drop rate.
+                sttLogger.error(
+                    "STT WebSocket loop threw: \(String(describing: error))"
+                )
+                await sendError(
+                    "Stream aborted: \(error.localizedDescription)",
+                    code: "stream_aborted"
+                )
+                if let session = qwen3Session {
+                    let audioMs = await session.audioDurationMs
+                    await session.discard()
+                    qwen3Session = nil
+                    let metric = buildQwen3Metric(
+                        audioMs: audioMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
+                }
+                sttLogger.info("STT WebSocket client disconnected (error)")
+                return
+            }
 
-            // Client disconnected; finalize whichever session is active.
+            // Client disconnected cleanly; finalize whichever
+            // session is active.
             if let session = qwen3Session {
                 do {
                     let final = try await session.finalize()
@@ -840,33 +1061,16 @@ final class APIServer: ObservableObject {
                         finalized: final.text,
                         draft: ""
                     ))
-                    // Telemetry — opt-in via EngineConfig. The sink
-                    // discards the record when the user hasn't
-                    // enabled local telemetry.
-                    let endMs = DispatchTime.now().uptimeNanoseconds / 1_000_000
-                    let elapsed: UInt32
-                    if let started = qwen3StreamStartedMs {
-                        elapsed = UInt32(min(endMs &- started, UInt64(UInt32.max)))
-                    } else {
-                        elapsed = 0
-                    }
-                    let metric = STTBackendMetrics(
-                        backend: .qwen3ASRPreview,
-                        modelVariant: STTBackendMetrics.defaultModelVariant(
-                            for: .qwen3ASRPreview
-                        ),
-                        audioDurationMs: final.audioDurationMs,
-                        timeToFirstTokenMs: nil,
-                        endToEndLatencyMs: elapsed,
-                        hardwareClass: SystemHardwareClassResolver().resolve(),
-                        fellBackFromPreview: false,
-                        timestampUTC: Date()
+                    // Telemetry — opt-in via EngineConfig. The
+                    // hoisted sink lives for the server's lifetime;
+                    // a `DiscardingMetricsSink` swallows the record
+                    // when the user hasn't enabled local telemetry.
+                    let metric = buildQwen3Metric(
+                        audioMs: final.audioDurationMs,
+                        fellBack: false,
+                        errored: false
                     )
-                    let sink = makeSTTMetricsSink(
-                        optedIn: EngineConfig.telemetryOptedIn,
-                        fileURL: EngineConfig.sttMetricsFileURL
-                    )
-                    await sink.record(metric)
+                    await metricsSink.record(metric)
                 } catch Qwen3ASRStreamingSession.SessionError.empty {
                     // Client disconnected without sending audio. Emit
                     // an empty `final` for protocol symmetry.
@@ -881,15 +1085,29 @@ final class APIServer: ObservableObject {
                         "Qwen3 streaming finalize failed: \(sessionError.description)"
                     )
                     await sendError(
-                        "Streaming finalize failed: \(sessionError.description)"
+                        "Streaming finalize failed: \(sessionError.description)",
+                        code: "finalize_failed"
                     )
+                    let metric = buildQwen3Metric(
+                        audioMs: await session.audioDurationMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
                 } catch {
                     sttLogger.error(
                         "Qwen3 streaming finalize failed: \(error.localizedDescription)"
                     )
                     await sendError(
-                        "Streaming finalize failed: \(error.localizedDescription)"
+                        "Streaming finalize failed: \(error.localizedDescription)",
+                        code: "finalize_failed"
                     )
+                    let metric = buildQwen3Metric(
+                        audioMs: await session.audioDurationMs,
+                        fellBack: false,
+                        errored: true
+                    )
+                    await metricsSink.record(metric)
                 }
             } else if let transcriber = transcriber {
                 let finalResult = transcriber.finalize()
