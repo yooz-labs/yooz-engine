@@ -42,6 +42,22 @@ enum EngineConfig {
     /// build a fresh backend for that single call.
     static let kvCompression: KVCompressionMode = .off
 
+    /// Default STT backend resolved at startup. Driven by the
+    /// `YOOZ_STT_BACKEND` env var so dev and tests can flip the flag
+    /// without writing a config file. Unknown values fall back to
+    /// `.parakeet` rather than crashing.
+    static var sttBackend: STTBackendID {
+        guard
+            let raw = ProcessInfo.processInfo.environment[
+                "YOOZ_STT_BACKEND"
+            ],
+            let parsed = STTBackendID(rawValue: raw)
+        else {
+            return .parakeet
+        }
+        return parsed
+    }
+
     static let modelsDirectory: URL = {
         guard let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
