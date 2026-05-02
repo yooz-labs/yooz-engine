@@ -30,7 +30,7 @@ import Tokenizers
 ///     `tokenizer.json` to be present, so this branch typically
 ///     fails today; the failure is typed
 ///     (`tokenizerValidationFailed`) so operators see the issue at
-///     first-run rather than silently mis-tokenizing.
+///     first-run rather than silently producing wrong token IDs.
 ///
 /// We deliberately do NOT synthesize `tokenizer.json` ourselves:
 /// reverse-engineering the HF tokenizer schema is a maintenance trap
@@ -144,7 +144,7 @@ public enum Qwen3ASRTokenizerPrep {
     /// IDs match the captured Python reference. "Loaded without
     /// throwing" is not the same as "produces correct token IDs";
     /// this canary catches a future swift-transformers release that
-    /// silently mis-tokenizes the fallback inputs.
+    /// silently produces the wrong token IDs for the fallback inputs.
     ///
     /// Canary input: the literal string `"Hello"`. Captured against
     /// the canonical `mlx-community/Qwen3-ASR-1.7B-8bit` tokenizer
