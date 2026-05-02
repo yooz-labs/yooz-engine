@@ -34,6 +34,11 @@ actor MLXLLMBackend: LLMBackend {
 
     private let bundleIdentifier: String
 
+    /// KV cache compression mode for this backend instance. Defaults to
+    /// `EngineConfig.kvCompression`, which today is `.off` so there is no
+    /// behavioral change for existing call sites until a caller opts in.
+    private let kvCompression: KVCompressionMode
+
     #if canImport(MLXLMCommon)
     private var modelContainer: ModelContainer?
 
@@ -53,11 +58,13 @@ actor MLXLLMBackend: LLMBackend {
 
     init(
         modelType: LLMModelType,
-        bundleIdentifier: String = "live.yooz.engine"
+        bundleIdentifier: String = "live.yooz.engine",
+        kvCompression: KVCompressionMode = EngineConfig.kvCompression
     ) {
         self.identifier = modelType.rawValue
         self.modelType = modelType
         self.bundleIdentifier = bundleIdentifier
+        self.kvCompression = kvCompression
         self.downloader = ModelDownloader(bundleIdentifier: bundleIdentifier)
     }
 
@@ -201,6 +208,7 @@ actor MLXLLMBackend: LLMBackend {
             }
 
             phase = "generation"
+            let kvCompressionMode = self.kvCompression
             let (response, kvSnapshot): (String, [[MLXArray]]?) = try await container.perform { context in
                 // Create fresh KV cache and restore cached system prompt state if available
                 var cache = context.model.newCache(parameters: params)
@@ -209,6 +217,20 @@ actor MLXLLMBackend: LLMBackend {
                         cache[i].state = savedState[i]
                     }
                     eval(cache)
+                }
+
+                // TurboQuant KV cache compression (issue #10).
+                // When `kvCompression == .turbo3`, opt every per-layer
+                // `KVCacheSimple` into SharpAI's TurboKV path. The upstream
+                // class gates actual compression behind
+                // `turboMinActivationTokens` (default 2048), so short
+                // workloads (TouchUp / chat) stay on FP16. Layers that are
+                // not `KVCacheSimple` (Quantized/Rotating/Chunked) are left
+                // untouched; the as? cast is a no-op for them.
+                if kvCompressionMode == .turbo3 {
+                    for layer in cache {
+                        (layer as? KVCacheSimple)?.turboQuantEnabled = true
+                    }
                 }
 
                 // Generate using the lower-level API with our managed cache
