@@ -14,10 +14,12 @@ Models compared:
     qwen3_asr_1_7b_8    mlx-community/Qwen3-ASR-1.7B-8bit
 
 Audio: three calibrated clips at 2 s, 5 s, 15 s. The script slices them
-from /Volumes/S1/yooz/stt-test-data/english/test_001.wav (which is ~12 s)
-and a longer clip; if the longer clip is missing, it pads/loops the
-short one. For real benchmarks supply --audio-dir to point at any
-prepared 16 kHz mono wav directory.
+from --audio-source (default /Volumes/S1/yooz/stt-test-data/english/test_001.wav,
+which is ~12 s). If the source is shorter than 15 s, the clip is built
+by tiling the source until it covers 15 s. Tiled audio is repetitive
+and decodes more predictably than fresh speech, so 15 s numbers from
+a tiled source are a lower bound on real-utterance latency. To avoid
+tiling, point --audio-source at a >= 15 s 16 kHz mono wav.
 
 Outputs JSON per (model, clip) and a CSV summary into
 /Volumes/S1/yooz/research/issue-12/results/phase1_feasibility/.
@@ -75,6 +77,7 @@ class Sample:
     peak_rss_mb: float
     rtfx: float                    # audio_seconds / warm_median_seconds
     decoder_tokens: int
+    decoder_tokens_source: str     # "model" if reported, "fallback_words" if word-count proxy
     decoder_tok_per_sec: float
     text: str
 
@@ -110,17 +113,21 @@ def _peak_rss_mb() -> float:
     return proc.memory_info().rss / (1024**2)
 
 
-def _generate_once(model, audio_path: Path) -> tuple[str, int]:
-    """Run a single transcription. Returns (text, decoder_token_count)."""
+def _generate_once(model, audio_path: Path) -> tuple[str, int, str]:
+    """Run a single transcription.
+
+    Returns ``(text, decoder_token_count, tokens_source)`` where
+    ``tokens_source`` is ``"model"`` when the backend reports a real token
+    count and ``"fallback_words"`` when we proxy with word count (which can
+    diverge from real subword tokens by 2-4x; treat fallback rows as
+    rough order-of-magnitude only).
+    """
     out = model.generate(str(audio_path), verbose=False)
     text = getattr(out, "text", str(out)).strip()
-    # Try to read decoder tokens from common attribute names.
-    n_tok = (
-        getattr(out, "generation_tokens", None)
-        or getattr(out, "n_tokens", None)
-        or len(text.split())  # fallback approximation
-    )
-    return text, int(n_tok)
+    reported = getattr(out, "generation_tokens", None) or getattr(out, "n_tokens", None)
+    if reported is not None:
+        return text, int(reported), "model"
+    return text, len(text.split()), "fallback_words"
 
 
 def _bench_model(name: str, repo_id: str, clips: dict[str, Path], warm_iters: int):
@@ -140,15 +147,15 @@ def _bench_model(name: str, repo_id: str, clips: dict[str, Path], warm_iters: in
         gc.collect()
         rss_before = _peak_rss_mb()
         t0 = time.perf_counter()
-        text, tok = _generate_once(model, clip_path)
+        text, tok, tok_source = _generate_once(model, clip_path)
         cold = time.perf_counter() - t0
         rss_peak = _peak_rss_mb()
 
         warms = []
-        last_text, last_tok = text, tok
+        last_text, last_tok, last_source = text, tok, tok_source
         for _ in range(warm_iters):
             t0 = time.perf_counter()
-            last_text, last_tok = _generate_once(model, clip_path)
+            last_text, last_tok, last_source = _generate_once(model, clip_path)
             warms.append(time.perf_counter() - t0)
             rss_peak = max(rss_peak, _peak_rss_mb())
 
@@ -165,6 +172,7 @@ def _bench_model(name: str, repo_id: str, clips: dict[str, Path], warm_iters: in
             peak_rss_mb=rss_peak - rss_before,
             rtfx=dict(CLIPS)[clip_name] / median if median > 0 else float("nan"),
             decoder_tokens=last_tok,
+            decoder_tokens_source=last_source,
             decoder_tok_per_sec=last_tok / median if median > 0 else 0.0,
             text=last_text,
         )

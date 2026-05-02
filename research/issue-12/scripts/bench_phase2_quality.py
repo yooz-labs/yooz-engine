@@ -13,9 +13,13 @@ Runs the requested model(s) on every utterance, records hypothesis text,
 computes WER + CER with `jiwer` (with per-language text normalization),
 and writes both per-utterance JSON and a per-(dataset, model) summary.
 
-For Persian and Arabic, also runs the FastConformer baselines from
-/Volumes/S1/yooz/stt-models/fastconformer-{ar,fa}/ via mlx_audio (which
-already loads them in the existing yooz-stt-engine path).
+FastConformer-ar / FastConformer-fa keys exist in the MODELS table but
+were NOT run in this PR's benchmark pass: the production FastConformer
+checkpoints we ship are Swift-only (NeMo .nemo packaging consumed by
+mlx-audio's Swift port, not the Python API). A like-for-like Persian /
+Arabic comparison vs FastConformer requires running YoozEngine's HTTP
+service against the same 25-utterance sets and is filed as a follow-up
+in `results/phase2_quality/COMPARISON.md`.
 
 Usage:
     source /Volumes/S1/yooz/research/issue-12/.venv/bin/activate
@@ -171,11 +175,14 @@ def main() -> None:
         is_qwen = "qwen3_asr" in model_key
         hint = language if (is_qwen and args.language_hint) else None
         records: list[Hypothesis] = []
+        failures: list[dict] = []
         for utt in utterances:
             try:
                 hyp_text, secs = _generate_text(model, utt.audio_path, hint)
             except Exception as e:  # noqa: BLE001
-                print(f"  {utt.audio_path.name} FAILED: {e}")
+                msg = f"{type(e).__name__}: {e}"
+                print(f"  {utt.audio_path.name} FAILED: {msg}")
+                failures.append({"audio": utt.audio_path.name, "error": msg})
                 continue
             wer, cer = _wer_cer(utt.reference, hyp_text, language)
             records.append(
@@ -195,6 +202,17 @@ def main() -> None:
             for r in records:
                 f.write(json.dumps(asdict(r), ensure_ascii=False) + "\n")
 
+        if failures:
+            err_path = out_root / f"{model_key}.errors.jsonl"
+            with err_path.open("w") as f:
+                for entry in failures:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            print(
+                f"  WARN: {len(failures)}/{len(utterances)} utterances FAILED "
+                f"(see {err_path.name}); aggregates below cover "
+                f"{len(records)} succeeding utterances only."
+            )
+
         if records:
             agg = {
                 "dataset": args.dataset,
@@ -202,6 +220,8 @@ def main() -> None:
                 "model": model_key,
                 "repo": repo,
                 "n": len(records),
+                "n_failed": len(failures),
+                "n_total": len(utterances),
                 "wer_mean": sum(r.wer for r in records) / len(records),
                 "cer_mean": sum(r.cer for r in records) / len(records),
                 "rtf_mean": sum(r.inference_seconds for r in records) / len(records),
