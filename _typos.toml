@@ -3,6 +3,7 @@ extend-exclude = [
     "Vendor/",
     "*.xcframework",
     "*.mlpackage",
+    "text-cleanup/",
 ]
 
 [default.extend-words]
