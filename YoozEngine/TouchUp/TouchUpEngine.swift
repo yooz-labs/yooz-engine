@@ -160,12 +160,34 @@ actor TouchUpEngine {
     ///   - prompt: The user prompt
     ///   - systemPrompt: System prompt for the model
     ///   - modelType: Which model to use (defaults to light)
+    ///   - kvCompression: Optional per-request KV cache compression mode.
+    ///     When `nil`, the cached model uses `EngineConfig.kvCompression`
+    ///     (default `.off`). When non-nil and different from the cached
+    ///     model's mode, a temporary backend is constructed for this call
+    ///     so the cached model's prompt-cache state is preserved.
     /// - Returns: Generated text
     func generate(
         prompt: String,
         systemPrompt: String,
-        modelType: LLMModelType = .yoozLight
+        modelType: LLMModelType = .yoozLight,
+        kvCompression: KVCompressionMode? = nil
     ) async throws -> String {
+        // Per-request kvCompression override path: build a fresh backend
+        // with the requested mode rather than mutating the cached one.
+        // This is safe because backends are cheap to construct (the model
+        // weights live in `ModelContainer` which is loaded on `load()`).
+        if let override = kvCompression,
+           override != EngineConfig.kvCompression {
+            let backend = MLXLLMBackend.create(
+                for: modelType,
+                bundleIdentifier: bundleIdentifier,
+                kvCompression: override
+            )
+            try await backend.load()
+            defer { Task { await backend.unload() } }
+            return try await backend.generate(prompt: prompt, systemPrompt: systemPrompt)
+        }
+
         let model: MLXLLMBackend
 
         switch modelType {

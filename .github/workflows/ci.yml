@@ -52,3 +52,79 @@ jobs:
 
       - name: Test
         run: swift test
+
+  engine-app:
+    name: Engine App Build + Test
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Install Rust + cross targets
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          source "$HOME/.cargo/env"
+          rustup target add x86_64-apple-darwin
+
+      # The grammar engine ships as an XCFramework built from Rust source
+      # under `text-cleanup/`. The framework binary itself is gitignored
+      # (`Vendor/YoozTextCleanup/YoozTextCleanup.xcframework`), so CI must
+      # build it and stage it under `Vendor/YoozTextCleanup/` where the
+      # engine target expects to link it.
+      - name: Build YoozTextCleanup XCFramework
+        run: |
+          source "$HOME/.cargo/env"
+          cd text-cleanup
+          bash build-xcframework.sh
+          cd ..
+          mkdir -p Vendor/YoozTextCleanup
+          rm -rf Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+          cp -R text-cleanup/build/YoozTextCleanup.xcframework Vendor/YoozTextCleanup/
+          ls -la Vendor/YoozTextCleanup/
+
+      # mlx-swift Metal kernels need the Xcode Metal toolchain. Cache it
+      # because download is ~1 GB and slow on a cold runner. See
+      # PR #50 / DECISION.md for the original spike.
+      - name: Cache Metal Toolchain
+        id: cache-metal
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/MetalToolchains
+          key: metal-toolchain-${{ runner.os }}-xcode-26.2
+
+      - name: Download Metal Toolchain
+        if: steps.cache-metal.outputs.cache-hit != 'true'
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # `MLXHuggingFaceMacros` (the `#huggingFaceTokenizerLoader` macro) is an
+      # external Swift macro. CLI / non-interactive xcodebuild needs
+      # `-skipMacroValidation` to bypass the per-machine trust prompt.
+      - name: Build engine app
+        run: |
+          xcodebuild \
+            -project YoozEngine.xcodeproj \
+            -scheme YoozEngine \
+            -configuration Debug \
+            -skipMacroValidation \
+            -destination 'platform=macOS' \
+            build
+
+      - name: Run engine unit tests
+        run: |
+          xcodebuild \
+            -project YoozEngine.xcodeproj \
+            -scheme YoozEngine \
+            -configuration Debug \
+            -skipMacroValidation \
+            -destination 'platform=macOS' \
+            test

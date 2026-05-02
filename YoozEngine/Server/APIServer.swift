@@ -236,7 +236,8 @@ final class APIServer: ObservableObject {
                 let result = try await TouchUpEngine.shared.generate(
                     prompt: body.prompt,
                     systemPrompt: body.systemPrompt ?? "",
-                    modelType: modelType
+                    modelType: modelType,
+                    kvCompression: body.kvCompression
                 )
                 let timeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
                 return try jsonResponse(LLMGenerateServerResponse(

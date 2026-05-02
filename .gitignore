@@ -1,9 +1,53 @@
+# Xcode
+xcuserdata/
+*.xcodeproj
+*.xcworkspace
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+DerivedData/
+build/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+# Package.resolved IS committed to enforce the SharpAI mlx-swift /
+# mlx-swift-lm pins called out in project.yml. See issue #10.
+
+# Models (large binary files)
+YoozEngine/Resources/Models/*.mlpackage
+YoozEngine/Resources/Models/*.safetensors
+YoozEngine/Resources/Models/*.gguf
+YoozEngine/Resources/model.safetensors
+YoozEngine/Resources/config.json
+
+# Rust build artifacts
+text-cleanup/target/
+text-cleanup/build/
+
+# XCFramework (binary, rebuilt from Rust source)
+Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+
+# Context docs (project-local)
+.context/
+
+# Python (research/finetune)
 .venv/
 __pycache__/
 *.pyc
-.DS_Store
 .envrc
 finetune-pipeline/outputs/
 finetune-pipeline/data
 finetune-pipeline/data/
 bench-tools/gold_standard.jsonl
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Reference repos cloned for research (issue #10 TurboQuant)
+external/
