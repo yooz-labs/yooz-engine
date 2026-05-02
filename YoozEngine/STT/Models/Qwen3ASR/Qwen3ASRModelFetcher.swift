@@ -243,10 +243,16 @@ public actor Qwen3ASRModelFetcher {
     ///   - modelDir: target directory (created if missing).
     ///   - repo: HF repo id; defaults to `canonicalRepo`.
     ///   - revision: HF git revision; defaults to `main`.
+    ///   - runTokenizerPrep: when `true` (production default), runs
+    ///     `Qwen3ASRTokenizerPrep.prepare(modelDir:)` after the
+    ///     downloads land. Tests with synthetic fixture content set
+    ///     this to `false` because the prep step uses a real tokenizer
+    ///     loader that would reject junk JSON.
     public func download(
         into modelDir: URL,
         repo: String = canonicalRepo,
-        revision: String = "main"
+        revision: String = "main",
+        runTokenizerPrep: Bool = true
     ) -> AsyncThrowingStream<DownloadProgress, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -255,6 +261,7 @@ public actor Qwen3ASRModelFetcher {
                         modelDir: modelDir,
                         repo: repo,
                         revision: revision,
+                        runTokenizerPrep: runTokenizerPrep,
                         continuation: continuation
                     )
                     continuation.finish()
@@ -272,6 +279,7 @@ public actor Qwen3ASRModelFetcher {
         modelDir: URL,
         repo: String,
         revision: String,
+        runTokenizerPrep: Bool,
         continuation: AsyncThrowingStream<DownloadProgress, Error>.Continuation
     ) async throws {
         try FileManager.default.createDirectory(
@@ -300,10 +308,15 @@ public actor Qwen3ASRModelFetcher {
             )
         }
 
-        // Tokenizer prep — idempotent.
-        continuation.yield(.tokenizerPrepStarted)
-        try await Qwen3ASRTokenizerPrep.prepare(modelDir: modelDir)
-        continuation.yield(.tokenizerPrepFinished)
+        // Tokenizer prep — idempotent. Skipped under unit tests that
+        // feed the fetcher synthetic fixture data (the real prep step
+        // uses a JSON-validating tokenizer loader that would reject
+        // mocked content).
+        if runTokenizerPrep {
+            continuation.yield(.tokenizerPrepStarted)
+            try await Qwen3ASRTokenizerPrep.prepare(modelDir: modelDir)
+            continuation.yield(.tokenizerPrepFinished)
+        }
 
         continuation.yield(.done(modelDir: modelDir))
     }

@@ -84,13 +84,30 @@ final class Qwen3ASRTokenizerPrepTests: XCTestCase {
 
     /// Hardlink the canonical checkpoint into a fresh dir so we can
     /// safely add / remove / check sentinels without touching the
-    /// shared cache. Skips when the checkpoint isn't mounted.
+    /// shared cache.
+    ///
+    /// macOS TCC blocks the GUI xctest host from reading `/Volumes/S1`
+    /// without an interactive prompt — and the prompt has nowhere to
+    /// render under headless `xcodebuild test`, so reads HANG instead
+    /// of failing. Phase 4 hit the same trap. We refuse to run the
+    /// heavy tests under xcodebuild and require an explicit opt-in
+    /// (`YOOZ_RUN_TCC_TESTS=1`); under `swift test` the suite's CLI
+    /// binary is exempt from TCC and the tests run cleanly.
     private func cloneCanonicalCheckpoint() throws -> URL {
-        let source = Self.canonicalCheckpoint
         try XCTSkipUnless(
-            FileManager.default.fileExists(
-                atPath: source.appendingPathComponent("config.json").path
-            ),
+            ProcessInfo.processInfo.environment["YOOZ_RUN_TCC_TESTS"] == "1"
+                || isLikelySwiftTestHost(),
+            "Skipping /Volumes/S1-backed tokenizer prep test under "
+                + "xcodebuild (macOS TCC). Run `swift test --filter "
+                + "Qwen3ASRTokenizerPrepTests` to exercise this suite, or "
+                + "set YOOZ_RUN_TCC_TESTS=1 after granting Full Disk Access "
+                + "to the test host."
+        )
+
+        let source = Self.canonicalCheckpoint
+        let configURL = source.appendingPathComponent("config.json")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: configURL.path),
             "Canonical Qwen3-ASR checkpoint not mounted at \(source.path)"
         )
         let dest = tempDir.appendingPathComponent("clone")
@@ -106,6 +123,13 @@ final class Qwen3ASRTokenizerPrepTests: XCTestCase {
             try FileManager.default.linkItem(at: from, to: to)
         }
         return dest
+    }
+
+    /// Heuristic: `swift test` invokes the test binary directly via
+    /// the Swift toolchain. The test bundle path contains a recognizable
+    /// SwiftPM build directory marker (`.build/`).
+    private func isLikelySwiftTestHost() -> Bool {
+        Bundle(for: Self.self).bundleURL.path.contains(".build/")
     }
 
     /// Run prep twice on the same directory; the second run must be a

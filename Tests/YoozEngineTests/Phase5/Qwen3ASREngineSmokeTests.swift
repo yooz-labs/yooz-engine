@@ -82,10 +82,22 @@ final class Qwen3ASREngineSmokeTests: XCTestCase {
 
     @MainActor
     func testBatchRouteWithQwen3MatchesPhase4Reference() async throws {
+        // macOS TCC blocks the GUI xctest host from reading /Volumes/S1
+        // without an interactive prompt that can't render under
+        // xcodebuild — same trap as Phase 4's heavy parity tests.
+        // Require explicit opt-in via env var or a SwiftPM-style host.
         try XCTSkipUnless(
-            FileManager.default.fileExists(
-                atPath: Self.checkpointDir.appendingPathComponent("config.json").path
-            ),
+            ProcessInfo.processInfo.environment["YOOZ_RUN_TCC_TESTS"] == "1"
+                || Bundle(for: Self.self).bundleURL.path.contains(".build/"),
+            "Skipping /Volumes/S1-backed smoke test under xcodebuild "
+                + "(macOS TCC). Run `swift test --filter "
+                + "Qwen3ASREngineSmokeTests` or set YOOZ_RUN_TCC_TESTS=1 "
+                + "after granting Full Disk Access to the test host."
+        )
+
+        let configURL = Self.checkpointDir.appendingPathComponent("config.json")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: configURL.path),
             "Qwen3-ASR checkpoint not mounted at \(Self.checkpointDir.path)"
         )
         try XCTSkipUnless(
