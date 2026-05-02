@@ -563,18 +563,43 @@ actor MLXLLMBackend: LLMBackend {
 // MARK: - Factory
 
 extension MLXLLMBackend {
+    /// Construct a backend, optionally overriding the engine-wide
+    /// `kvCompression` default. Passing `nil` (or omitting) keeps the
+    /// `EngineConfig.kvCompression` default, so existing call sites do not
+    /// change behavior. Per-request callers (e.g., the
+    /// `/v1/llm/generate` handler in `APIServer`) pass the user-supplied
+    /// override here.
     static func create(
         for type: LLMModelType,
-        bundleIdentifier: String = "live.yooz.engine"
+        bundleIdentifier: String = "live.yooz.engine",
+        kvCompression: KVCompressionMode? = nil
     ) -> MLXLLMBackend {
-        return MLXLLMBackend(modelType: type, bundleIdentifier: bundleIdentifier)
+        return MLXLLMBackend(
+            modelType: type,
+            bundleIdentifier: bundleIdentifier,
+            kvCompression: kvCompression ?? EngineConfig.kvCompression
+        )
     }
 
-    static func createLight(bundleIdentifier: String = "live.yooz.engine") -> MLXLLMBackend {
-        return create(for: .yoozLight, bundleIdentifier: bundleIdentifier)
+    static func createLight(
+        bundleIdentifier: String = "live.yooz.engine",
+        kvCompression: KVCompressionMode? = nil
+    ) -> MLXLLMBackend {
+        return create(
+            for: .yoozLight,
+            bundleIdentifier: bundleIdentifier,
+            kvCompression: kvCompression
+        )
     }
 
-    static func createQuality(bundleIdentifier: String = "live.yooz.engine") -> MLXLLMBackend {
-        return create(for: .yoozQuality, bundleIdentifier: bundleIdentifier)
+    static func createQuality(
+        bundleIdentifier: String = "live.yooz.engine",
+        kvCompression: KVCompressionMode? = nil
+    ) -> MLXLLMBackend {
+        return create(
+            for: .yoozQuality,
+            bundleIdentifier: bundleIdentifier,
+            kvCompression: kvCompression
+        )
     }
 }

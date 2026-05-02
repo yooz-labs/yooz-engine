@@ -106,6 +106,35 @@ struct LLMGenerateServerRequest: Decodable {
     let prompt: String
     let model: String?
     let systemPrompt: String?
+    /// Per-request KV cache compression override. When `nil` (or the field
+    /// is omitted), the engine-wide default (`EngineConfig.kvCompression`,
+    /// currently `.off`) is used. Wire-format strings are `"off"` and
+    /// `"turbo3"`; any other value fails decode. Both `kvCompression` and
+    /// `kv_compression` keys are accepted on the wire. See
+    /// `KVCompressionMode` in `EngineConfig.swift`.
+    let kvCompression: KVCompressionMode?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: LLMGenerateRequestKey.self)
+        self.prompt = try container.decode(String.self, forKey: LLMGenerateRequestKey("prompt"))
+        self.model = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("model"))
+        self.systemPrompt = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("systemPrompt"))
+            ?? container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("system_prompt"))
+        self.kvCompression = try container.decodeIfPresent(KVCompressionMode.self, forKey: LLMGenerateRequestKey("kvCompression"))
+            ?? container.decodeIfPresent(KVCompressionMode.self, forKey: LLMGenerateRequestKey("kv_compression"))
+    }
+}
+
+/// Coding key shim for accepting both camelCase and snake_case wire keys
+/// without committing to a global strategy on the Hummingbird decoder.
+/// Used by `LLMGenerateServerRequest` to backward-compatibly accept
+/// `systemPrompt` / `system_prompt` and `kvCompression` / `kv_compression`.
+private struct LLMGenerateRequestKey: CodingKey {
+    var stringValue: String
+    init(_ stringValue: String) { self.stringValue = stringValue }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    var intValue: Int? { nil }
+    init?(intValue: Int) { return nil }
 }
 
 struct LLMGenerateServerResponse: ResponseCodable {

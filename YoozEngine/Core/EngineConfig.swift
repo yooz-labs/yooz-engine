@@ -4,11 +4,17 @@ import Foundation
 ///
 /// `.off` keeps the upstream FP16 KV path (default; no behavioral change).
 /// `.turbo3` enables SharpAI's TurboQuant 3-bit packing on KV cache layers
-/// whose head_dim is 128 or 256, gated above 2048 tokens by the upstream
+/// whose head_dim is 128 or 256 (and 512 split into 2x256 virtual heads),
+/// gated above 2048 tokens by the upstream
 /// `KVCacheSimple.turboMinActivationTokens`. Short prompts (TouchUp, chat
 /// turns) stay on the FP16 path even with `.turbo3` selected — the upstream
 /// gate only flips compression on once the cache exceeds the activation
 /// threshold, so short workloads pay zero overhead.
+///
+/// Layers whose `head_dim` is not in `{128, 256, 512}` self-disable the
+/// flag at runtime and emit a one-time fallback log; the engine separately
+/// counts how many cache layers accepted the flag and logs an error if the
+/// total is zero. See `MLXLLMBackend.lastTurboLayersEnabled`.
 public enum KVCompressionMode: String, Codable, Sendable {
     case off
     case turbo3
@@ -20,8 +26,20 @@ enum EngineConfig {
     static let version: String = "0.5.0"
 
     /// Default KV cache compression mode for new MLX LLM backends.
-    /// Can be overridden per-backend via the `kvCompression` init parameter
-    /// or per-request via the `/v1/llm/generate` request body.
+    ///
+    /// Resolution order (highest priority first):
+    /// 1. Per-request override via `/v1/llm/generate` request body
+    ///    (`kv_compression` or `kvCompression` key, decoded into
+    ///    `LLMGenerateServerRequest.kvCompression`).
+    /// 2. Per-backend `kvCompression` argument to `MLXLLMBackend.init` or
+    ///    the `MLXLLMBackend.create*` factories.
+    /// 3. This engine-wide default (currently `.off`).
+    ///
+    /// All three paths are exercised by `KVCompressionTests`. To roll
+    /// turbo3 out globally, flip this to `.turbo3` — every cached backend
+    /// (TouchUp's `lightModel` / `qualityModel`) picks it up at next
+    /// construction. Per-request overrides bypass the cached models and
+    /// build a fresh backend for that single call.
     static let kvCompression: KVCompressionMode = .off
 
     static let modelsDirectory: URL = {
