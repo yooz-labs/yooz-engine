@@ -84,9 +84,19 @@ From `touchup_quality.json`:
 - `fp16_total_s`: 13.92
 - `turbo3_total_s`: 35.59
 
-5 of 30 cases differ between FP16 and turbo3 outputs. Inspection of the diffs (in `touchup_quality.json`) shows these are within-distribution paraphrase variations rather than correctness regressions — the kinds of sub-token differences any temperature>0 sampling would surface across two runs of the same model. This matches the paper's claim of "no measurable quality regression" on short generation.
+5 of 30 cases differ between FP16 and turbo3 outputs. Reviewing them honestly:
 
-For the *engine's* TouchUp path the practical question is moot: TouchUp prompts run well below 2048 tokens, so `turboMinActivationTokens` keeps them on the FP16 path with **zero** turbo3 overhead even when `kvCompression: "turbo3"` is configured globally.
+- **`95460C5C` (regression).** Gold: `"9 AM"`. FP16: `"9 AM"`. **turbo3: `"nine AM"`.** Turbo3 lost a number-format conversion that FP16 got right. This is a measurable quality drop on a sub-token edit task, not a paraphrase.
+- **`DF96D408` (information loss).** FP16 keeps the structure intact and only fixes spelling; turbo3 drops the `"like for example, for this log, I'm pretty sure that we just"` clause entirely and rewrites the surrounding sentences. Different output, FP16 closer to the input the user submitted.
+- **`914856CC` (paraphrase).** Both diverge from gold; turbo3 is arguably *closer* to gold (`"like earlier"` vs FP16's `"as earlier"`). Within-distribution variation.
+- **`B56C0B38` (paraphrase).** FP16 changes `"are just"` to `"are only"`; turbo3 keeps the original `"are just"`. Both correctly preserve the misspelled `"Hulp"` from the input. Sub-token style difference.
+- **`8F88A78F` (paraphrase).** Both have the same `".ample"` / `"Sample."` artifact from the truncated input; turbo3 capitalises after the period, FP16 does not. Surface formatting difference.
+
+**Net call:** of the 5 mismatches, two (`95460C5C`, `DF96D408`) are real regressions vs FP16 on this Python-prototype run. Three are within-distribution paraphrase variation. The 83.33% byte-equal rate is therefore a Phase 2 *floor* on quality, not a ceiling — we track it as a regression budget in the Swift `KVCompressionTests` (`testTouchUpQualityFixtureMeetsByteEqualFloor` asserts `byte_equal_pct >= 80%`), and the two real regressions are the cost of opting `.turbo3` in for a long-context callsite (e.g., Yooz-Heavy, summarisation).
+
+For the *engine's* TouchUp path the practical question is moot: real TouchUp prompts run well below 2048 tokens, so `turboMinActivationTokens` keeps them on the FP16 path with **zero** turbo3 overhead even when `kvCompression: "turbo3"` is configured globally. The two-regression count above only matters at long context.
+
+**Follow-up:** investigate whether `95460C5C` and `DF96D408` reproduce on the Swift `KVCacheSimple` once the integration lands, or are Python harness artifacts. Tracked alongside the 16K/32K and Qwen2.5-7B benchmarks below.
 
 ---
 
