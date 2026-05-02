@@ -87,7 +87,7 @@ struct STTEngineCapabilities: Codable {
     let supportedLanguages: [String]
 }
 
-struct STTEnginePostRequest: Decodable {
+struct STTEnginePostRequest: Codable {
     /// New backend identifier. Accepts the `STTBackendID` raw values:
     /// `parakeet`, `fast_conformer`, `apple_stt`, `qwen3_asr_preview`.
     let engine: String

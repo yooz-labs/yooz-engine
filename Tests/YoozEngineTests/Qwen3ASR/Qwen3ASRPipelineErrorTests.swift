@@ -4,9 +4,12 @@ import Foundation
 import MLX
 import MLXLMCommon
 import MLXNN
-import Qwen3ASRMelFrontend
 import Tokenizers
 import XCTest
+
+#if canImport(Qwen3ASRMelFrontend)
+import Qwen3ASRMelFrontend
+#endif
 
 #if canImport(YoozEngine)
 @testable import YoozEngine
@@ -39,10 +42,10 @@ final class Qwen3ASRPipelineErrorTests: XCTestCase {
     }
 
     private actor TokCache {
-        var tokenizer: (any Tokenizer)?
+        var tokenizer: (any Tokenizers.Tokenizer)?
         func get(
-            _ build: () async throws -> any Tokenizer
-        ) async throws -> any Tokenizer {
+            _ build: () async throws -> any Tokenizers.Tokenizer
+        ) async throws -> any Tokenizers.Tokenizer {
             if let t = tokenizer { return t }
             let t = try await build()
             tokenizer = t
@@ -51,7 +54,7 @@ final class Qwen3ASRPipelineErrorTests: XCTestCase {
     }
     private static let tokCache = TokCache()
 
-    private static func loadTokenizer() async throws -> any Tokenizer {
+    private static func loadTokenizer() async throws -> any Tokenizers.Tokenizer {
         try await tokCache.get {
             try await AutoTokenizer.from(modelFolder: checkpointDir)
         }
