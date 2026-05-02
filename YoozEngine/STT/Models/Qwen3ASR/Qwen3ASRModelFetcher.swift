@@ -201,14 +201,27 @@ public actor Qwen3ASRModelFetcher {
 
     /// Default on-disk location for the Qwen3-ASR checkpoint. The
     /// directory may not exist yet; `download(...)` creates it.
+    ///
+    /// Computed locally rather than via `EngineConfig.modelsDirectory`
+    /// so this file compiles cleanly inside the Qwen3ASR SwiftPM
+    /// target (which doesn't link the engine app). The resolved path
+    /// is identical: `~/Library/Application Support/YoozEngine/Models/qwen3-asr-1.7b/`.
     public static var defaultModelDir: URL {
         if let override = ProcessInfo.processInfo.environment[
             "YOOZ_QWEN3_ASR_DIR"
         ] {
             return URL(fileURLWithPath: override)
         }
-        return EngineConfig.modelsDirectory
-            .appendingPathComponent("qwen3-asr-1.7b")
+        guard let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            // Fall back to a sensible default rather than crashing.
+            return URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("qwen3-asr-1.7b")
+        }
+        return appSupport
+            .appendingPathComponent("YoozEngine/Models/qwen3-asr-1.7b")
     }
 
     /// True when every required file already exists on disk.
