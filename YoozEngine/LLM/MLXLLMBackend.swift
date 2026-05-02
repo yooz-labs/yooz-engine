@@ -11,6 +11,15 @@ import MLX
 import MLXLMCommon
 #endif
 
+#if canImport(MLXHuggingFace)
+import MLXHuggingFace
+// `#huggingFaceTokenizerLoader()` expands into code that calls
+// `Tokenizers.AutoTokenizer.from(modelFolder:)` and `HuggingFace.HubClient`
+// constructors, so both modules must be in scope at the call site.
+import Tokenizers
+import HuggingFace
+#endif
+
 private let logger = Logger(subsystem: "live.yooz.engine", category: "MLXLLMBackend")
 
 /// MLX-Swift backend for Yooz LLM models.
@@ -89,8 +98,15 @@ actor MLXLLMBackend: LLMBackend {
 
             logger.info("Model directory: \(modelDirectory.path)")
 
-            let configuration = ModelConfiguration(directory: modelDirectory)
-            modelContainer = try await loadModelContainer(configuration: configuration)
+            // mlx-swift-lm 3.x requires an explicit TokenizerLoader. We use
+            // the MLXHuggingFace-provided default (Tokenizers.AutoTokenizer)
+            // via the `#huggingFaceTokenizerLoader()` macro. The model
+            // weights are already on disk so we use the directory-based
+            // overload of `loadModelContainer` and skip the Downloader.
+            modelContainer = try await loadModelContainer(
+                from: modelDirectory,
+                using: #huggingFaceTokenizerLoader()
+            )
 
             isLoaded = true
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
@@ -243,7 +259,11 @@ actor MLXLLMBackend: LLMBackend {
 
                 var text = ""
                 for await generation in stream {
-                    if case let .chunk(chunk) = generation {
+                    // mlx-swift-lm 3.x changed `.chunk(String)` to
+                    // `.chunk(String, tokenId: Int)`. We don't track per-chunk
+                    // token IDs in this path, so the second associated value
+                    // is ignored.
+                    if case let .chunk(chunk, _) = generation {
                         text += chunk
                     }
                 }
