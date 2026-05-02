@@ -61,9 +61,19 @@ public actor Qwen3ASRStreamingSession {
     /// into `error` frames; the `Qwen3ASRError` payload, if any, is
     /// reported verbatim for diagnostics.
     public enum SessionError: Error, CustomStringConvertible {
+        /// Pipeline was never loaded for this connection. Call
+        /// `/v1/stt/load` first.
         case backendNotLoaded
+        /// `finalize()` was called with no audio buffered.
         case empty
+        /// Session was already finalized or discarded.
         case finalized
+        /// Backend was unloaded mid-stream by a concurrent
+        /// `POST /v1/stt/engine` switch. Distinct from
+        /// `backendNotLoaded` ("never loaded") so the client can
+        /// surface "your selection changed; reconnect" instead of
+        /// "wasn't loaded".
+        case backendChangedDuringStream
         case underlying(Error)
 
         public var description: String {
@@ -74,6 +84,8 @@ public actor Qwen3ASRStreamingSession {
                 return "Streaming session received no audio before finalize()."
             case .finalized:
                 return "Streaming session has already been finalized; open a new connection to continue."
+            case .backendChangedDuringStream:
+                return "Backend was changed by /v1/stt/engine while this stream was open; reconnect to continue."
             case let .underlying(error):
                 return String(describing: error)
             }
@@ -196,7 +208,13 @@ public actor Qwen3ASRStreamingSession {
                 audioDurationMs: audioDurationMs
             )
         } catch let error as Qwen3ASRError where error == .pipelineNotLoaded {
-            throw SessionError.backendNotLoaded
+            // `pipelineNotLoaded` mid-finalize means the singleton
+            // backend was unloaded under us — most commonly by a
+            // concurrent `POST /v1/stt/engine` switch. We had
+            // buffered audio (totalSamples > 0 was the precondition
+            // for entering this branch), so this isn't the
+            // "never-loaded" case.
+            throw SessionError.backendChangedDuringStream
         } catch {
             throw SessionError.underlying(error)
         }
