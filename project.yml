@@ -24,6 +24,9 @@ packages:
   mlx-swift-lm:
     url: https://github.com/ml-explore/mlx-swift-lm
     from: "2.30.3"
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers
+    from: "1.1.6"
 
 targets:
   YoozEngine:
@@ -69,6 +72,8 @@ targets:
         product: MLXLLM
       - package: mlx-swift-lm
         product: MLXLMCommon
+      - package: swift-transformers
+        product: Tokenizers
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
