@@ -3,22 +3,18 @@ import MLX
 import MLXNN
 
 /// Errors surfaced while loading the audio_tower slice of a Qwen3-ASR
-/// safetensors checkpoint.
+/// safetensors checkpoint. Per-tensor key/shape mismatches are
+/// surfaced via `MLXNN.Module.update(parameters:verify:)`'s own error
+/// type and are not re-wrapped here — propagating the underlying
+/// error preserves the parameter-path context the caller needs.
 public enum SpikeLoaderError: Error, CustomStringConvertible {
     case fileNotFound(URL)
-    case missingTensor(String)
-    case shapeMismatch(name: String, expected: [Int], got: [Int])
     case noAudioTowerWeights(URL)
 
     public var description: String {
         switch self {
         case .fileNotFound(let url):
             return "Safetensors file not found: \(url.path)"
-        case .missingTensor(let name):
-            return "Missing tensor in checkpoint: \(name)"
-        case .shapeMismatch(let name, let expected, let got):
-            return
-                "Shape mismatch for \(name): expected \(expected), got \(got)"
         case .noAudioTowerWeights(let url):
             return
                 "No 'audio_tower.*' tensors found in \(url.lastPathComponent)"

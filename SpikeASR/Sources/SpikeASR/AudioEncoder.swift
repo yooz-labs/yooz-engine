@@ -160,8 +160,6 @@ final class AudioEncoderLayer: Module {
 /// -> proj1 + GELU -> proj2 (2048-d audio token stream).
 public final class AudioEncoder: Module {
     public let config: AudioEncoderConfig
-    let embedScale: Float
-    public let maxLenAfterCNN: Int
 
     @ModuleInfo(key: "conv2d1") var conv2d1: Conv2d
     @ModuleInfo(key: "conv2d2") var conv2d2: Conv2d
@@ -172,23 +170,14 @@ public final class AudioEncoder: Module {
     @ModuleInfo(key: "proj2") var proj2: Linear
     @ModuleInfo(key: "layers") var layers: [AudioEncoderLayer]
 
-    /// Positional embedding is a cached buffer, not a trainable
-    /// parameter; kept on the module so it travels with the encoder
-    /// but excluded from `parameters()` via the underscore prefix.
+    /// Positional embedding cache. Stored as a non-`Module`
+    /// reference (see `SinusoidalPositionEmbedding`) so MLXNN's
+    /// recursive parameter walk doesn't try to load it from the
+    /// safetensors checkpoint, where it has no corresponding key.
     let positionalEmbedding: SinusoidalPositionEmbedding
 
     public init(_ config: AudioEncoderConfig) {
         self.config = config
-        self.embedScale =
-            config.scaleEmbedding ? sqrt(Float(config.dModel)) : 1.0
-
-        // Per-chunk feat length after the 3 stride-2 convs.
-        // Matches `_get_feat_extract_output_lengths` for the
-        // canonical chunk size of `n_window * 2 = 100`. The encoder
-        // pads each chunk to `chunk_size = 100` mel frames in the
-        // batched offline path.
-        let chunkSize = config.nWindow * 2  // 100
-        self.maxLenAfterCNN = AudioEncoder.featExtractOutputLength(chunkSize)
 
         self._conv2d1.wrappedValue = Conv2d(
             inputChannels: 1,
@@ -295,6 +284,8 @@ public final class AudioEncoder: Module {
     ) -> MLXArray {
         let bsz = inputFeatures.dim(0)
         let totalFrames = inputFeatures.dim(2)
+        precondition(bsz > 0, "AudioEncoder requires at least one utterance")
+        precondition(totalFrames > 0, "AudioEncoder requires non-empty audio")
 
         // 1) Per-utterance feature lengths (real, before padding).
         let featureLensArray: MLXArray
@@ -311,6 +302,10 @@ public final class AudioEncoder: Module {
         let featureLens: [Int] = featureLensArray
             .asArray(Int32.self)
             .map { Int($0) }
+        precondition(
+            featureLens.allSatisfy { $0 > 0 },
+            "AudioEncoder cannot process zero-length utterances"
+        )
 
         // 2) Compute aftercnn lengths (per-utterance, full-length).
         let aftercnnLens: [Int] = featureLens.map(
@@ -340,6 +335,9 @@ public final class AudioEncoder: Module {
                 pos += cLen
             }
         }
+        // chunkLengths is guaranteed non-empty by the precondition on
+        // featureLens above, so .max() is always defined; the
+        // `?? chunkSize` is a defensive fallback only.
         let maxChunkLen = chunkLengths.max() ?? chunkSize
 
         // 4) Pad chunks to maxChunkLen on the time axis.
@@ -367,21 +365,24 @@ public final class AudioEncoder: Module {
         )
         let maxLenAfterCNNRuntime = featLensAfterCNN.max() ?? 0
 
-        // 6) Conv frontend. MLX Conv2d wants
-        //    NHWC layout `(batch, H, W, C_in)`, with H = melBins,
-        //    W = time, C_in = 1. After 3 stride-2 convs:
-        //    H' = freqAfterConv, W' = ceil(maxChunkLen / 8).
+        // 6) Conv frontend. MLX Conv2d wants NHWC layout
+        //    `(batch, H, W, C_in)`, with H = melBins, W = time,
+        //    C_in = 1. After 3 stride-2 conv-with-padding-1 layers:
+        //    H' = freqAfterConv, W' = floor((floor((floor((W+1)/2)+1)/2)+1)/2)
+        //    (the same `_get_feat_extract_output_lengths` recurrence
+        //    that drives the time axis; reduces to W' == 13 for the
+        //    canonical W = 100).
         var x = paddedFeature.expandedDimensions(axis: 3)  // (B, H, W, 1)
         x = MLXNN.gelu(conv2d1(x))
         x = MLXNN.gelu(conv2d2(x))
         x = MLXNN.gelu(conv2d3(x))
 
         // 7) (B, H', W', C) -> (B, W', C * H')
-        let b = x.dim(0)
-        let f = x.dim(1)  // freq after conv
-        let t = x.dim(2)  // time after conv
-        let c = x.dim(3)  // channels after conv
-        x = x.transposed(0, 2, 3, 1).reshaped(b, t, c * f)
+        let convB = x.dim(0)
+        let convF = x.dim(1)  // freq after conv
+        let convT = x.dim(2)  // time after conv
+        let convC = x.dim(3)  // channels after conv
+        x = x.transposed(0, 2, 3, 1).reshaped(convB, convT, convC * convF)
         x = convOut(x)  // (B, W', dModel)
 
         // 8) Add positional embedding (broadcast over batch).
