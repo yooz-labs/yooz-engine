@@ -110,6 +110,7 @@ final class Qwen3ASRPipelineLatencyTests: XCTestCase {
     }
 
     func testLatencyMicroBenchmark() async throws {
+        try Qwen3ASRTestEnvironment.skipUnlessSafeForTCC()
         try XCTSkipUnless(
             FileManager.default.fileExists(
                 atPath: Self.checkpointDir.appendingPathComponent(
