@@ -110,15 +110,34 @@ enum EngineConfig {
         return parsed
     }
 
-    /// Whether the eager-load loop runs at app launch. Disabled by
-    /// default in tests (`XCTest`) so `Application.test` doesn't drag
-    /// in MLX model loads on every test boot. Production sets this
-    /// implicitly via the absence of `YOOZ_DISABLE_EAGER_LOAD`.
+    /// Whether the eager-load loop runs when `APIServer.start()`
+    /// completes. Production keeps this on; tests turn it off because
+    /// the route tests boot a real `APIServer` and a kickoff would
+    /// drag in MLX weight loads on every test invocation (the eager
+    /// loader would still finish quickly for VAD / Grammar but the
+    /// MLX STT + LLM paths take seconds and run network fetches).
+    ///
+    /// Resolution order:
+    /// 1. `YOOZ_DISABLE_EAGER_LOAD=1` env var → off (explicit
+    ///    override; useful when running the engine binary against
+    ///    a remote model store you don't want pre-warmed).
+    /// 2. Detected XCTest invocation → off (`XCInjectBundleInto` is
+    ///    set by xctest; the inject env keys are documented stable).
+    /// 3. Otherwise → on.
     static var eagerLoadOnLaunch: Bool {
-        let raw = ProcessInfo.processInfo.environment[
-            "YOOZ_DISABLE_EAGER_LOAD"
-        ]
-        return raw == nil || raw == "0"
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["YOOZ_DISABLE_EAGER_LOAD"], raw != "0" {
+            return false
+        }
+        // XCTest injects these env vars when running tests via
+        // `xcodebuild test`. Either is sufficient to identify a
+        // test process; the loader stays off so route tests boot
+        // fast and don't pay the model-fetch cost.
+        if env["XCTestConfigurationFilePath"] != nil ||
+            env["XCInjectBundleInto"] != nil {
+            return false
+        }
+        return true
     }
 
     /// Default KV cache compression mode for new MLX LLM backends.

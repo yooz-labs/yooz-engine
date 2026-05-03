@@ -76,6 +76,36 @@ final class APIServer: ObservableObject {
 
         state = .running
         logger.info("Yooz Engine started on \(EngineConfig.host):\(EngineConfig.port)")
+
+        // Always apply variant gating so the snapshot reflects the
+        // active build variant (e.g. VAD `unavailable` on whisper)
+        // even when eager-load is disabled in tests. This is cheap
+        // (touches the readiness map only); no module loads run.
+        await ModuleEagerLoader.shared.markVariantUnavailableModules(
+            variant: EngineConfig.variant
+        )
+
+        // Kick off the variant-aware module eager-load so modules
+        // are primed by the time thin clients hit them. The kickoff
+        // itself is non-blocking — it spawns a background TaskGroup
+        // and returns immediately, so the server is fully responsive
+        // while loads run.
+        //
+        // Tying this to `start()` (rather than only to the app's
+        // `applicationDidFinishLaunching` hook) makes the menu Stop
+        // -> Start path symmetric: `stop()` resets the loader,
+        // `start()` re-kicks. Without this, a second `start()`
+        // would leave every module in the previous run's terminal
+        // state while the underlying engines are unloaded.
+        //
+        // Disabled in test runs (`EngineConfig.eagerLoadOnLaunch`
+        // checks for XCTest env vars) so route tests boot fast and
+        // don't pay the model-fetch cost.
+        if EngineConfig.eagerLoadOnLaunch {
+            await ModuleEagerLoader.shared.kickoff(
+                variant: EngineConfig.variant
+            )
+        }
     }
 
     func stop() async {
@@ -94,6 +124,15 @@ final class APIServer: ObservableObject {
         } catch {
             logger.error("Failed to reset VAD state: \(error)")
         }
+
+        // Reset the eager loader so a subsequent `start()` (e.g. the
+        // user toggled Stop -> Start from the menu bar) re-runs the
+        // load policy against the now-unloaded modules. Without this
+        // reset, the second start would leave the loader thinking
+        // every module is `ready` (its last terminal state) while
+        // the underlying modules are actually unloaded — health
+        // would lie until the user hit each route.
+        await ModuleEagerLoader.shared.reset()
 
         serverTask?.cancel()
         _ = await serverTask?.result

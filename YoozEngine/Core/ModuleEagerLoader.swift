@@ -123,6 +123,17 @@ public actor ModuleEagerLoader {
         )
     }
 
+    /// Apply variant gating only — mark out-of-variant modules as
+    /// `unavailable` without spawning the heavy load tasks. Used by
+    /// tests and by the `eagerLoadOnLaunch=false` boot path so the
+    /// snapshot reflects the variant policy even when the engine
+    /// stays cold. Idempotent across `applyVariantGating` and
+    /// `kickoff`: the first call wins; the second is a no-op.
+    public func markVariantUnavailableModules(variant: EngineVariant) {
+        if hasKickedOff { return }
+        applyVariantGating(variant: variant)
+    }
+
     /// Wait until the kickoff task completes. Used by tests; not
     /// called on the production boot path (the server is up and
     /// serving while loads run).
@@ -143,11 +154,19 @@ public actor ModuleEagerLoader {
         states[module.rawValue]?.state ?? .notLoaded
     }
 
-    /// Reset the loader to the pre-kickoff state. Test-only —
-    /// production never calls this. Cancels any in-flight task.
-    public func reset() async {
+    /// Reset the loader to the pre-kickoff state. Used by
+    /// `APIServer.stop()` so a subsequent `start()` re-runs the
+    /// load policy against unloaded engines, and by tests for
+    /// state isolation. Cancels any in-flight task but does NOT
+    /// wait for it to finish — MLX model loads aren't cancellation-
+    /// aware, so a running preload would block reset for tens of
+    /// seconds. The cancelled task drops its writes into the
+    /// already-cleared map silently (Swift actors serialize the
+    /// writes; the task either runs before reset and is overwritten,
+    /// or runs after and writes into a fresh map that's about to be
+    /// overwritten by the next kickoff).
+    public func reset() {
         kickoffTask?.cancel()
-        await kickoffTask?.value
         kickoffTask = nil
         hasKickedOff = false
         states.removeAll()
@@ -159,12 +178,23 @@ public actor ModuleEagerLoader {
     // MARK: - Internals
 
     private func applyVariantGating(variant: EngineVariant) {
+        // STT — `unavailable` on .lite; otherwise leave the
+        // pre-kickoff state alone (becomes `loading` once kickoff
+        // spawns the loadSTT task, then `ready` / `error`).
         if !variant.includesMLXSTT {
             states[ModuleID.stt.rawValue] = ModuleDetail(
                 state: .unavailable,
                 detail: "MLX STT not compiled into the \(variant.rawValue) variant"
             )
+        } else {
+            // Reset to `notLoaded` so a second gating call (e.g.
+            // after a Stop -> Start cycle that flipped variant via
+            // env var, or a unit test that re-gates) doesn't leak
+            // a stale `unavailable` from the previous variant.
+            states[ModuleID.stt.rawValue] = ModuleDetail(state: .notLoaded)
         }
+        // VAD — `unavailable` on .whisper / .lite. Same reset
+        // pattern as STT.
         if !variant.includesVAD {
             states[ModuleID.vad.rawValue] = ModuleDetail(
                 state: .unavailable,
@@ -172,8 +202,11 @@ public actor ModuleEagerLoader {
                     ? "VAD is whisper-embedded (out-of-process latency unsuitable for 64ms windows)"
                     : "VAD not compiled into the \(variant.rawValue) variant"
             )
+        } else {
+            states[ModuleID.vad.rawValue] = ModuleDetail(state: .notLoaded)
         }
-        // TTS isn't shipped on any variant yet (Phase 7).
+        // TTS isn't shipped on any variant yet (Phase 7). Always
+        // `unavailable` regardless of variant.
         states[ModuleID.tts.rawValue] = ModuleDetail(
             state: .unavailable,
             detail: "TTS module not yet shipped"

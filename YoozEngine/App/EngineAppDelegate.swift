@@ -8,6 +8,12 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task {
             do {
+                // `server.start()` boots the HTTP server and (in
+                // production) kicks off the variant-aware module
+                // eager-load. The eager-load runs in the background;
+                // this `await` returns once the server is listening
+                // and the kickoff Task is spawned, not when the
+                // modules finish loading.
                 try await server.start()
             } catch {
                 server.logger.error("Failed to start server: \(error)")
@@ -16,21 +22,6 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
                 alert.informativeText = error.localizedDescription
                 alert.alertStyle = .critical
                 alert.runModal()
-                return
-            }
-            // Kick off the variant-aware module eager-load AFTER the
-            // server is listening. Modules load concurrently in the
-            // background; `/v1/health` and `/v1/modules` report
-            // `loading` -> `ready` / `error` as each finishes. The
-            // server is fully responsive while loads run.
-            //
-            // Skip on test runs (`XCTest` sets `YOOZ_DISABLE_EAGER_LOAD`)
-            // so unit tests don't drag in MLX weight loads on every
-            // boot of the in-process server.
-            if EngineConfig.eagerLoadOnLaunch {
-                await ModuleEagerLoader.shared.kickoff(
-                    variant: EngineConfig.variant
-                )
             }
         }
     }
