@@ -61,10 +61,13 @@ yooz-engine/
 ```bash
 xcodegen generate
 xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
-  -configuration Debug -skipMacroValidation build
-open build/Debug/Yooz\ Engine.app
+  -configuration Debug -skipMacroValidation \
+  -derivedDataPath build build
+open build/Build/Products/Debug/Yooz\ Engine.app
 curl http://localhost:19920/v1/health
 ```
+
+`-derivedDataPath build` keeps the artifact next to the source tree; without it, xcodebuild writes to `~/Library/Developer/Xcode/DerivedData/<hash>/Build/Products/Debug/`.
 
 `-skipMacroValidation` is required from the CLI because `MLXHuggingFaceMacros`
 (used by `#huggingFaceTokenizerLoader`) is an external Swift macro that Xcode
