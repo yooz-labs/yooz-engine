@@ -20,10 +20,106 @@ public enum KVCompressionMode: String, Codable, Sendable {
     case turbo3
 }
 
+/// Build variant the engine is compiled for. Drives variant-aware
+/// eager-loading (`ModuleEagerLoader`) and per-module compile-time
+/// gating. The active variant is `EngineConfig.variant`, resolved
+/// once from compile-time flags so the runtime read is free.
+///
+/// The Xcode targets that flip these flags (`YoozEngineWhisper`,
+/// `YoozEngineLite`) are added in Phase 5 hardening; today only
+/// `.full` ships, but the gate exists so each new target only needs
+/// `OTHER_SWIFT_FLAGS=-DYOOZ_ENGINE_WHISPER` (or `_LITE`) and
+/// inherits all module gating for free.
+public enum EngineVariant: String, Codable, Sendable {
+    /// Full engine — STT (MLX) + Apple STT + Grammar + LLM + VAD.
+    /// Standalone menu-bar service. Default when no flag is set.
+    case full
+    /// Whisper-helper variant — STT (MLX) + Apple STT + Grammar + LLM.
+    /// VAD is whisper-embedded (not bundled here) because its
+    /// ~64ms call rate makes an HTTP round-trip non-viable.
+    case whisper
+    /// Lite variant — Apple STT + Grammar + LLM. No MLX STT, no VAD.
+    /// Targets Remi-class apps and iOS hosts where the sub-GB binary
+    /// matters more than throughput.
+    case lite
+
+    /// Whether MLX-based STT (Parakeet / FastConformer / Qwen3) is
+    /// compiled into this variant. Lite drops it entirely and relies
+    /// on Apple STT for transcription.
+    public var includesMLXSTT: Bool {
+        switch self {
+        case .full, .whisper: return true
+        case .lite: return false
+        }
+    }
+
+    /// Whether the CoreML VAD model (`silero-vad-unified-v6.0.0`) is
+    /// bundled into this variant. Whisper hosts its own embedded VAD
+    /// (out-of-process latency is too high for ~64ms windows); lite
+    /// has no need for VAD on its hot path.
+    public var includesVAD: Bool {
+        switch self {
+        case .full: return true
+        case .whisper, .lite: return false
+        }
+    }
+
+    /// Whether the LLM stack (MLX-Swift backends + Apple Intelligence
+    /// when available) is compiled in. All three variants ship LLM —
+    /// it is the engine's primary value-add over native OS APIs.
+    public var includesLLM: Bool { true }
+
+    /// Grammar (`YoozTextCleanup` xcframework) is always linked. The
+    /// Rust FFI loads on first reference; engine-side cost is ~0.
+    public var includesGrammar: Bool { true }
+}
+
 enum EngineConfig {
     static let port: Int = 19920
     static let host: String = "127.0.0.1"
     static let version: String = "0.6.0"
+
+    /// Active build variant. Resolved from compile-time flags so the
+    /// runtime read is a constant load. Override with
+    /// `OTHER_SWIFT_FLAGS=-DYOOZ_ENGINE_WHISPER` or
+    /// `-DYOOZ_ENGINE_LITE` per Xcode target.
+    static let variant: EngineVariant = {
+        #if YOOZ_ENGINE_LITE
+        return .lite
+        #elseif YOOZ_ENGINE_WHISPER
+        return .whisper
+        #else
+        return .full
+        #endif
+    }()
+
+    /// Default STT language to eager-load on the full / whisper
+    /// variants. Driven by `YOOZ_DEFAULT_STT_LANG` so a user with a
+    /// different primary language pays the eager-load cost on the
+    /// right model. Falls back to English on unknown values.
+    static var defaultSTTLanguage: STTLanguage {
+        guard
+            let raw = ProcessInfo.processInfo.environment[
+                "YOOZ_DEFAULT_STT_LANG"
+            ],
+            let parsed = STTLanguage.fromCode(raw),
+            parsed.isImplemented
+        else {
+            return .english
+        }
+        return parsed
+    }
+
+    /// Whether the eager-load loop runs at app launch. Disabled by
+    /// default in tests (`XCTest`) so `Application.test` doesn't drag
+    /// in MLX model loads on every test boot. Production sets this
+    /// implicitly via the absence of `YOOZ_DISABLE_EAGER_LOAD`.
+    static var eagerLoadOnLaunch: Bool {
+        let raw = ProcessInfo.processInfo.environment[
+            "YOOZ_DISABLE_EAGER_LOAD"
+        ]
+        return raw == nil || raw == "0"
+    }
 
     /// Default KV cache compression mode for new MLX LLM backends.
     ///

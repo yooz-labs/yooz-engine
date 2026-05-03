@@ -315,20 +315,56 @@ final class APIServer: ObservableObject {
 
         // Health
         router.get("/v1/health") { _, _ in
+            // Pull the variant-aware readiness map from the eager
+            // loader. The map is the source of truth for the new
+            // `loading` / `error` / `unavailable` states; the legacy
+            // bool fields stay for SDK back-compat (true iff the
+            // module reports `.ready`).
+            //
+            // We also OR in the engines' current "is loaded" flags
+            // so a thin client that called `/v1/stt/load` or
+            // `/v1/llm/generate` and bypassed the eager loader still
+            // sees `true` here. The eager loader only writes its
+            // own state; it does not poll the engines after kickoff.
+            let detail = await ModuleEagerLoader.shared.snapshot()
             let llmLoaded = await TouchUpEngine.shared.isLightModelLoaded
             let touchupReady = await TouchUpEngine.shared.isPreloaded
             let vadLoaded = await VADEngine.shared.isLoaded
+
+            func isReady(_ id: ModuleID, fallback: Bool) -> Bool {
+                if detail[id.rawValue]?.state == .ready { return true }
+                return fallback
+            }
+
             return HealthResponse(
                 status: "ok",
                 version: EngineConfig.version,
                 modules: EngineModules(
-                    stt: sttEngine.isRunning,
-                    llm: llmLoaded,
-                    touchup: touchupReady,
-                    grammar: GrammarEngine.shared.isAvailable,
-                    vad: vadLoaded,
-                    tts: false
+                    stt: isReady(.stt, fallback: sttEngine.isRunning),
+                    llm: isReady(.llm, fallback: llmLoaded),
+                    touchup: isReady(.touchup, fallback: touchupReady),
+                    grammar: isReady(
+                        .grammar,
+                        fallback: GrammarEngine.shared.isAvailable
+                    ),
+                    vad: isReady(.vad, fallback: vadLoaded),
+                    tts: isReady(.tts, fallback: false),
+                    detail: detail
                 )
+            )
+        }
+
+        // Modules — purpose-built status endpoint for the engine
+        // status UI in thin clients. Same `detail` map as
+        // `/v1/health.modules.detail`, plus the active variant so
+        // clients can special-case `unavailable` modules (whisper's
+        // VAD row, lite's STT row).
+        router.get("/v1/modules") { _, _ in
+            let detail = await ModuleEagerLoader.shared.snapshot()
+            return ModulesResponseV1(
+                variant: EngineConfig.variant.rawValue,
+                version: EngineConfig.version,
+                modules: detail
             )
         }
 
