@@ -76,6 +76,36 @@ final class APIServer: ObservableObject {
 
         state = .running
         logger.info("Yooz Engine started on \(EngineConfig.host):\(EngineConfig.port)")
+
+        // Always apply variant gating so the snapshot reflects the
+        // active build variant (e.g. VAD `unavailable` on whisper)
+        // even when eager-load is disabled in tests. This is cheap
+        // (touches the readiness map only); no module loads run.
+        await ModuleEagerLoader.shared.markVariantUnavailableModules(
+            variant: EngineConfig.variant
+        )
+
+        // Kick off the variant-aware module eager-load so modules
+        // are primed by the time thin clients hit them. The kickoff
+        // itself is non-blocking — it spawns a background TaskGroup
+        // and returns immediately, so the server is fully responsive
+        // while loads run.
+        //
+        // Tying this to `start()` (rather than only to the app's
+        // `applicationDidFinishLaunching` hook) makes the menu Stop
+        // -> Start path symmetric: `stop()` resets the loader,
+        // `start()` re-kicks. Without this, a second `start()`
+        // would leave every module in the previous run's terminal
+        // state while the underlying engines are unloaded.
+        //
+        // Disabled in test runs (`EngineConfig.eagerLoadOnLaunch`
+        // checks for XCTest env vars) so route tests boot fast and
+        // don't pay the model-fetch cost.
+        if EngineConfig.eagerLoadOnLaunch {
+            await ModuleEagerLoader.shared.kickoff(
+                variant: EngineConfig.variant
+            )
+        }
     }
 
     func stop() async {
@@ -94,6 +124,15 @@ final class APIServer: ObservableObject {
         } catch {
             logger.error("Failed to reset VAD state: \(error)")
         }
+
+        // Reset the eager loader so a subsequent `start()` (e.g. the
+        // user toggled Stop -> Start from the menu bar) re-runs the
+        // load policy against the now-unloaded modules. Without this
+        // reset, the second start would leave the loader thinking
+        // every module is `ready` (its last terminal state) while
+        // the underlying modules are actually unloaded — health
+        // would lie until the user hit each route.
+        await ModuleEagerLoader.shared.reset()
 
         serverTask?.cancel()
         _ = await serverTask?.result
@@ -315,20 +354,56 @@ final class APIServer: ObservableObject {
 
         // Health
         router.get("/v1/health") { _, _ in
+            // Pull the variant-aware readiness map from the eager
+            // loader. The map is the source of truth for the new
+            // `loading` / `error` / `unavailable` states; the legacy
+            // bool fields stay for SDK back-compat (true iff the
+            // module reports `.ready`).
+            //
+            // We also OR in the engines' current "is loaded" flags
+            // so a thin client that called `/v1/stt/load` or
+            // `/v1/llm/generate` and bypassed the eager loader still
+            // sees `true` here. The eager loader only writes its
+            // own state; it does not poll the engines after kickoff.
+            let detail = await ModuleEagerLoader.shared.snapshot()
             let llmLoaded = await TouchUpEngine.shared.isLightModelLoaded
             let touchupReady = await TouchUpEngine.shared.isPreloaded
             let vadLoaded = await VADEngine.shared.isLoaded
+
+            func isReady(_ id: ModuleID, fallback: Bool) -> Bool {
+                if detail[id.rawValue]?.state == .ready { return true }
+                return fallback
+            }
+
             return HealthResponse(
                 status: "ok",
                 version: EngineConfig.version,
                 modules: EngineModules(
-                    stt: sttEngine.isRunning,
-                    llm: llmLoaded,
-                    touchup: touchupReady,
-                    grammar: GrammarEngine.shared.isAvailable,
-                    vad: vadLoaded,
-                    tts: false
+                    stt: isReady(.stt, fallback: sttEngine.isRunning),
+                    llm: isReady(.llm, fallback: llmLoaded),
+                    touchup: isReady(.touchup, fallback: touchupReady),
+                    grammar: isReady(
+                        .grammar,
+                        fallback: GrammarEngine.shared.isAvailable
+                    ),
+                    vad: isReady(.vad, fallback: vadLoaded),
+                    tts: isReady(.tts, fallback: false),
+                    detail: detail
                 )
+            )
+        }
+
+        // Modules — purpose-built status endpoint for the engine
+        // status UI in thin clients. Same `detail` map as
+        // `/v1/health.modules.detail`, plus the active variant so
+        // clients can special-case `unavailable` modules (whisper's
+        // VAD row, lite's STT row).
+        router.get("/v1/modules") { _, _ in
+            let detail = await ModuleEagerLoader.shared.snapshot()
+            return ModulesResponseV1(
+                variant: EngineConfig.variant.rawValue,
+                version: EngineConfig.version,
+                modules: detail
             )
         }
 

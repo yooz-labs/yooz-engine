@@ -6,6 +6,14 @@ struct HealthResponse: ResponseCodable {
     let modules: EngineModules
 }
 
+/// Per-module readiness reported by `/v1/health`.
+///
+/// The legacy `Bool` fields stay for SDK back-compat: a module reads
+/// `true` once it transitions to `.ready`, `false` otherwise. The
+/// new `detail` map carries the richer state (`loading` / `error` /
+/// `unavailable`) so clients can render a spinner or a neutral tag
+/// instead of a red dot. See `ModuleReadiness` for the wire-level
+/// rawValues clients should branch on.
 struct EngineModules: Codable {
     let stt: Bool
     let llm: Bool
@@ -13,6 +21,18 @@ struct EngineModules: Codable {
     let grammar: Bool
     let vad: Bool
     let tts: Bool
+    let detail: ModuleDetailMap
+}
+
+/// Response for `GET /v1/modules`. Reports the active build variant
+/// plus the same per-module readiness map exposed under
+/// `/v1/health.modules.detail`. Useful for clients that want a
+/// purpose-built endpoint for their "Engine status" UI without
+/// having to filter the health-check fields.
+struct ModulesResponseV1: ResponseCodable {
+    let variant: String
+    let version: String
+    let modules: ModuleDetailMap
 }
 
 struct ModelsResponse: ResponseCodable {
