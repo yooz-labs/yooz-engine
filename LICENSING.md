@@ -9,7 +9,7 @@
 
 | What | License | Where |
 |---|---|---|
-| Product code (engine, whisper, notes, keyboard, vault, messenger) | **PolyForm Shield 1.0.0** (source-available) | github.com/yooz-labs |
+| Product code (engine, whisper, notes, keyboard, vault, messenger, remi) | **PolyForm Shield 1.0.0** (source-available) | github.com/yooz-labs |
 | Model weights (ASR, touchup LLMs, distilled students, LoRA adapters) | **Apache 2.0** (open source) | huggingface.co/YoozLabs |
 
 We split the license so the **product** (orchestration, platform, UX, integration) is protected from competing managed services, while the **weights** stay open for the research community.
