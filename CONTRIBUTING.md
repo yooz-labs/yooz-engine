@@ -20,10 +20,19 @@ Thanks for considering a contribution. The engine is the heart of the Yooz ecosy
 1. **Open an issue** describing the bug or feature (skip for trivial fixes).
 2. **Branch from `main`** (or the relevant epic branch if one is in flight): `git checkout -b feature/issue-N-short-description`.
 3. **Make atomic commits** with concise messages (under 50 chars on the subject line, no AI attribution).
-4. **Write tests**. We use XCTest. Run the full suite via `xcodebuild -scheme YoozEngine test` before pushing.
+4. **Write tests**. We use XCTest. Run the full suite before pushing:
+
+   ```bash
+   xcodegen generate
+   xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
+     -configuration Debug -skipMacroValidation \
+     -destination 'platform=macOS' test
+   ```
+
+   `-skipMacroValidation` is required so the `MLXHuggingFaceMacros` trust prompt doesn't hang the headless invocation.
 5. **Run lint**: SwiftLint locally (`swiftlint lint`) and Spell Check (`typos` if you have it). CI runs both on every PR.
 6. **Open a PR** against `main` (or the epic branch). Describe what changed, why, and how to test it. Reference the issue number with `Closes #N`.
-7. **Address review findings**. We run an automated multi-agent review (`/review-pr`) plus human review. Address every finding that isn't a genuine false positive; for skips, explain why in a PR comment.
+7. **Address review findings**. Maintainers run an automated multi-agent review on every PR before merge (you don't need to run it yourself); plus human review. Address every finding that isn't a genuine false positive; for skips, explain why in a PR comment.
 8. **Merge after CI green**. Don't merge with red CI. Maintainers handle the merge.
 
 ## Commit style

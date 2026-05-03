@@ -4,13 +4,13 @@
 
 Yooz Engine is a unified local AI service for macOS. It runs as a menu bar app on `localhost:19920` and provides on-device speech-to-text, LLM inference, grammar correction, voice activity detection, and (soon) text-to-speech to every Yooz app on your system. Models stay on your device; nothing is sent to the cloud.
 
-This is the source repository. Built with Swift 6, SwiftUI, [Hummingbird](https://github.com/hummingbird-project/hummingbird) for HTTP/WebSocket, and [MLX-Swift](https://github.com/ml-explore/mlx-swift) for on-device inference on Apple Silicon.
+This is the source repository. Built with Swift 5.9 (with Swift 6 concurrency idioms), SwiftUI, [Hummingbird](https://github.com/hummingbird-project/hummingbird) for HTTP/WebSocket, and [MLX-Swift](https://github.com/ml-explore/mlx-swift) for on-device inference on Apple Silicon.
 
 ## What's inside
 
 ```
 YoozEngine.app — menu bar service exposing localhost:19920
-├── /v1/health, /v1/models, /v1/modules     — service introspection
+├── /v1/health, /v1/models                  — service introspection
 ├── /v1/stt/{languages,status,load,batch}   — speech to text (REST)
 ├── /v1/stt/stream                          — speech to text (WebSocket)
 ├── /v1/llm/generate                        — LLM text generation
@@ -26,12 +26,16 @@ Build variants pick which modules ship (`YoozEngine` full, `YoozEngineWhisper` n
 ```bash
 # Build
 xcodegen generate
-xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine -configuration Debug build
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
+  -configuration Debug -skipMacroValidation \
+  -derivedDataPath build build
 
 # Run
-open build/Debug/Yooz\ Engine.app
+open build/Build/Products/Debug/Yooz\ Engine.app
 curl http://localhost:19920/v1/health
 ```
+
+`-skipMacroValidation` bypasses the per-machine trust prompt for `MLXHuggingFaceMacros` (required for headless / first-run CLI builds). `-derivedDataPath build` keeps the artifact next to the source tree instead of `~/Library/Developer/Xcode/DerivedData`.
 
 The full architecture, build variants, conventions, and module specs live in [`AGENTS.md`](AGENTS.md). The strategic licensing position lives in [`LICENSING.md`](LICENSING.md).
 
@@ -61,7 +65,7 @@ For commercial-use or dual-license inquiries: **dev@yooz.info**.
 
 ## Contributing
 
-PRs welcome. Sign your commits with `Signed-off-by: Your Name <you@example.com>` (DCO style); a `CONTRIBUTING.md` with the full guide is on the way.
+PRs welcome. Sign your commits with `Signed-off-by: Your Name <you@example.com>` (DCO style); see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
 
 ## Status
 
