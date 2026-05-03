@@ -5,6 +5,21 @@ import SwiftUI
 final class EngineAppDelegate: NSObject, NSApplicationDelegate {
     let server = APIServer()
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Belt-and-suspenders: helper-mode processes already pin
+        // `.prohibited` in `main.swift` *before* the run loop starts, and
+        // they bypass SwiftUI entirely so no `MenuBarExtra` scene is ever
+        // built. Re-asserting the policy here costs nothing and keeps the
+        // contract explicit if a future entry point ever forgets to set
+        // it (e.g. an XCTest host that instantiates the delegate directly).
+        // See #42 for why setting the policy alone isn't sufficient: by
+        // the time `MenuBarExtra` registers its `NSStatusItem`, the icon
+        // is already in the menu bar regardless of activation policy.
+        if EngineConfig.isHelper {
+            NSApp.setActivationPolicy(.prohibited)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task {
             do {

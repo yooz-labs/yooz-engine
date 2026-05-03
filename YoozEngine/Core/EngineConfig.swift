@@ -79,6 +79,24 @@ enum EngineConfig {
     static let host: String = "127.0.0.1"
     static let version: String = "0.6.0"
 
+    // MARK: - Helper-mode contract (issue #42)
+
+    /// Env-var name host apps (yooz-whisper, yooz-notes, …) set on the
+    /// helper subprocess to request headless behaviour: no MenuBarExtra,
+    /// no Dock entry, `.prohibited` activation policy. Pinned by
+    /// `EngineConfigHelperModeTests` because renaming it silently
+    /// breaks every host's launch code (and brings the brain icon back).
+    static let headlessEnvVar: String = "YOOZ_ENGINE_HEADLESS"
+
+    /// `true` iff `YOOZ_ENGINE_HEADLESS` is set to literal `"1"`.
+    /// Strict equality — `"0"`, `"true"`, empty, and unset all mean
+    /// standalone mode. Read lazily on every call so tests can drive
+    /// the predicate via `setenv` / `unsetenv` without spawning a
+    /// subprocess.
+    static var isHelper: Bool {
+        ProcessInfo.processInfo.environment[headlessEnvVar] == "1"
+    }
+
     /// Active build variant. Resolved from compile-time flags so the
     /// runtime read is a constant load. Override with
     /// `OTHER_SWIFT_FLAGS=-DYOOZ_ENGINE_WHISPER` or

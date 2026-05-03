@@ -156,9 +156,9 @@ schemes:
         YoozEngineTests: [test]
     test:
       config: Debug
+      gatherCoverageData: false
       targets:
         - YoozEngineTests
-      gatherCoverageData: false
     run:
       config: Debug
     archive:
