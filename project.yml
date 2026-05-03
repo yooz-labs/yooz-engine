@@ -401,6 +401,12 @@ schemes:
       config: Debug
       targets:
         - YoozEngineTests
+        # EngineCore is a framework target shared across the three app
+        # variants; its unit tests (BuildVariant, ModuleHealth, and the
+        # EngineConfig helper-mode contract for #42) belong in the
+        # default scheme so a regression in helper suppression surfaces
+        # in the standard CI sweep rather than at integration time.
+        - EngineCoreTests
     run:
       config: Debug
   IntegrationTests:
