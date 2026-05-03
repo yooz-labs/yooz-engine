@@ -178,7 +178,17 @@ actor ModelDownloader {
         return try await downloadFile(from: releaseURL, expectedSize: modelType.estimatedSize, progressHandler: progressHandler)
     }
 
-    private func downloadFile(
+    /// Progress reporting threshold. Matches the previous byte-by-byte
+    /// implementation: notify the caller every 5% of total bytes received.
+    /// `URLSessionDownloadTask` writes chunks at native I/O speed, so the
+    /// delegate's progress callback fires far more often than this — we
+    /// throttle here to preserve the existing callback cadence semantics.
+    private static let progressReportingStepPercent: Int = 5
+
+    /// Downloads `url` to a temp file in the cache directory and returns the URL.
+    /// `internal` (not `private`) so unit tests can exercise the chunked path
+    /// directly against a localhost fixture server. See issue #22.
+    func downloadFile(
         from url: URL,
         expectedSize: Int64,
         token: String? = nil,
@@ -193,66 +203,54 @@ actor ModelDownloader {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        // Use bytes(for:) for granular progress tracking
-        let (asyncBytes, response) = try await session.bytes(for: request)
+        // Use URLSessionDownloadTask: writes to a system temp file at native
+        // I/O speed (no per-byte Swift await suspensions). A delegate forwards
+        // progress to the caller; we then move the file to our cache dir.
+        // See issue #22 for the perf rationale.
+        progressHandler(0.0)
+
+        let delegate = DownloadProgressDelegate(
+            expectedSize: expectedSize,
+            stepPercent: Self.progressReportingStepPercent,
+            progressHandler: progressHandler
+        )
+
+        // Per-task delegate via downloadTask(with:completionHandler:) is not
+        // available with progress callbacks; use a dedicated session keyed
+        // to this delegate so isolation is clean and the delegate is retained
+        // for the lifetime of the task.
+        let downloadConfig = URLSessionConfiguration.default
+        downloadConfig.timeoutIntervalForRequest = 30
+        downloadConfig.timeoutIntervalForResource = 3600
+        let downloadSession = URLSession(
+            configuration: downloadConfig,
+            delegate: delegate,
+            delegateQueue: nil
+        )
+        defer { downloadSession.invalidateAndCancel() }
+
+        let (downloadedTempURL, response) = try await downloadSession.download(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
+            try? fileManager.removeItem(at: downloadedTempURL)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             logger.error("Download failed with status \(statusCode)")
             throw DownloadError.httpError(statusCode)
         }
 
-        // Get actual size from response or use expected
-        let totalSize = httpResponse.expectedContentLength > 0
-            ? httpResponse.expectedContentLength
-            : expectedSize
-
-        // Write bytes to file with progress updates
+        // Move the system temp file into our cache directory. The system
+        // temp file is deleted when its session is invalidated, so we must
+        // move (or copy) it before the defer fires.
         try? fileManager.removeItem(at: tempFile)
-        fileManager.createFile(atPath: tempFile.path, contents: nil)
-        let outputHandle = try FileHandle(forWritingTo: tempFile)
-
-        var success = false
-        defer {
-            if !success {
-                try? outputHandle.close()
-                try? fileManager.removeItem(at: tempFile)
-            }
+        do {
+            try fileManager.moveItem(at: downloadedTempURL, to: tempFile)
+        } catch {
+            // Cross-volume move can fail; fall back to copy + remove.
+            try fileManager.copyItem(at: downloadedTempURL, to: tempFile)
+            try? fileManager.removeItem(at: downloadedTempURL)
         }
 
-        var bytesReceived: Int64 = 0
-        var lastReportedProgress = 0
-        var buffer = Data()
-        let bufferSize = 65536 // 64KB buffer
-
-        progressHandler(0.0)
-
-        for try await byte in asyncBytes {
-            buffer.append(byte)
-            bytesReceived += 1
-
-            // Write in chunks for efficiency
-            if buffer.count >= bufferSize {
-                try outputHandle.write(contentsOf: buffer)
-                buffer.removeAll(keepingCapacity: true)
-
-                // Report progress every 5%
-                let currentProgress = Int((Double(bytesReceived) / Double(totalSize)) * 100)
-                if currentProgress >= lastReportedProgress + 5 {
-                    lastReportedProgress = currentProgress
-                    progressHandler(Double(bytesReceived) / Double(totalSize))
-                }
-            }
-        }
-
-        // Write remaining buffer
-        if !buffer.isEmpty {
-            try outputHandle.write(contentsOf: buffer)
-        }
-        try outputHandle.close()
-
-        success = true
         progressHandler(1.0)
         return tempFile
     }
@@ -305,6 +303,66 @@ private struct OCILayer: Decodable {
     let mediaType: String
     let digest: String
     let size: Int64
+}
+
+// MARK: - Download Progress Delegate
+
+/// Forwards `URLSessionDownloadTask` progress updates to a Sendable callback,
+/// throttling to a configurable percent step so callers see the same cadence
+/// as the prior byte-by-byte implementation (every 5% of bytes received).
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let expectedSize: Int64
+    private let stepPercent: Int
+    private let progressHandler: @Sendable (Double) -> Void
+    private let lock = NSLock()
+    private var lastReportedPercent: Int = 0
+
+    init(
+        expectedSize: Int64,
+        stepPercent: Int,
+        progressHandler: @escaping @Sendable (Double) -> Void
+    ) {
+        self.expectedSize = expectedSize
+        self.stepPercent = stepPercent
+        self.progressHandler = progressHandler
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let totalSize = totalBytesExpectedToWrite > 0
+            ? totalBytesExpectedToWrite
+            : expectedSize
+        guard totalSize > 0 else { return }
+
+        let fraction = Double(totalBytesWritten) / Double(totalSize)
+        let currentPercent = Int(fraction * 100)
+
+        lock.lock()
+        let shouldReport = currentPercent >= lastReportedPercent + stepPercent
+        if shouldReport {
+            lastReportedPercent = currentPercent
+        }
+        lock.unlock()
+
+        if shouldReport {
+            progressHandler(min(max(fraction, 0.0), 1.0))
+        }
+    }
+
+    // Required by URLSessionDownloadDelegate but the actual file move is
+    // handled by the async `download(for:)` continuation in the caller.
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        // No-op: async download(for:) returns the temp URL via its return value.
+    }
 }
 
 // MARK: - Errors
