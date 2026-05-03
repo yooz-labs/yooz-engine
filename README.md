@@ -10,7 +10,7 @@ This is the source repository. Built with Swift 5.9 (with Swift 6 concurrency id
 
 ```
 YoozEngine.app — menu bar service exposing localhost:19920
-├── /v1/health, /v1/models                  — service introspection
+├── /v1/health, /v1/models, /v1/modules     — service introspection
 ├── /v1/stt/{languages,status,load,batch}   — speech to text (REST)
 ├── /v1/stt/stream                          — speech to text (WebSocket)
 ├── /v1/llm/generate                        — LLM text generation
