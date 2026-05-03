@@ -95,9 +95,11 @@ final class ModelDownloaderTests: XCTestCase {
         let downloader = ModelDownloader(bundleIdentifier: "live.yooz.engine.tests")
 
         do {
+            // expectedSize is irrelevant here: the HTTP 4xx is raised before
+            // any progress accounting happens.
             _ = try await downloader.downloadFile(
                 from: url,
-                expectedSize: 100,
+                expectedSize: 0,
                 token: nil,
                 progressHandler: { _ in }
             )
@@ -236,8 +238,7 @@ private final class LocalHTTPFileServer: @unchecked Sendable {
             }
 
             // Headers end at \r\n\r\n. Bodies are not used here.
-            if let range = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                _ = buffer[..<range.lowerBound]
+            if buffer.range(of: Data("\r\n\r\n".utf8)) != nil {
                 self.respond(on: connection)
                 return
             }
