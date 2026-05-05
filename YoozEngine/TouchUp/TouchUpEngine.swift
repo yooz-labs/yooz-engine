@@ -419,7 +419,20 @@ actor TouchUpEngine {
 
     // MARK: - Model Info
 
-    /// Check if the quality model is cached locally
+    /// Whether the Light model snapshot is on disk in the HF cache.
+    /// Both tiers download from HF on first use (PR #93 / issue #77),
+    /// so neither is "always cached".
+    var isLightModelCached: Bool {
+        get async {
+            guard let light = lightModel else {
+                let temp = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
+                return await temp.isModelCached
+            }
+            return await light.isModelCached
+        }
+    }
+
+    /// Whether the Quality model snapshot is on disk in the HF cache.
     var isQualityModelCached: Bool {
         get async {
             guard let quality = qualityModel else {
@@ -434,13 +447,14 @@ actor TouchUpEngine {
     func getModelInfo() async -> (light: LLMModelInfo, quality: LLMModelInfo) {
         let lightLoaded = await isLightModelLoaded
         let qualityLoaded = await isQualityModelLoaded
+        let lightCached = await isLightModelCached
         let qualityCached = await isQualityModelCached
 
         return (
             light: LLMModelInfo(
                 type: .yoozLight,
                 isLoaded: lightLoaded,
-                isCached: true  // Always embedded
+                isCached: lightCached
             ),
             quality: LLMModelInfo(
                 type: .yoozQuality,
