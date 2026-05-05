@@ -57,9 +57,10 @@ private struct GenerateResult {
 #endif
 
 /// MLX-Swift backend for Yooz LLM models.
-/// Supports both embedded (Yooz-Light) and downloaded (Yooz-Quality) models.
-/// Implements system prompt KV cache optimization to skip re-computing the
-/// system prompt tokens on subsequent calls with the same system prompt.
+/// Pulls model weights from Hugging Face on first load (cached under
+/// `~/.cache/huggingface/hub/`). Implements system-prompt KV cache
+/// optimisation to skip re-computing the system prompt tokens on
+/// subsequent calls with the same system prompt.
 actor MLXLLMBackend: LLMBackend {
 
     // MARK: - Properties
@@ -70,10 +71,10 @@ actor MLXLLMBackend: LLMBackend {
     /// Whether a model is loaded and ready for generation.
     private(set) var isLoaded = false
 
-    /// Download progress (0.0 to 1.0) for non-embedded models
+    /// Download progress (0.0 to 1.0). First-run downloads stream from
+    /// Hugging Face via `#huggingFaceLoadModelContainer`; cached snapshots
+    /// jump straight to 1.0.
     private(set) var downloadProgress: Double = 0
-
-    private let downloader: ModelDownloader
 
     private let bundleIdentifier: String
 
@@ -136,7 +137,6 @@ actor MLXLLMBackend: LLMBackend {
         self.modelType = modelType
         self.bundleIdentifier = bundleIdentifier
         self.kvCompression = kvCompression
-        self.downloader = ModelDownloader(bundleIdentifier: bundleIdentifier)
     }
 
     // MARK: - LLMBackend Protocol
@@ -144,30 +144,36 @@ actor MLXLLMBackend: LLMBackend {
     func load() async throws {
         guard !isLoaded else { return }
 
-        #if canImport(MLXLMCommon)
-        logger.info("Loading model \(self.modelType.rawValue)...")
+        #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+        let hfID = modelType.huggingFaceID
+        logger.info("Loading model \(self.modelType.rawValue) from HF \(hfID)...")
 
         do {
-            let modelDirectory: URL = if modelType.isEmbedded {
-                try getEmbeddedModelDirectory()
-            } else {
-                try await downloader.downloadModel(modelType) { [weak self] progress in
+            // Use the explicit `loadModelContainer(from: downloader, using:
+            // tokenizerLoader, configuration:)` form rather than the
+            // `#huggingFaceLoadModelContainer` macro because the macro's
+            // closure-arg expansion currently fails to produce a diagnostic
+            // when the progress handler captures `[weak self]` (Swift compiler
+            // bug observed at swift-5.9 / mlx-swift-lm 3.x). The explicit
+            // form composes the same default downloader (swift-transformers
+            // `Hub` via `#hubDownloader()`) and tokenizer loader macros and
+            // is what the macro itself expands to internally.
+            //
+            // First-run downloads stream into `~/.cache/huggingface/hub/`;
+            // cached snapshots reuse the same on-disk layout. No
+            // `/Volumes/S1` fallback, no embedded bundle dance — packaged
+            // builds and fresh installs hit the same code path.
+            let configuration = ModelConfiguration(id: hfID)
+            modelContainer = try await loadModelContainer(
+                from: #hubDownloader(),
+                using: #huggingFaceTokenizerLoader(),
+                configuration: configuration,
+                progressHandler: { [weak self] progress in
+                    let fraction = progress.fractionCompleted
                     Task {
-                        await self?.setDownloadProgress(progress)
+                        await self?.setDownloadProgress(fraction)
                     }
                 }
-            }
-
-            logger.info("Model directory: \(modelDirectory.path)")
-
-            // mlx-swift-lm 3.x requires an explicit TokenizerLoader. We use
-            // the MLXHuggingFace-provided default (Tokenizers.AutoTokenizer)
-            // via the `#huggingFaceTokenizerLoader()` macro. The model
-            // weights are already on disk so we use the directory-based
-            // overload of `loadModelContainer` and skip the Downloader.
-            modelContainer = try await loadModelContainer(
-                from: modelDirectory,
-                using: #huggingFaceTokenizerLoader()
             )
 
             isLoaded = true
@@ -179,7 +185,7 @@ actor MLXLLMBackend: LLMBackend {
             throw LLMError.loadFailed(error.localizedDescription)
         }
         #else
-        logger.error("MLXLMCommon not available")
+        logger.error("MLXLMCommon / MLXHuggingFace not available")
         throw LLMError.notAvailable("MLX framework not linked. Please rebuild with mlx-swift-lm package.")
         #endif
     }
@@ -495,59 +501,6 @@ actor MLXLLMBackend: LLMBackend {
         logger.debug("Download progress: \(Int(value * 100))%")
     }
 
-    // MARK: - Embedded Model
-
-    private func getEmbeddedModelDirectory() throws -> URL {
-        if let bundleURL = Bundle.main.url(forResource: modelType.rawValue, withExtension: nil) {
-            logger.info("Found embedded model in bundle: \(bundleURL.path)")
-            return bundleURL
-        }
-
-        if let resourcesURL = Bundle.main.resourceURL?.appendingPathComponent(modelType.rawValue) {
-            if FileManager.default.fileExists(atPath: resourcesURL.path) {
-                logger.info("Found embedded model in resources: \(resourcesURL.path)")
-                return resourcesURL
-            }
-        }
-
-        // Look in Application Support (for dev builds)
-        if let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let modelsDir = appSupportURL.appendingPathComponent(bundleIdentifier).appendingPathComponent("Models")
-            let modelDir = modelsDir.appendingPathComponent(modelType.rawValue)
-            if FileManager.default.fileExists(atPath: modelDir.path) {
-                logger.info("Found model in Application Support: \(modelDir.path)")
-                return modelDir
-            }
-
-            let baseModelDir = modelsDir.appendingPathComponent(modelType.baseModelId)
-            if FileManager.default.fileExists(atPath: baseModelDir.path) {
-                logger.info("Found model (base ID) in Application Support: \(baseModelDir.path)")
-                return baseModelDir
-            }
-        }
-
-        // Also check EngineConfig.modelsDirectory
-        let engineModelsDir = EngineConfig.modelsDirectory.appendingPathComponent(modelType.rawValue)
-        if FileManager.default.fileExists(atPath: engineModelsDir.path) {
-            logger.info("Found model in engine models directory: \(engineModelsDir.path)")
-            return engineModelsDir
-        }
-
-        #if DEBUG
-        let devPath = "/Volumes/S1/HuggingFace/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots"
-        if FileManager.default.fileExists(atPath: devPath) {
-            let contents = try FileManager.default.contentsOfDirectory(atPath: devPath)
-            if let firstSnapshot = contents.first {
-                let snapshotPath = URL(fileURLWithPath: devPath).appendingPathComponent(firstSnapshot)
-                logger.info("Found model in dev HuggingFace cache: \(snapshotPath.path)")
-                return snapshotPath
-            }
-        }
-        #endif
-
-        throw LLMError.notAvailable("Embedded model \(modelType.rawValue) not found in bundle. For development, copy model to ~/Library/Application Support/\(bundleIdentifier)/Models/\(modelType.rawValue)/")
-    }
-
     // MARK: - Post-Processing
 
     private func postProcessResponse(_ response: String, originalInput: String) -> String {
@@ -606,15 +559,53 @@ actor MLXLLMBackend: LLMBackend {
         return nil
     }
 
-    // MARK: - Model Info
+    // MARK: - Cache
 
+    /// Whether the HF snapshot for this model is already on disk.
+    ///
+    /// Used by Touch-up's picker UX to decide whether selecting this
+    /// model triggers a fresh download. Resolves the cache root via
+    /// `swift-huggingface`'s `HubCache` so the same code path works
+    /// across non-sandboxed `YoozEngine.app` (`~/.cache/huggingface/hub`),
+    /// sandboxed bundled helpers
+    /// (`<container>/Library/Caches/huggingface/hub`), and explicit
+    /// overrides via `HF_HUB_CACHE` / `HF_HOME`.
+    ///
+    /// A snapshot counts as cached when it contains both `config.json`
+    /// and at least one `*.safetensors` file. An empty or partial
+    /// snapshot dir reports `false` so the picker doesn't claim "ready"
+    /// for an interrupted download. Repo IDs without an owner segment
+    /// fall back to `false` (the engine never wires such IDs today).
     var isModelCached: Bool {
-        get async {
-            if modelType.isEmbedded {
-                return true
-            }
-            return await downloader.isModelCached(modelType)
+        #if canImport(MLXHuggingFace)
+        let id = modelType.huggingFaceID
+        let parts = id.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return false }
+        let repoID = HuggingFace.Repo.ID(
+            namespace: String(parts[0]),
+            name: String(parts[1])
+        )
+        let snapshotsRoot = HubCache().snapshotsDirectory(repo: repoID, kind: .model)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: snapshotsRoot, includingPropertiesForKeys: nil
+        ) else {
+            return false
         }
+        for snapshot in entries {
+            let config = snapshot.appendingPathComponent("config.json")
+            guard FileManager.default.fileExists(atPath: config.path) else {
+                continue
+            }
+            let contents = (try? FileManager.default.contentsOfDirectory(
+                at: snapshot, includingPropertiesForKeys: nil
+            )) ?? []
+            let hasWeights = contents.contains { $0.pathExtension == "safetensors" }
+            if hasWeights { return true }
+        }
+        return false
+        #else
+        return false
+        #endif
     }
 }
 
