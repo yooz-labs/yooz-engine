@@ -7,10 +7,21 @@ import Foundation
 
 // MARK: - Model Types
 
-/// Yooz LLM model types for touch-up processing
+/// Yooz LLM model types for touch-up processing.
+///
+/// Both tiers download from Hugging Face on first use via the
+/// `#huggingFaceLoadModelContainer` macro in `MLXLLMBackend`. There is no
+/// embedded / bundled model path — packaged builds and fresh installs
+/// behave identically (no `/Volumes/S1` dev-cache fallback). Cached
+/// snapshots land under `~/.cache/huggingface/hub/` per swift-transformers
+/// `Hub` defaults.
 enum LLMModelType: String, CaseIterable, Sendable {
-    case yoozLight = "yooz-light-v3"      // Fast, fine-tuned (Qwen2.5-0.5B-4bit, 276MB)
-    case yoozQuality = "yooz-quality-v3"  // High quality, fine-tuned (Qwen3-1.7B-4bit, 1037MB)
+    /// Fast proofread tier. Currently unfinetuned base — see issue #91 for
+    /// the planned `Yooz-Light v2` LoRA on the gold_standard_v3 corpus.
+    case yoozLight = "yooz-light-v3"
+    /// High-quality proofread tier. Fine-tuned LoRA fused into the base
+    /// (Qwen3.5-0.8B-MLX-4bit).
+    case yoozQuality = "yooz-quality-v3"
 
     var displayName: String {
         switch self {
@@ -26,40 +37,47 @@ enum LLMModelType: String, CaseIterable, Sendable {
         case .yoozLight:
             return "Fast proofreading (~200ms)"
         case .yoozQuality:
-            return "High quality proofreading (~490ms)"
+            return "High quality proofreading (~310ms)"
         }
     }
 
+    /// Approximate on-disk size after HF download (used for picker UX
+    /// hints in consumer apps). Numbers are the published 4-bit MLX
+    /// snapshot sizes, not raw weights.
     var estimatedSize: Int64 {
         switch self {
         case .yoozLight:
-            return 276 * 1024 * 1024   // ~276 MB
+            return 276 * 1024 * 1024   // ~276 MB (Qwen2.5-0.5B-Instruct-4bit)
         case .yoozQuality:
-            return 1037 * 1024 * 1024  // ~1037 MB
+            return 424 * 1024 * 1024   // ~424 MB (Yooz-Quality-v2 fused 4-bit)
         }
     }
 
-    var isEmbedded: Bool {
+    /// Hugging Face model identifier. Pulled by
+    /// `loadModelContainer(from: #hubDownloader(), …, configuration:)`
+    /// on first load. `revision` defaults to `main`; pin a commit here
+    /// only if a future upstream change breaks compatibility with our
+    /// backend assumptions.
+    var huggingFaceID: String {
         switch self {
         case .yoozLight:
-            return true   // Bundled with app
+            // Stock Qwen2.5-0.5B-Instruct 4-bit MLX. No fine-tune yet
+            // (tracked by #91). Wired here so the engine builds out of
+            // the box and consumers can switch to the fine-tuned LoRA
+            // by changing this single string when Light v2 ships on HF.
+            return "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
         case .yoozQuality:
-            return false  // Downloaded from GHCR on-demand
+            // TEMPORARY: stock Qwen3.5-0.8B base. The fine-tuned
+            // checkpoint at `YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA`
+            // ships an `adapters/` subdirectory alongside the fused
+            // `model.safetensors`. mlx-swift-lm's loader auto-applies
+            // the adapter on top of the already-fused weights, which
+            // throws `Unhandled keys [lora_a, lora_b] in QuantizedLinear`.
+            // Switch this to `YoozLabs/Yooz-Quality-v3-...` once the v3
+            // sweep winner (issue #82) is republished without the
+            // adapter pollution (tracking issue #92).
+            return "mlx-community/Qwen3.5-0.8B-MLX-4bit"
         }
-    }
-
-    var baseModelId: String {
-        switch self {
-        case .yoozLight:
-            return "qwen2.5-0.5b-instruct-4bit"
-        case .yoozQuality:
-            return "qwen3-1.7b-instruct-ojus-4bit"
-        }
-    }
-
-    /// GHCR package name for downloading
-    var packageName: String {
-        "yooz-models"
     }
 }
 
