@@ -564,24 +564,28 @@ actor MLXLLMBackend: LLMBackend {
     /// Whether the HF snapshot for this model is already on disk.
     ///
     /// Used by Touch-up's picker UX to decide whether selecting this
-    /// model triggers a fresh download. Checks the standard
-    /// swift-transformers `Hub` cache layout
-    /// (`~/.cache/huggingface/hub/models--<owner>--<name>/snapshots/`).
+    /// model triggers a fresh download. Resolves the cache root via
+    /// `swift-huggingface`'s `HubCache` so the same code path works
+    /// across non-sandboxed `YoozEngine.app` (`~/.cache/huggingface/hub`),
+    /// sandboxed bundled helpers
+    /// (`<container>/Library/Caches/huggingface/hub`), and explicit
+    /// overrides via `HF_HUB_CACHE` / `HF_HOME`.
+    ///
     /// A snapshot counts as cached when it contains both `config.json`
     /// and at least one `*.safetensors` file. An empty or partial
     /// snapshot dir reports `false` so the picker doesn't claim "ready"
-    /// for an interrupted download.
+    /// for an interrupted download. Repo IDs without an owner segment
+    /// fall back to `false` (the engine never wires such IDs today).
     var isModelCached: Bool {
+        #if canImport(MLXHuggingFace)
         let id = modelType.huggingFaceID
-        // HF cache key is `models--<owner>--<name>`. Models without an
-        // owner segment (rare) flatten to the same form with an empty
-        // leading component.
-        let key = "models--" + id.replacingOccurrences(of: "/", with: "--")
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let snapshotsRoot = home
-            .appendingPathComponent(".cache/huggingface/hub")
-            .appendingPathComponent(key)
-            .appendingPathComponent("snapshots")
+        let parts = id.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return false }
+        let repoID = HuggingFace.Repo.ID(
+            namespace: String(parts[0]),
+            name: String(parts[1])
+        )
+        let snapshotsRoot = HubCache().snapshotsDirectory(repo: repoID, kind: .model)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: snapshotsRoot, includingPropertiesForKeys: nil
         ) else {
@@ -599,6 +603,9 @@ actor MLXLLMBackend: LLMBackend {
             if hasWeights { return true }
         }
         return false
+        #else
+        return false
+        #endif
     }
 }
 
