@@ -166,6 +166,31 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// Hugging Face repository the engine pulls weights from when no
+    /// local snapshot is staged under `EngineConfig.modelsDirectory`
+    /// or the app bundle. Returns `nil` for families whose MLX mirror
+    /// has not been published yet.
+    ///
+    /// Mapping today:
+    /// - All Parakeet TDT languages share the multilingual
+    ///   `mlx-community/parakeet-tdt-0.6b-v3` checkpoint, so any
+    ///   `.parakeetTDT` member resolves to that single repo.
+    /// - FastConformer (Arabic/Persian/Hebrew) returns `nil` until
+    ///   `YoozLabs/fastconformer-{ar,fa,he}-mlx` is published.
+    ///   `STTModelHFDownloader.snapshot(for:)` throws
+    ///   `STTHFDownloadError.unsupportedLanguage` in that case so
+    ///   the failure is explicit instead of a generic 404 deeper
+    ///   in the load path.
+    /// - CJK and `.apple` return `nil` by design.
+    public var huggingFaceID: String? {
+        switch modelFamily {
+        case .parakeetTDT:
+            return "mlx-community/parakeet-tdt-0.6b-v3"
+        case .fastConformer, .cjk, .apple:
+            return nil
+        }
+    }
+
     /// Languages that share the same model weights
     /// Useful for knowing which languages can switch instantly
     public var modelSiblings: [STTLanguage] {

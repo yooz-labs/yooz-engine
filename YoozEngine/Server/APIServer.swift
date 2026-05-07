@@ -699,7 +699,8 @@ final class APIServer: ObservableObject {
             return STTStatusResponse(
                 loaded: backendLoaded,
                 language: language,
-                streaming: sttEngine.isStreaming
+                streaming: sttEngine.isStreaming,
+                progress: sttEngine.downloadProgress
             )
         }
 
@@ -785,13 +786,42 @@ final class APIServer: ObservableObject {
                 }
             }
 
+            // For Parakeet/FastConformer/AppleSTT: `start(language:)`
+            // resolves the model directory (legacy bundled drop → app
+            // bundle → HF auto-download via swift-transformers Hub).
+            // `allowFetch` defaults to true; clients that explicitly
+            // want to fail fast on a missing model (CI, offline modes)
+            // pass `allow_fetch=false`.
+            let allowFetch = body.allowFetch ?? true
             do {
-                try await sttEngine.start(language: language)
+                try await sttEngine.start(
+                    language: language,
+                    allowFetch: allowFetch
+                )
                 return try jsonResponse(STTStatusResponse(
                     loaded: true,
                     language: language.rawValue,
-                    streaming: false
+                    streaming: false,
+                    progress: sttEngine.downloadProgress
                 ))
+            } catch let error as YoozSTTError {
+                // Map `modelNotFound` to 404 so a missing-mirror or
+                // allow_fetch=false case is distinguishable from a
+                // real load failure (corrupt safetensors, OOM, …).
+                switch error {
+                case .modelNotFound(let message):
+                    return errorResponse(
+                        status: .notFound,
+                        message: message,
+                        code: "model_not_found"
+                    )
+                default:
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: error.localizedDescription,
+                        code: "load_failed"
+                    )
+                }
             } catch {
                 return errorResponse(
                     status: .internalServerError,
