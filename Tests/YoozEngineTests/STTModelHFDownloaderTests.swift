@@ -3,30 +3,22 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 //
-// Unit coverage for the issue #41 HF auto-download surface. The actual
-// HubApi.snapshot path is exercised by integration smoke tests (gated on
-// network availability + the user's HF cache), not here — these tests
-// pin the shape of the API and the offline branches:
-//
-//   - `unsupportedLanguage` is thrown for families with no mirror.
-//   - `isCached(for:)` returns `false` for the unsupported families.
-//   - The error description carries enough context to debug a wire
-//     failure surfaced as `model_not_found` from `/v1/stt/load`.
-//
-// We deliberately do not test the cached-true path against a real HF
-// cache directory — doing so would either require a network fetch in CI
-// or a mock that drifts from `swift-huggingface`'s actual cache layout.
+// Unit coverage for the HF auto-download surface. The real
+// `HubClient.downloadSnapshot` path is exercised by integration smoke
+// tests; these tests pin the offline branches and the API shape that
+// the route handler relies on for wire-code mapping.
 
 import XCTest
 @testable import YoozEngine
+import HuggingFace
 
 final class STTModelHFDownloaderTests: XCTestCase {
 
-    /// Persian, Arabic, Hebrew, and the CJK group all return `nil`
-    /// from `huggingFaceID`. The downloader must turn that into the
-    /// typed `unsupportedLanguage` error rather than reaching for
-    /// `HubApi` with an empty repo id (which would surface as a
-    /// confusing 404 rather than a structured error).
+    /// Languages with no HF mirror (FastConformer Arabic/Persian/
+    /// Hebrew, every CJK member) must throw the typed
+    /// `unsupportedLanguage` error so `APIServer.mapSTTLoadError` can
+    /// produce a `language_unmirrored` 501 instead of letting the
+    /// downloader reach for `HubClient` with no repo id.
     func testSnapshotThrowsUnsupportedLanguageWhenNoMirrorWired() async {
         let unsupported: [STTLanguage] = [.persian, .arabic, .hebrew, .chinese]
         for language in unsupported {
@@ -60,10 +52,9 @@ final class STTModelHFDownloaderTests: XCTestCase {
     }
 
     /// The error description forms part of the wire body returned by
-    /// `/v1/stt/load` (see `APIServer.swift`'s YoozSTTError → 404
-    /// mapping). Pinning a sentinel substring catches an accidental
-    /// rewrite that would lose the language code or family name —
-    /// both are useful for debugging from the consumer side.
+    /// `/v1/stt/load`. Pinning a sentinel substring catches an
+    /// accidental rewrite that would lose the language code or family
+    /// name — both are useful for debugging from the consumer side.
     func testUnsupportedLanguageErrorMessageContainsContext() {
         let error = STTHFDownloadError.unsupportedLanguage(.persian)
         let message = error.errorDescription ?? ""
@@ -75,5 +66,23 @@ final class STTModelHFDownloaderTests: XCTestCase {
             message.contains("fast-conformer"),
             "Expected error to mention model family 'fast-conformer'; got: \(message)"
         )
+    }
+
+    /// `repoID(for:)` is the single source of truth for namespace/name
+    /// splitting; both `snapshot(for:)` and `isCached(for:)` go through
+    /// it. A drift between them (the original code split inline in two
+    /// places) silently broke the cache lookup. This test pins the
+    /// happy path so a future inlining doesn't regress.
+    func testRepoIDForParakeetParsesNamespaceAndName() throws {
+        let repo = try XCTUnwrap(STTModelHFDownloader.repoID(for: .english))
+        XCTAssertEqual(repo.namespace, "mlx-community")
+        XCTAssertEqual(repo.name, "parakeet-tdt-0.6b-v3")
+    }
+
+    /// Symmetric: families without a mirror return nil so callers can
+    /// short-circuit before any FileManager / HubClient work.
+    func testRepoIDForUnmirroredFamilyIsNil() {
+        XCTAssertNil(STTModelHFDownloader.repoID(for: .persian))
+        XCTAssertNil(STTModelHFDownloader.repoID(for: .chinese))
     }
 }

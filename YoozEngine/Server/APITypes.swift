@@ -79,15 +79,13 @@ struct STTLanguageInfo: Codable {
 
 struct STTLoadRequest: Decodable {
     let language: String?
-    /// When true (or unset), the engine will fetch the model from
-    /// Hugging Face if no local snapshot is staged under
-    /// `EngineConfig.modelsDirectory` or the app bundle. When false,
-    /// the load fails with `model_not_found` rather than touching the
+    /// When true (or unset), the engine fetches the model from
+    /// Hugging Face if no local snapshot is staged. When false, the
+    /// load fails with `model_not_cached` rather than touching the
     /// network. Honored by every backend that owns a first-run fetch
-    /// path (Parakeet/FastConformer via swift-transformers Hub since
-    /// issue #41, plus the existing `qwen3_asr_preview` URLSession
-    /// fetcher). Apple STT ignores the flag — its model is supplied
-    /// by the OS.
+    /// path (Parakeet via the shared HF cache, plus the
+    /// `qwen3_asr_preview` URLSession fetcher). Apple STT ignores
+    /// the flag — its model is supplied by the OS.
     let allowFetch: Bool?
 }
 
@@ -97,9 +95,8 @@ struct STTStatusResponse: ResponseCodable {
     let streaming: Bool
     /// Fraction-completed [0.0, 1.0] for an in-progress HF model
     /// download. Reset to 0 at the start of every `/v1/stt/load`
-    /// call; ticks up to 1.0 as files stream in. Cached snapshots
-    /// jump straight to 1.0. Optional in the wire shape so clients
-    /// built against pre-#41 servers continue to decode the response.
+    /// call; ticks up to 1.0 as files stream in. Optional in the
+    /// wire shape so older clients continue to decode the response.
     let progress: Double?
 }
 

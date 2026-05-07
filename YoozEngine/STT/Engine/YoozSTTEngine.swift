@@ -48,10 +48,9 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     @Published public private(set) var currentLanguage: STTLanguage = .english
 
     /// Fraction-completed [0.0, 1.0] for an in-progress HF model
-    /// download. Resets to 0 on `start(language:)` and ticks up to 1.0
-    /// as files stream in. Stays at 1.0 once the load completes
-    /// (cached snapshots jump straight to 1.0). UI clients poll via
-    /// the `progress` field of `/v1/stt/status`.
+    /// download. Resets to 0 on `start(language:)` and on failure;
+    /// reaches 1.0 on successful load. UI clients poll via the
+    /// `progress` field of `/v1/stt/status`.
     @Published public private(set) var downloadProgress: Double = 0
 
     /// Active STT backend. Default is `.parakeet`; switchable via
@@ -181,24 +180,16 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         await MainActor.run { self.downloadProgress = 0 }
 
         do {
-            // Check if language is implemented
             guard language.isImplemented else {
                 throw YoozSTTError.languageNotSupported(language)
             }
 
-            // Resolve the model directory. Order:
-            //   1. EngineConfig.modelsDirectory (legacy bundled drop)
-            //   2. App bundle Resources/Models/ (and Resources/ flat)
-            //   3. HF auto-download via swift-transformers Hub (gated
-            //      by `allowFetch`; cached snapshots bypass the
-            //      network and resolve in O(1)).
             let modelDir = try await getModelDirectory(
                 for: language,
                 allowFetch: allowFetch
             )
             NSLog("YoozSTTEngine: Got model directory: %@", modelDir.path)
 
-            // Load model
             NSLog("YoozSTTEngine: Calling ParakeetModel.fromDirectory...")
             let loadedModel = try ParakeetModel.fromDirectory(modelDir, dtype: .bfloat16)
 
@@ -213,22 +204,25 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             }
 
             NSLog("YoozSTTEngine: Model loaded successfully for %@!", language.displayName)
-        } catch let error as YoozSTTError {
-            let errorMsg = error.localizedDescription ?? "Unknown error"
-            NSLog("YoozSTTEngine: ERROR - %@", errorMsg)
-            await MainActor.run {
-                self.lastError = errorMsg
-            }
-            onError?(errorMsg)
-            throw error
+        } catch is CancellationError {
+            // Task cancellation is not a failure — the user / caller
+            // requested it. Surface it cleanly so awaiting tasks see
+            // the cooperative cancellation contract; do not record
+            // `lastError` so the menu-bar UI doesn't render a red
+            // banner for a deliberate stop.
+            await MainActor.run { self.downloadProgress = 0 }
+            throw CancellationError()
         } catch {
-            let errorMsg = "Failed to load model: \(error.localizedDescription)"
-            NSLog("YoozSTTEngine: ERROR - %@", errorMsg)
+            // Reset progress so a polling client doesn't see a
+            // stalled mid-download fraction after a failed load.
+            let message = error.localizedDescription
+            NSLog("YoozSTTEngine: ERROR - %@", message)
             await MainActor.run {
-                self.lastError = errorMsg
+                self.lastError = message
+                self.downloadProgress = 0
             }
-            onError?(errorMsg)
-            throw YoozSTTError.modelLoadFailed(error.localizedDescription)
+            onError?(message)
+            throw error
         }
     }
 
@@ -623,89 +617,52 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         for language: STTLanguage,
         allowFetch: Bool
     ) async throws -> URL {
-        NSLog("YoozSTTEngine: getModelDirectory(for: %@) called", language.rawValue)
+        NSLog(
+            "YoozSTTEngine: getModelDirectory(for: %@, allowFetch: %@)",
+            language.rawValue, allowFetch ? "true" : "false"
+        )
 
-        // 1. EngineConfig.modelsDirectory (legacy bundled drop). We
-        //    treat the presence of `config.json` as the readiness
-        //    sentinel; partial drops still fall through to step 2/3.
+        // Step 1-3: probe legacy on-disk locations. `config.json` is
+        // the readiness sentinel; a partial drop falls through to the
+        // HF cache lookup below.
         let engineModelsDir = EngineConfig.modelsDirectory
-        let engineConfigPath = engineModelsDir.appendingPathComponent("config.json").path
-        NSLog("YoozSTTEngine: Checking engine models dir: %@", engineConfigPath)
-
-        if FileManager.default.fileExists(atPath: engineConfigPath) {
-            NSLog("YoozSTTEngine: Found model at engine models directory")
+        if FileManager.default.fileExists(
+            atPath: engineModelsDir.appendingPathComponent("config.json").path
+        ) {
             return engineModelsDir
         }
 
-        // 2. App bundle Resources/Models/ — used by older yooz-whisper
-        //    drops that vendor the model alongside the binary. Phase 5
-        //    thin-client builds skip this and rely on step 3.
         if let resourcePath = Bundle.main.resourcePath {
             let resourceDir = URL(fileURLWithPath: resourcePath)
-            let modelsDir = resourceDir.appendingPathComponent("Models")
-            let modelsConfigPath = modelsDir.appendingPathComponent("config.json").path
-            NSLog("YoozSTTEngine: Checking %@", modelsConfigPath)
-
-            if FileManager.default.fileExists(atPath: modelsConfigPath) {
-                NSLog("YoozSTTEngine: Found model at Resources/Models/")
-                return modelsDir
+            for candidate in [
+                resourceDir.appendingPathComponent("Models"),
+                resourceDir
+            ] {
+                if FileManager.default.fileExists(
+                    atPath: candidate.appendingPathComponent("config.json").path
+                ) {
+                    return candidate
+                }
             }
-
-            // 3. Resources/ directly (xcodegen may flatten structure).
-            let directConfigPath = resourceDir.appendingPathComponent("config.json").path
-            NSLog("YoozSTTEngine: Checking %@", directConfigPath)
-
-            if FileManager.default.fileExists(atPath: directConfigPath) {
-                NSLog("YoozSTTEngine: Found model at Resources/")
-                return resourceDir
-            }
-        } else {
-            NSLog("YoozSTTEngine: Bundle.main.resourcePath is nil; skipping bundle lookup")
         }
 
-        // 4. Hugging Face auto-download. Cached snapshots resolve in
-        //    O(1); first-run downloads stream into the swift-huggingface
-        //    HubCache root. The progress closure is invoked off-actor
-        //    by HubApi; marshal to MainActor before touching the
-        //    `@Published` property.
-        guard language.huggingFaceID != nil else {
-            NSLog(
-                "YoozSTTEngine: No HF mirror wired for %@ (family %@)",
-                language.rawValue, language.modelFamily.rawValue
-            )
-            throw YoozSTTError.modelNotFound(
-                "STT model for \(language.displayName) is not on disk and no Hugging Face mirror is wired for the \(language.modelFamily.rawValue) family yet (issue #41)."
-            )
-        }
-
-        let alreadyCached = STTModelHFDownloader.isCached(for: language)
-        if !alreadyCached, !allowFetch {
-            throw YoozSTTError.modelNotFound(
-                "STT model for \(language.displayName) is not on disk and allow_fetch=false; bring the model directory into place first or call /v1/stt/load with allow_fetch=true."
-            )
-        }
-
-        NSLog(
-            "YoozSTTEngine: Resolving HF snapshot for %@ (cached=%@)",
-            language.rawValue, alreadyCached ? "true" : "false"
-        )
-
-        do {
-            return try await STTModelHFDownloader.snapshot(for: language) { [weak self] fraction in
-                guard let self else { return }
+        // Step 4: HF cache. `localFilesOnly: !allowFetch` lets the
+        // downstream `HubClient` itself enforce offline mode by
+        // throwing `HubCacheError.cachedPathResolutionFailed` on a
+        // cache miss. That error propagates verbatim so
+        // `APIServer.mapSTTLoadError` can demux it into the
+        // `model_not_cached` wire code instead of getting flattened
+        // into a generic 500.
+        try Task.checkCancellation()
+        return try await STTModelHFDownloader.snapshot(
+            for: language,
+            localFilesOnly: !allowFetch,
+            progress: { fraction in
                 Task { @MainActor in
                     self.downloadProgress = fraction
                 }
             }
-        } catch let error as STTHFDownloadError {
-            throw YoozSTTError.modelNotFound(
-                error.errorDescription ?? "HF download failed"
-            )
-        } catch {
-            throw YoozSTTError.modelLoadFailed(
-                "HF download failed: \(error.localizedDescription)"
-            )
-        }
+        )
     }
 }
 

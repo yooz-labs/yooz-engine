@@ -153,6 +153,21 @@ public struct STTStatus: Codable, Sendable {
     public let loaded: Bool
     public let language: String?
     public let streaming: Bool
+    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
+    /// download. `nil` when the server omits the field (older builds).
+    public let progress: Double?
+
+    public init(
+        loaded: Bool,
+        language: String?,
+        streaming: Bool,
+        progress: Double? = nil
+    ) {
+        self.loaded = loaded
+        self.language = language
+        self.streaming = streaming
+        self.progress = progress
+    }
 }
 
 public enum AudioMode: String, Codable, Sendable {
