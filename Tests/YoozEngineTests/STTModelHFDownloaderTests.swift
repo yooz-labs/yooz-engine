@@ -11,6 +11,7 @@
 import XCTest
 @testable import YoozEngine
 import HuggingFace
+@testable import STTModule
 
 final class STTModelHFDownloaderTests: XCTestCase {
 
