@@ -457,27 +457,30 @@ final class APIServer: ObservableObject {
     /// `TouchUpEngine.row(for:loadState:)` so the two pickers
     /// produce identical wire shapes (modulo the STT-specific
     /// capability extensions).
+    ///
+    /// `activeLoaded` must be the result of
+    /// `await sttEngine.isCurrentBackendLoaded()` resolved on the
+    /// caller's side — `nonisolated` helpers can't reach the
+    /// MainActor-bound `sttEngine` property. The active row reports
+    /// `.loaded` when that flag is true, `.available` otherwise;
+    /// non-active rows always report `.available` (lazy loading).
     nonisolated func sttBackendInfo(
         for backend: STTBackendID,
-        active: STTBackendID
+        active: STTBackendID,
+        activeLoaded: Bool
     ) -> STTBackendInfo {
-        STTBackendInfo(
+        let isActive = backend == active
+        let loadState: ModelLoadState =
+            (isActive && activeLoaded) ? .loaded : .available
+        return STTBackendInfo(
             id: backend.rawValue,
             displayName: backend.displayName,
             description: backend.pickerDescription,
             tier: backend.pickerTier,
             sizeBytes: backend.estimatedDownloadMB
                 .map { Int64($0) * 1_048_576 },
-            // STT engines load lazily on first /v1/stt/batch or
-            // /v1/stt/load call; the picker can't synchronously
-            // tell whether a given backend is loaded without
-            // poking each one. Report `.available` (selectable but
-            // not yet loaded) for everything except the active
-            // backend, which is `.loaded` if the engine reports
-            // `isCurrentBackendLoaded()`. The picker UI can
-            // refresh after the user picks to learn the new state.
-            loadState: backend == active ? .available : .available,
-            isActive: backend == active,
+            loadState: loadState,
+            isActive: isActive,
             supportsBatch: backend.supportsBatch,
             supportsStreaming: backend.supportsStreaming,
             supportedLanguages: backend.supportedLanguages.map(\.rawValue)
@@ -882,8 +885,13 @@ final class APIServer: ObservableObject {
         // capability flags ride along as optional extensions.
         router.get("/v1/stt/engine") { [self] _, _ in
             let active = sttEngine.currentBackend
+            let activeLoaded = await sttEngine.isCurrentBackendLoaded()
             let backends = STTBackendID.allCases.map { backend in
-                self.sttBackendInfo(for: backend, active: active)
+                self.sttBackendInfo(
+                    for: backend,
+                    active: active,
+                    activeLoaded: activeLoaded
+                )
             }
             return STTBackendsResponse(
                 backends: backends,
@@ -910,6 +918,21 @@ final class APIServer: ObservableObject {
             // `{ "engine": "parakeet" }` still works through one
             // release. New clients post
             // `{ "id": "parakeet", "preload": true }`.
+            //
+            // Reject conflicting values up-front — silently
+            // dropping `engine` when the client posts both
+            // `{"id":"parakeet","engine":"apple_stt"}` would
+            // mid-migration eat half a build script's intent
+            // with no diagnostic. 400 makes the bug observable.
+            if let id = body.id, let legacy = body.engine, id != legacy {
+                return errorResponse(
+                    status: .badRequest,
+                    message:
+                        "Both 'id' and legacy 'engine' set with conflicting values "
+                        + "('\(id)' vs '\(legacy)'); use 'id' only.",
+                    code: "invalid_request"
+                )
+            }
             let rawId = body.id ?? body.engine
             guard let resolvedId = rawId else {
                 return errorResponse(
@@ -936,9 +959,11 @@ final class APIServer: ObservableObject {
             // that requires routing the call through the
             // current language — punt for now, document via the
             // `preload` field's no-op behavior.
+            let activeLoaded = await sttEngine.isCurrentBackendLoaded()
             let info = sttBackendInfo(
                 for: sttEngine.currentBackend,
-                active: sttEngine.currentBackend
+                active: sttEngine.currentBackend,
+                activeLoaded: activeLoaded
             )
             return try jsonResponse(info)
         }

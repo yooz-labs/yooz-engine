@@ -86,30 +86,33 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
 /// One STT backend in the picker. Canonical fields mirror
 /// `TouchUpModelInfo`; STT-specific capability flags ride along
 /// as optional extensions per AGENTS.md "Module-specific picker
-/// extensions".
+/// extensions". The extensions are `Optional` on the wire so a
+/// future engine that drops a capability (e.g. once every backend
+/// streams, `supportsStreaming` becomes meaningless) does not
+/// brick older SDK consumers.
 public struct STTBackendInfo: Codable, Sendable, Equatable {
     public let id: String
     public let displayName: String
     public let description: String
-    public let tier: TouchUpModelTier
+    public let tier: ModelTier
     public let sizeBytes: Int64?
-    public let loadState: TouchUpModelLoadState
+    public let loadState: ModelLoadState
     public let isActive: Bool
-    public let supportsBatch: Bool
-    public let supportsStreaming: Bool
-    public let supportedLanguages: [String]
+    public let supportsBatch: Bool?
+    public let supportsStreaming: Bool?
+    public let supportedLanguages: [String]?
 
     public init(
         id: String,
         displayName: String,
         description: String,
-        tier: TouchUpModelTier,
+        tier: ModelTier,
         sizeBytes: Int64?,
-        loadState: TouchUpModelLoadState,
+        loadState: ModelLoadState,
         isActive: Bool,
-        supportsBatch: Bool,
-        supportsStreaming: Bool,
-        supportedLanguages: [String]
+        supportsBatch: Bool? = nil,
+        supportsStreaming: Bool? = nil,
+        supportedLanguages: [String]? = nil
     ) {
         self.id = id
         self.displayName = displayName

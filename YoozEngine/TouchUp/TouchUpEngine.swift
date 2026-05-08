@@ -506,7 +506,7 @@ actor TouchUpEngine {
     /// one-line addition (plus the `availableModels()` enumeration).
     private func row(
         for selection: TouchUpModelSelection,
-        loadState: TouchUpModelLoadState
+        loadState: ModelLoadState
     ) -> TouchUpModelInfo {
         TouchUpModelInfo(
             id: selection.rawValue,
@@ -528,7 +528,7 @@ actor TouchUpEngine {
         isAvailable: Bool,
         isCached: Bool,
         isLoaded: Bool
-    ) -> TouchUpModelLoadState {
+    ) -> ModelLoadState {
         if !isAvailable { return .unavailable }
         if isLoaded { return .loaded }
         if isCached { return .cached }

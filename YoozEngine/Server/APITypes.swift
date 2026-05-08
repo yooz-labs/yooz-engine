@@ -130,20 +130,24 @@ struct STTBackendInfo: Codable, Sendable, Equatable, ResponseEncodable {
     /// MLX backends report `.quality`; Apple STT reports `.premium`
     /// (OS-provided); preview backends report `.unknown` so the UI
     /// can render a "preview" hint without inventing a new tier.
-    let tier: TouchUpModelTier
+    let tier: ModelTier
     /// Approximate first-run download size. `nil` for backends
     /// that do not require a download (Apple, bundled MLX).
     let sizeBytes: Int64?
     /// Lifecycle state. Same total ordering as TouchUp picker.
-    let loadState: TouchUpModelLoadState
+    let loadState: ModelLoadState
     /// Whether `/v1/stt/batch` + `/v1/stt/stream` currently route
     /// through this backend. Exactly one row per response has
     /// `isActive == true`.
     let isActive: Bool
-    // MARK: - STT-specific extensions (optional per AGENTS.md)
-    let supportsBatch: Bool
-    let supportsStreaming: Bool
-    let supportedLanguages: [String]
+    // MARK: - STT-specific extensions (optional per AGENTS.md
+    // "Module-specific picker extensions"). Optional on the wire
+    // so a future engine that drops a capability (e.g. once every
+    // backend streams, `supportsStreaming` becomes meaningless)
+    // does not brick older SDK consumers.
+    let supportsBatch: Bool?
+    let supportsStreaming: Bool?
+    let supportedLanguages: [String]?
 }
 
 /// Response for `GET /v1/stt/engine` (canonical shape).
@@ -345,7 +349,7 @@ struct TouchUpServerResponse: ResponseCodable {
 /// case here without bumping the SDK leaves older clients decoding
 /// `unknown` — which is intentionally the fallback so a v0.7
 /// engine can ship a new tier without breaking v0.6 SDK consumers.
-enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
+enum ModelTier: String, Codable, Sendable, CaseIterable {
     /// Fast default. Primary picker option.
     case light
     /// Higher-quality backend; usually carries a Pro badge in app UX.
@@ -366,7 +370,7 @@ enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
 /// Wire raw values are stable; new states append at the end so
 /// older SDK clients decode unknown values as `.unavailable`
 /// (the safest fallback — picker UI greys the row out).
-enum TouchUpModelLoadState: String, Codable, Sendable, CaseIterable {
+enum ModelLoadState: String, Codable, Sendable, CaseIterable {
     /// User cannot select this row right now (e.g. Apple
     /// Intelligence on pre-26 macOS or a non-opted-in user).
     case unavailable
@@ -391,13 +395,13 @@ struct TouchUpModelInfo: Codable, Sendable, Equatable, ResponseEncodable {
     /// One-line subtitle for picker UX (latency hint etc.).
     let description: String
     /// Coarse class for badge / sort UX.
-    let tier: TouchUpModelTier
+    let tier: ModelTier
     /// Approximate on-disk size after first-run download. `nil` for
     /// OS-provided backends (`.premium` tier).
     let sizeBytes: Int64?
     /// Lifecycle state. Encodes the `loaded ⇒ cached ⇒ available`
     /// invariant in a single field rather than three loose booleans.
-    let loadState: TouchUpModelLoadState
+    let loadState: ModelLoadState
     /// Whether `/v1/touchup` currently routes through this model.
     /// Exactly one row per response has `isActive == true` (pinned
     /// by `availableModels()`'s precondition).

@@ -35,11 +35,17 @@ public struct TouchUpResponse: Codable, Sendable {
 // the SDK module. `TouchUpModelInfoBoundaryTests` encodes one side
 // and decodes the other to catch drift.
 
-/// Coarse class for a TouchUp model. Mirrored on engine + SDK.
+/// Coarse class for a model in any picker (TouchUp / STT / TTS /
+/// future). Module-neutral name — earlier `TouchUpModelTier` was
+/// renamed in #99 because the second adopter (STT) made the
+/// TouchUp prefix nonsensical when STT backends carry a `tier`
+/// field. The old name is retained as a typealias for one
+/// release to ease consumer migration.
+///
 /// `unknown` is the forward-compat fallback: an SDK consumer
 /// running against a newer engine that ships a fifth tier sees
 /// `.unknown` rather than failing to decode.
-public enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
+public enum ModelTier: String, Codable, Sendable, CaseIterable {
     case light
     case quality
     case premium
@@ -50,15 +56,21 @@ public enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
     /// poll a newer engine than the SDK was built against.
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = TouchUpModelTier(rawValue: raw) ?? .unknown
+        self = ModelTier(rawValue: raw) ?? .unknown
     }
 }
+
+/// Back-compat typealias for the TouchUp-prefixed name shipped in
+/// #97. Remove once consumer apps (whisper, notes, voice) are
+/// known to be on the new name (target: v0.7.x of the engine SDK).
+public typealias TouchUpModelTier = ModelTier
 
 /// Lifecycle state of a single picker row. Replaces three boolean
 /// flags so the `loaded ⇒ cached ⇒ available` invariant is encoded
 /// in the type system (illegal combinations like
-/// "loaded but not cached" become unrepresentable).
-public enum TouchUpModelLoadState: String, Codable, Sendable, CaseIterable {
+/// "loaded but not cached" become unrepresentable). Module-neutral
+/// name — see `ModelTier` for the rename rationale.
+public enum ModelLoadState: String, Codable, Sendable, CaseIterable {
     /// Picker UI greys this out — not selectable on this system.
     case unavailable
     /// Selectable but first use will download.
@@ -72,9 +84,12 @@ public enum TouchUpModelLoadState: String, Codable, Sendable, CaseIterable {
     /// `.unavailable` (the safest fallback — picker greys it out).
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = TouchUpModelLoadState(rawValue: raw) ?? .unavailable
+        self = ModelLoadState(rawValue: raw) ?? .unavailable
     }
 }
+
+/// Back-compat typealias. See `TouchUpModelTier` for removal plan.
+public typealias TouchUpModelLoadState = ModelLoadState
 
 /// One model in the TouchUp picker. Snapshot at the time of the
 /// `availableModels()` call; re-fetch after `setModel(_:preload:)`
@@ -88,13 +103,13 @@ public struct TouchUpModelInfo: Codable, Sendable, Equatable {
     /// One-line subtitle for picker UX (latency hint etc.).
     public let description: String
     /// Coarse class for badge / sort UX.
-    public let tier: TouchUpModelTier
+    public let tier: ModelTier
     /// Approximate on-disk size after first-run download. `nil` for
     /// OS-provided backends (`.premium` tier).
     public let sizeBytes: Int64?
     /// Lifecycle state. Encodes the `loaded ⇒ cached ⇒ available`
     /// invariant in a single field.
-    public let loadState: TouchUpModelLoadState
+    public let loadState: ModelLoadState
     /// Whether `/v1/touchup` currently routes through this model.
     /// The engine guarantees exactly one row per response has
     /// `isActive == true`.
@@ -104,9 +119,9 @@ public struct TouchUpModelInfo: Codable, Sendable, Equatable {
         id: String,
         displayName: String,
         description: String,
-        tier: TouchUpModelTier,
+        tier: ModelTier,
         sizeBytes: Int64?,
-        loadState: TouchUpModelLoadState,
+        loadState: ModelLoadState,
         isActive: Bool
     ) {
         self.id = id
