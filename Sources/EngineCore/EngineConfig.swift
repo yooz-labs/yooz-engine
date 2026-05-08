@@ -31,7 +31,18 @@ public enum KVCompressionMode: String, Codable, Sendable {
 /// can read ports, version, and on-disk locations without pulling in the
 /// `YoozEngine` app target.
 public enum EngineConfig {
-    public static let port: Int = 19920
+    public static let defaultPort: Int = 19920
+    public static let portEnvVar = "YOOZ_ENGINE_PORT"
+
+    public static var port: Int {
+        guard let raw = ProcessInfo.processInfo.environment[portEnvVar],
+              let parsed = Int(raw),
+              (1...65535).contains(parsed) else {
+            return defaultPort
+        }
+        return parsed
+    }
+
     public static let host: String = "127.0.0.1"
     public static let version: String = "0.6.0"
 
