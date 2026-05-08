@@ -458,6 +458,7 @@ final class APIServer: ObservableObject {
         )
     }
 
+    #if canImport(STTModule)
     /// Map a Qwen3-ASR backend error to the right HTTP error
     /// response. Mirrors the parakeet/fast_conformer error mapping
     /// so clients get a consistent shape across backends.
@@ -774,6 +775,74 @@ final class APIServer: ObservableObject {
         )
     }
 
+    #endif
+
+    /// Build the canonical picker row for a server-level STT engine selector.
+    /// Used by Lite, where `STTModule` is intentionally absent but Apple STT
+    /// still needs the same `/v1/stt/engine` response shape.
+    nonisolated func sttEngineInfo(
+        for backend: STTEngineCode,
+        active: STTEngineCode,
+        activeLoaded: Bool
+    ) -> STTBackendInfo {
+        let isActive = backend == active
+        let loadState: ModelLoadState =
+            (isActive && activeLoaded) ? .loaded : .available
+
+        let displayName: String
+        let description: String
+        let tier: ModelTier
+        let sizeBytes: Int64?
+        let supportsBatch: Bool
+        let supportsStreaming: Bool
+        let supportedLanguages: [String]
+
+        switch backend {
+        case .parakeet:
+            displayName = "Parakeet (Recommended)"
+            description = "Multilingual Latin / European"
+            tier = .quality
+            sizeBytes = nil
+            supportsBatch = true
+            supportsStreaming = true
+            supportedLanguages = ["en"]
+        case .fastConformer:
+            displayName = "FastConformer (Arabic / Persian / Hebrew)"
+            description = "Optimised for Arabic / Persian / Hebrew"
+            tier = .quality
+            sizeBytes = nil
+            supportsBatch = true
+            supportsStreaming = true
+            supportedLanguages = ["ar", "fa", "he"]
+        case .appleSTT:
+            displayName = "Apple Speech (On-device)"
+            description = "On-device, no download"
+            tier = .premium
+            sizeBytes = nil
+            supportsBatch = true
+            supportsStreaming = false
+            #if canImport(AppleSTTModule)
+            supportedLanguages = AppleSTTLanguage.allCases.map(\.rawValue)
+            #else
+            supportedLanguages = ["en"]
+            #endif
+        }
+
+        return STTBackendInfo(
+            id: backend.rawValue,
+            displayName: displayName,
+            description: description,
+            tier: tier,
+            sizeBytes: sizeBytes,
+            loadState: loadState,
+            isActive: isActive,
+            supportsBatch: supportsBatch,
+            supportsStreaming: supportsStreaming,
+            supportedLanguages: supportedLanguages
+        )
+    }
+
+    #if canImport(STTModule)
     private nonisolated func parseLanguage(_ code: String?) throws -> STTLanguage {
         let languageCode = code ?? "en"
         guard let language = STTLanguage.fromCode(languageCode) else {
@@ -784,6 +853,7 @@ final class APIServer: ObservableObject {
         }
         return language
     }
+    #endif
 
     // MARK: - HTTP Router
 
@@ -803,7 +873,6 @@ final class APIServer: ObservableObject {
         let router = Router()
         #if canImport(STTModule)
         let sttEngine = YoozSTTEngine.shared
-        #endif
         // Hoist the metrics sink + preview fallback hook so they
         // share lifecycle with the router (one engine `start()` call
         // = one sink + one hook, surviving across requests). The
@@ -820,6 +889,7 @@ final class APIServer: ObservableObject {
             fallback: ParakeetFallbackAdapter(),
             sink: metricsSink
         )
+        #endif
 
         // Health
         router.get("/v1/health") { _, _ in
@@ -1348,6 +1418,7 @@ final class APIServer: ObservableObject {
         // capability bits live on `STTBackendInfo` so the SDK does
         // not need a parallel codepath per shape.
         router.get("/v1/stt/engine") { [self] _, _ in
+            #if canImport(STTModule)
             let active = sttEngine.currentBackend
             let activeLoaded = await sttEngine.isCurrentBackendLoaded()
             let backends = STTBackendID.allCases.map { backend in
@@ -1361,9 +1432,27 @@ final class APIServer: ObservableObject {
                 backends: backends,
                 activeId: active.rawValue
             )
+            #elseif canImport(AppleSTTModule)
+            let active = await MainActor.run { currentSTTEngine }
+            let activeLoaded = await AppleSTTEngine.shared.isLoaded
+            let backends = APIServer.availableSTTEngines().map { backend in
+                self.sttEngineInfo(
+                    for: backend,
+                    active: active,
+                    activeLoaded: activeLoaded
+                )
+            }
+            return STTBackendsResponse(
+                backends: backends,
+                activeId: active.rawValue
+            )
+            #else
+            return moduleNotBundled("stt")
+            #endif
         }
 
         router.post("/v1/stt/engine") { [self] request, context in
+            #if canImport(STTModule)
             let body: STTSetBackendRequest
             do {
                 body = try await request.decode(
@@ -1415,6 +1504,17 @@ final class APIServer: ObservableObject {
             }
 
             await sttEngine.setBackend(backend)
+            await MainActor.run {
+                switch backend {
+                case .parakeet, .qwen3ASRPreview:
+                    currentSTTEngine = .parakeet
+                case .fastConformer:
+                    currentSTTEngine = .fastConformer
+                case .appleSTT:
+                    currentSTTEngine = .appleSTT
+                }
+                sttStreamCancel?()
+            }
             // Note: `preload` is accepted on the wire for shape
             // parity with `/v1/touchup/model`, but actual STT
             // model loading happens lazily on the first
@@ -1430,6 +1530,57 @@ final class APIServer: ObservableObject {
                 activeLoaded: activeLoaded
             )
             return try jsonResponse(info)
+            #elseif canImport(AppleSTTModule)
+            let body: STTSetBackendRequest
+            do {
+                body = try await request.decode(
+                    as: STTSetBackendRequest.self, context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+            if let id = body.id, let legacy = body.engine, id != legacy {
+                return errorResponse(
+                    status: .badRequest,
+                    message:
+                        "Both 'id' and legacy 'engine' set with conflicting values "
+                        + "('\(id)' vs '\(legacy)'); use 'id' only.",
+                    code: "invalid_request"
+                )
+            }
+            let rawId = body.id ?? body.engine
+            guard let resolvedId = rawId else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Missing 'id' (or legacy 'engine') field",
+                    code: "invalid_request"
+                )
+            }
+            guard resolvedId == STTEngineCode.appleSTT.rawValue else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown engine '\(resolvedId)'. Available: apple_stt",
+                    code: "invalid_model"
+                )
+            }
+            await MainActor.run {
+                currentSTTEngine = .appleSTT
+                sttStreamCancel?()
+            }
+            let activeLoaded = await AppleSTTEngine.shared.isLoaded
+            let info = sttEngineInfo(
+                for: .appleSTT,
+                active: .appleSTT,
+                activeLoaded: activeLoaded
+            )
+            return try jsonResponse(info)
+            #else
+            return moduleNotBundled("stt")
+            #endif
         }
 
         // STT: Available languages
@@ -1474,7 +1625,7 @@ final class APIServer: ObservableObject {
         // doesn't apply on the modular tree because AppleSTTEngine is
         // a separate actor from YoozSTTEngine.
         router.get("/v1/stt/status") { [self] _, _ -> Response in
-            let active = await currentSTTEngine
+            let active = await MainActor.run { currentSTTEngine }
             switch active {
             case .parakeet, .fastConformer:
                 #if canImport(STTModule)
@@ -1629,7 +1780,7 @@ final class APIServer: ObservableObject {
 
         // STT: Batch transcribe — routes to the currently selected engine.
         router.post("/v1/stt/batch") { [self] request, context in
-            let active = await currentSTTEngine
+            let active = await MainActor.run { currentSTTEngine }
             let body: BatchSTTRequest
             do {
                 body = try await request.decode(as: BatchSTTRequest.self, context: context)
@@ -1792,6 +1943,7 @@ final class APIServer: ObservableObject {
     private func buildWebSocketRouter() -> Router<BasicWebSocketRequestContext> {
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         let sttLogger = Logger(label: "live.yooz.engine.stt.stream")
+        #if canImport(STTModule)
         // One sink instance per server lifetime — file handle stays
         // owned by the actor. Per-request sinks would race on the
         // file URL and confuse lifecycle ("is this sink alive?").
@@ -1799,6 +1951,7 @@ final class APIServer: ObservableObject {
             optedIn: EngineConfig.telemetryOptedIn,
             fileURL: EngineConfig.sttMetricsFileURL
         )
+        #endif
 
         wsRouter.ws("/v1/stt/stream") { [weak self] inbound, outbound, context in
             let encoder = JSONEncoder()
