@@ -361,6 +361,12 @@ public final class YoozEngineClient: Sendable {
     private func openApplication(at url: URL) async throws {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
+        // Run the helper as a headless service: skip the menu-bar
+        // status item + Settings scene so the host app's UI is the
+        // only surface the user sees. `EngineConfig.isHelper` reads
+        // this var at startup and forces `.prohibited` activation
+        // policy. Harmless on engine builds that don't honor it.
+        config.environment = ["YOOZ_ENGINE_HEADLESS": "1"]
         do {
             _ = try await NSWorkspace.shared.openApplication(
                 at: url,
