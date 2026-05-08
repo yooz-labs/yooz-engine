@@ -138,11 +138,9 @@ final class YoozEngineClientTests: XCTestCase {
             id: "yooz-light-v3",
             displayName: "Yooz-Light",
             description: "Fast proofreading (~200ms)",
-            tier: "light",
+            tier: .light,
             sizeBytes: 276 * 1024 * 1024,
-            isAvailable: true,
-            isCached: false,
-            isLoaded: false,
+            loadState: .loaded,
             isActive: true
         )
         let encoded = try JSONEncoder().encode(info)
@@ -150,8 +148,13 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(decoded, info)
     }
 
-    /// `availableModels()` response shape — `models` array plus the
-    /// `activeId` convenience pointer.
+    /// Boundary test (drift catch): the engine app target and the
+    /// SDK module both define `TouchUpModelInfo` independently. If
+    /// either side renames a JSON key or changes a field type, this
+    /// literal JSON sample — the *current* engine wire shape —
+    /// fails to decode on the SDK side. Cheaper than a single
+    /// shared type and catches the drift that would otherwise
+    /// surface as a runtime decode error in production picker UIs.
     func testTouchUpModelsResponseDecoding() throws {
         let json = """
         {
@@ -162,9 +165,7 @@ final class YoozEngineClientTests: XCTestCase {
                     "description": "Fast",
                     "tier": "light",
                     "sizeBytes": 289406976,
-                    "isAvailable": true,
-                    "isCached": true,
-                    "isLoaded": true,
+                    "loadState": "loaded",
                     "isActive": true
                 },
                 {
@@ -173,9 +174,7 @@ final class YoozEngineClientTests: XCTestCase {
                     "description": "High quality",
                     "tier": "quality",
                     "sizeBytes": 444596224,
-                    "isAvailable": true,
-                    "isCached": false,
-                    "isLoaded": false,
+                    "loadState": "available",
                     "isActive": false
                 }
             ],
@@ -187,7 +186,32 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(response.models.count, 2)
         XCTAssertEqual(response.activeId, "yooz-light-v3")
         XCTAssertEqual(response.models.first?.id, "yooz-light-v3")
+        XCTAssertEqual(response.models.first?.loadState, .loaded)
         XCTAssertTrue(response.models.first?.isActive ?? false)
+    }
+
+    /// Forward compat: an SDK consumer running against a newer
+    /// engine that ships an unrecognised tier (e.g. `"reserved"`)
+    /// must decode `.unknown` instead of failing the whole picker
+    /// fetch. Same contract for `loadState` falling back to
+    /// `.unavailable`. Without this, a future engine field
+    /// addition would brick every shipped SDK consumer.
+    func testTouchUpModelTierAndLoadStateForwardCompat() throws {
+        let json = """
+        {
+            "id": "future-model-v9",
+            "displayName": "Future",
+            "description": "Forward compat",
+            "tier": "totally-new-tier",
+            "sizeBytes": null,
+            "loadState": "totally-new-state",
+            "isActive": false
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let info = try JSONDecoder().decode(TouchUpModelInfo.self, from: data)
+        XCTAssertEqual(info.tier, .unknown)
+        XCTAssertEqual(info.loadState, .unavailable)
     }
 
     func testSTTLanguageInfoDecoding() throws {

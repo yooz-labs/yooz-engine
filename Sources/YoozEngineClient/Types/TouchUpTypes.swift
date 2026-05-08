@@ -31,8 +31,50 @@ public struct TouchUpResponse: Codable, Sendable {
 //
 // Mirror of the engine's `TouchUpModelInfo` / `TouchUpModelsResponse`
 // wire shapes. SDK-side copies (instead of importing the engine
-// target) keep the SDK self-contained and Swift Concurrency-safe
-// — consumers only depend on the SDK module.
+// target) keep the SDK self-contained — consumers only depend on
+// the SDK module. `TouchUpModelInfoBoundaryTests` encodes one side
+// and decodes the other to catch drift.
+
+/// Coarse class for a TouchUp model. Mirrored on engine + SDK.
+/// `unknown` is the forward-compat fallback: an SDK consumer
+/// running against a newer engine that ships a fifth tier sees
+/// `.unknown` rather than failing to decode.
+public enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
+    case light
+    case quality
+    case premium
+    case unknown
+
+    /// Tolerant decode: any unknown raw value maps to `.unknown`
+    /// instead of throwing. Forward compat for picker UIs that
+    /// poll a newer engine than the SDK was built against.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TouchUpModelTier(rawValue: raw) ?? .unknown
+    }
+}
+
+/// Lifecycle state of a single picker row. Replaces three boolean
+/// flags so the `loaded ⇒ cached ⇒ available` invariant is encoded
+/// in the type system (illegal combinations like
+/// "loaded but not cached" become unrepresentable).
+public enum TouchUpModelLoadState: String, Codable, Sendable, CaseIterable {
+    /// Picker UI greys this out — not selectable on this system.
+    case unavailable
+    /// Selectable but first use will download.
+    case available
+    /// Weights present in cache; first use loads from disk.
+    case cached
+    /// Resident in memory; calls hit the model immediately.
+    case loaded
+
+    /// Tolerant decode: any unknown raw value maps to
+    /// `.unavailable` (the safest fallback — picker greys it out).
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TouchUpModelLoadState(rawValue: raw) ?? .unavailable
+    }
+}
 
 /// One model in the TouchUp picker. Snapshot at the time of the
 /// `availableModels()` call; re-fetch after `setModel(_:preload:)`
@@ -45,30 +87,26 @@ public struct TouchUpModelInfo: Codable, Sendable, Equatable {
     public let displayName: String
     /// One-line subtitle for picker UX (latency hint etc.).
     public let description: String
-    /// Coarse tier label (`light` / `quality` / `premium`). UI
-    /// renders Pro badges or sort hints off this.
-    public let tier: String
+    /// Coarse class for badge / sort UX.
+    public let tier: TouchUpModelTier
     /// Approximate on-disk size after first-run download. `nil` for
-    /// OS-provided backends (Apple Intelligence).
+    /// OS-provided backends (`.premium` tier).
     public let sizeBytes: Int64?
-    /// Whether this option is selectable on this system.
-    public let isAvailable: Bool
-    /// Whether the weights are already on disk (no download needed).
-    public let isCached: Bool
-    /// Whether the model is currently resident in memory.
-    public let isLoaded: Bool
+    /// Lifecycle state. Encodes the `loaded ⇒ cached ⇒ available`
+    /// invariant in a single field.
+    public let loadState: TouchUpModelLoadState
     /// Whether `/v1/touchup` currently routes through this model.
+    /// The engine guarantees exactly one row per response has
+    /// `isActive == true`.
     public let isActive: Bool
 
     public init(
         id: String,
         displayName: String,
         description: String,
-        tier: String,
+        tier: TouchUpModelTier,
         sizeBytes: Int64?,
-        isAvailable: Bool,
-        isCached: Bool,
-        isLoaded: Bool,
+        loadState: TouchUpModelLoadState,
         isActive: Bool
     ) {
         self.id = id
@@ -76,9 +114,7 @@ public struct TouchUpModelInfo: Codable, Sendable, Equatable {
         self.description = description
         self.tier = tier
         self.sizeBytes = sizeBytes
-        self.isAvailable = isAvailable
-        self.isCached = isCached
-        self.isLoaded = isLoaded
+        self.loadState = loadState
         self.isActive = isActive
     }
 }

@@ -17,30 +17,22 @@ import Foundation
 /// - `yooz-light-v3` — `LLMModelType.yoozLight`
 /// - `yooz-quality-v3` — `LLMModelType.yoozQuality`
 /// - `foundation-models` — `FoundationModelsBackend` (macOS 26+ only)
+///
+/// All picker UX strings (display name, description, tier, size)
+/// are owned by this enum, not delegated back to `LLMModelType`.
+/// Picker presentation is a property of the *selection* — the
+/// engine-side `LLMModelType` stays headless so a backend rename
+/// cannot silently change picker text.
 enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
     case yoozLight = "yooz-light-v3"
     case yoozQuality = "yooz-quality-v3"
     case foundationModels = "foundation-models"
 
-    /// Map MLX-tier selections back onto the underlying
-    /// `LLMModelType`. Returns `nil` for `.foundationModels` because
-    /// that tier is dispatched through `FoundationModelsBackend`,
-    /// not the MLX path.
-    var mlxModelType: LLMModelType? {
-        switch self {
-        case .yoozLight: return .yoozLight
-        case .yoozQuality: return .yoozQuality
-        case .foundationModels: return nil
-        }
-    }
-
-    /// Human-readable name surfaced in picker UIs. Mirrors
-    /// `LLMModelType.displayName` for the MLX tiers; "Apple
-    /// Intelligence" for FoundationModels matches the macOS 26+ UX.
+    /// Picker-visible name surfaced in consumer UIs.
     var displayName: String {
         switch self {
-        case .yoozLight: return LLMModelType.yoozLight.displayName
-        case .yoozQuality: return LLMModelType.yoozQuality.displayName
+        case .yoozLight: return "Yooz-Light"
+        case .yoozQuality: return "Yooz-Quality"
         case .foundationModels: return "Apple Intelligence"
         }
     }
@@ -48,20 +40,20 @@ enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
     /// One-line description for picker subtitles.
     var description: String {
         switch self {
-        case .yoozLight: return LLMModelType.yoozLight.description
-        case .yoozQuality: return LLMModelType.yoozQuality.description
+        case .yoozLight: return "Fast proofreading (~200ms)"
+        case .yoozQuality: return "High quality proofreading (~310ms)"
         case .foundationModels: return "On-device 3B (macOS 26+, no download)"
         }
     }
 
-    /// Coarse latency / size tier label for sorting and badge UX.
-    /// `light` is the fast default; `quality` ships a Pro badge in
-    /// whisper; `premium` is reserved for OS-provided backends.
-    var tier: String {
+    /// Coarse tier label for badge / sort UX. The wire side uses
+    /// the typed `TouchUpModelTier` enum; this property is the
+    /// engine-side mapping.
+    var tier: TouchUpModelTier {
         switch self {
-        case .yoozLight: return "light"
-        case .yoozQuality: return "quality"
-        case .foundationModels: return "premium"
+        case .yoozLight: return .light
+        case .yoozQuality: return .quality
+        case .foundationModels: return .premium
         }
     }
 
@@ -69,8 +61,8 @@ enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
     /// FoundationModels because the OS owns the weights.
     var estimatedSize: Int64? {
         switch self {
-        case .yoozLight: return LLMModelType.yoozLight.estimatedSize
-        case .yoozQuality: return LLMModelType.yoozQuality.estimatedSize
+        case .yoozLight: return 276 * 1024 * 1024  // ~276 MB
+        case .yoozQuality: return 424 * 1024 * 1024  // ~424 MB
         case .foundationModels: return nil
         }
     }

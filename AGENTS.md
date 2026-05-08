@@ -136,14 +136,28 @@ POST /v1/<module>/model    body { id: String, preload: Bool? } → ModelInfo (th
 | `id` | String | Stable wire id; never rename without major SDK bump |
 | `displayName` | String | Picker-visible name |
 | `description` | String | One-line subtitle for picker UX |
-| `tier` | String | Coarse class label (`light` / `quality` / `premium`) |
-| `sizeBytes` | Int64? | Approximate on-disk size; `nil` for OS-provided backends |
-| `isAvailable` | Bool | Selectable on this system (gate Apple Intelligence on macOS 26+ here) |
-| `isCached` | Bool | Weights present on disk |
-| `isLoaded` | Bool | Resident in memory |
-| `isActive` | Bool | The module's primary entry point routes through this row |
+| `tier` | enum (typed) | `light` / `quality` / `premium` / `unknown` (SDK-side `unknown` is the forward-compat fallback so a newer engine can ship a fifth tier without breaking older clients) |
+| `sizeBytes` | Int64? | Approximate on-disk size; `nil` for OS-provided backends (`.premium` tier) |
+| `loadState` | enum (typed) | `unavailable < available < cached < loaded`. Replaces the old three-flag pattern (`isAvailable / isCached / isLoaded`) with a total-ordering enum so illegal combinations like "loaded but not cached" are unrepresentable |
+| `isActive` | Bool | Server guarantees exactly one row has `isActive == true` (precondition'd in `availableModels()`) |
 
 Engine state lives in the module's actor (e.g. `TouchUpEngine.activeModel`); the primary processing entry point (`/v1/touchup`) routes through the active model.
+
+Field semantics across modules:
+
+- `loadState` for OS-provided backends (Apple Intelligence, Apple STT) reports `.cached` whenever the OS reports the backend as available — there is no on-disk artifact the engine controls, so `.available` and `.cached` collapse for that tier. Document the convention in the module's selection enum.
+- `loadState == .available` for the user's perspective means "selectable now without a config change". For Apple Intelligence specifically, the engine cannot read the user's opt-in state without attempting a load; `availableModels()` may report `.available` for a model that fails to actually load. The route handler maps that load failure to `501 model_unavailable` so the picker UI can render a contextual error.
+
+### Wire codes
+
+Every picker route maps these error codes consistently. Picker UIs branch on `code` to render contextual messages — renaming a code is a user-visible regression.
+
+| HTTP | code | When |
+|---|---|---|
+| 400 | `invalid_request` | Body fails to decode |
+| 400 | `invalid_model` | `id` not in the module's selection enum |
+| 501 | `model_unavailable` | Selectable per `loadState` is no on this system (e.g. Apple Intelligence on pre-26 macOS) |
+| 500 | `model_set_failed` | Underlying load failure (network, OOM, weights corrupt) |
 
 ### SDK
 

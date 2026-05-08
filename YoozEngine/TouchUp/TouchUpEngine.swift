@@ -452,13 +452,22 @@ actor TouchUpEngine {
 
     // MARK: - Picker API
 
-    /// Snapshot of every TouchUp model the engine knows about, with
-    /// availability / cache / load / active flags. Drives the picker
-    /// UI in consumer apps via `GET /v1/touchup/models`.
+    /// Snapshot of every TouchUp model the engine knows about,
+    /// with lifecycle state + active flag. Drives the picker UI in
+    /// consumer apps via `GET /v1/touchup/models`.
     ///
-    /// `availability` for FoundationModels is determined at runtime
-    /// (macOS 26+ AND Apple Intelligence opted-in). MLX tiers are
-    /// always available — they download on first use.
+    /// FoundationModels availability is OS-version gated by
+    /// `FoundationModelsBackend.isAvailable()`; the user-opt-in
+    /// state cannot be read without actually attempting a load, so
+    /// the picker may show `.available` for a model that fails to
+    /// load — the route handler maps that to 501 `model_unavailable`
+    /// when `setModel(.foundationModels)` is called with `preload: true`.
+    /// MLX tiers are always available — they download on first use.
+    ///
+    /// Postcondition: exactly one row has `isActive == true`. The
+    /// `precondition(...)` below catches a future drift if a new
+    /// case is added to `TouchUpModelSelection` without updating
+    /// this method's row list.
     func availableModels() async -> [TouchUpModelInfo] {
         let lightLoaded = await isLightModelLoaded
         let qualityLoaded = await isQualityModelLoaded
@@ -467,46 +476,77 @@ actor TouchUpEngine {
         let fmLoaded = await isFoundationModelsLoaded
         let fmAvailable = FoundationModelsBackend().isAvailable()
 
-        return [
-            TouchUpModelInfo(
-                id: TouchUpModelSelection.yoozLight.rawValue,
-                displayName: TouchUpModelSelection.yoozLight.displayName,
-                description: TouchUpModelSelection.yoozLight.description,
-                tier: TouchUpModelSelection.yoozLight.tier,
-                sizeBytes: TouchUpModelSelection.yoozLight.estimatedSize,
-                isAvailable: true,
-                isCached: lightCached,
-                isLoaded: lightLoaded,
-                isActive: activeModel == .yoozLight
-            ),
-            TouchUpModelInfo(
-                id: TouchUpModelSelection.yoozQuality.rawValue,
-                displayName: TouchUpModelSelection.yoozQuality.displayName,
-                description: TouchUpModelSelection.yoozQuality.description,
-                tier: TouchUpModelSelection.yoozQuality.tier,
-                sizeBytes: TouchUpModelSelection.yoozQuality.estimatedSize,
-                isAvailable: true,
-                isCached: qualityCached,
-                isLoaded: qualityLoaded,
-                isActive: activeModel == .yoozQuality
-            ),
-            TouchUpModelInfo(
-                id: TouchUpModelSelection.foundationModels.rawValue,
-                displayName: TouchUpModelSelection.foundationModels.displayName,
-                description: TouchUpModelSelection.foundationModels.description,
-                tier: TouchUpModelSelection.foundationModels.tier,
-                sizeBytes: nil,
-                isAvailable: fmAvailable,
-                isCached: fmAvailable,
-                isLoaded: fmLoaded,
-                isActive: activeModel == .foundationModels
-            )
+        let models: [TouchUpModelInfo] = [
+            row(for: .yoozLight, loadState: loadState(
+                isAvailable: true, isCached: lightCached, isLoaded: lightLoaded
+            )),
+            row(for: .yoozQuality, loadState: loadState(
+                isAvailable: true, isCached: qualityCached, isLoaded: qualityLoaded
+            )),
+            row(for: .foundationModels, loadState: loadState(
+                // FoundationModels has no on-disk artifact the engine
+                // controls; treat "available" as equivalent to
+                // "cached" so the picker UX never claims a download
+                // step for an OS-provided backend.
+                isAvailable: fmAvailable, isCached: fmAvailable, isLoaded: fmLoaded
+            ))
         ]
+
+        // Canonical-pattern invariant: exactly one active row. Drift
+        // here cascades into every consumer app's picker UX.
+        precondition(
+            models.filter(\.isActive).count == 1,
+            "TouchUp picker invariant: expected exactly one active model row"
+        )
+        return models
+    }
+
+    /// Build a single picker row from a selection + resolved load
+    /// state. Centralises the mapping so a new selection case is a
+    /// one-line addition (plus the `availableModels()` enumeration).
+    private func row(
+        for selection: TouchUpModelSelection,
+        loadState: TouchUpModelLoadState
+    ) -> TouchUpModelInfo {
+        TouchUpModelInfo(
+            id: selection.rawValue,
+            displayName: selection.displayName,
+            description: selection.description,
+            tier: selection.tier,
+            sizeBytes: selection.estimatedSize,
+            loadState: loadState,
+            isActive: activeModel == selection
+        )
+    }
+
+    /// Resolve the four-state lifecycle from the legacy three-flag
+    /// pattern so backends keep their existing `isLoaded` / `isCached`
+    /// surfaces. Total ordering is `unavailable < available < cached
+    /// < loaded`; higher state implies lower (loaded ⇒ cached ⇒
+    /// available).
+    private func loadState(
+        isAvailable: Bool,
+        isCached: Bool,
+        isLoaded: Bool
+    ) -> TouchUpModelLoadState {
+        if !isAvailable { return .unavailable }
+        if isLoaded { return .loaded }
+        if isCached { return .cached }
+        return .available
     }
 
     /// Set the active model and (optionally) preload it. Returns the
     /// info row for the new active model so the caller does not need
     /// a follow-up `availableModels()` round-trip.
+    ///
+    /// `preload: true` (default) is the recommended path — it makes
+    /// a picker change one-shot, so the next `/v1/touchup` call does
+    /// not pay a cold-start. With `preload: false`, the call only
+    /// updates `activeModel`; the next `process(...)` call may
+    /// silently fall back to MLX if the user picks
+    /// `.foundationModels` and the backend is not loaded. The route
+    /// handler exposes `preload` via the request body but defaults
+    /// it to `true` so SDK consumers do not have to think about this.
     ///
     /// Throws `LLMError.notAvailable` if the caller picks
     /// `.foundationModels` on a system without Apple Intelligence,
@@ -531,6 +571,10 @@ actor TouchUpEngine {
                 try await loadQualityModel()
             }
         case .foundationModels:
+            // Validate availability up-front so a non-26 host never
+            // sees `activeModel == .foundationModels` followed by a
+            // silent MLX fallback on the next call. This is the path
+            // the route handler maps to 501 `model_unavailable`.
             let backend = foundationModelsBackend ?? FoundationModelsBackend()
             guard backend.isAvailable() else {
                 throw LLMError.notAvailable(
@@ -546,17 +590,25 @@ actor TouchUpEngine {
         activeModel = selection
         logger.info("TouchUp active model set to \(selection.rawValue, privacy: .public)")
 
+        // `availableModels()` always emits exactly one row per
+        // selection (precondition'd above). The `first(where:)` is
+        // total here; `LLMError.notLoaded` was a dead throw and is
+        // intentionally absent.
         let models = await availableModels()
-        guard let active = models.first(where: { $0.isActive }) else {
-            throw LLMError.notLoaded
-        }
-        return active
+        return models.first(where: { $0.isActive })!
     }
 
     /// Process text through the currently active model. Used by the
     /// `/v1/touchup` route; preserves the existing `mode` semantics
     /// (regex-only vs LLM, prompt strength) while letting the picker
     /// override which backend handles the LLM call.
+    ///
+    /// For `.yoozQuality`, the dispatch must NOT delegate to
+    /// `process(...)` because that method auto-routes to the light
+    /// model when `replacements.isEmpty`. The picker-aware path
+    /// runs inference directly through the loaded quality backend
+    /// so a user-picked Quality is honored regardless of whether
+    /// replacements are present.
     func processWithActiveModel(
         text: String,
         mode: ServerTouchUpMode,
@@ -565,15 +617,49 @@ actor TouchUpEngine {
         switch activeModel {
         case .foundationModels:
             return await processWithFoundationModels(text: text, mode: mode)
-        case .yoozQuality:
-            // Best-effort: ensure the quality model is loaded before
-            // delegating to the standard MLX path. The MLX path will
-            // still fall back to the light model if quality fails to
-            // load (matches today's `process` behaviour).
-            do { try await loadQualityModel() } catch { /* logged in loadQualityModel */ }
-            return await process(text: text, mode: mode, replacements: replacements)
         case .yoozLight:
             return await process(text: text, mode: mode, replacements: replacements)
+        case .yoozQuality:
+            // Force the quality backend on both routing slots so the
+            // user's pick is honored even when no replacements are
+            // present (the legacy `process(...)` auto-routing only
+            // uses quality when replacements force it).
+            do {
+                try await loadQualityModel()
+            } catch {
+                // Quality load failed — fall back to the legacy MLX
+                // path. The fallback uses the light model and
+                // surfaces the load failure as a warning string.
+                return await process(text: text, mode: mode, replacements: replacements)
+            }
+            guard let quality = qualityModel, await quality.isLoaded else {
+                return await process(text: text, mode: mode, replacements: replacements)
+            }
+            let proofreadPrompt = selectPrompt(for: mode, qualityAvailable: true)
+            let replacementStructs = replacements.map {
+                TouchUpProcessor.Replacement(
+                    original: $0.original, replacement: $0.replacement
+                )
+            }
+            let result = await TouchUpProcessor.process(
+                text: text,
+                replacements: replacementStructs,
+                lightModel: quality,
+                qualityModel: quality,
+                proofreadPrompt: proofreadPrompt
+            )
+            // Relabel: `TouchUpProcessor.process` hard-codes the
+            // `modelUsed` field based on which routing slot it took,
+            // not which backend the slot held. The picker explicitly
+            // ran inference through the quality backend, so the
+            // user-visible report should say so.
+            return TouchUpProcessor.ProcessResult(
+                text: result.text,
+                keepDecisions: result.keepDecisions,
+                modelUsed: result.modelUsed == .light ? .quality : result.modelUsed,
+                latencyMs: result.latencyMs,
+                fallbackReason: result.fallbackReason
+            )
         }
     }
 

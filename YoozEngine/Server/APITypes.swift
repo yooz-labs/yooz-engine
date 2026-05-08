@@ -284,82 +284,101 @@ struct TouchUpServerResponse: ResponseCodable {
 // MARK: - TouchUp Picker (canonical module-picker pattern)
 //
 // Wire shape used by `GET /v1/touchup/models` and
-// `POST /v1/touchup/model`. The same shape (`models`, `activeId`,
-// `id/displayName/description/tier/sizeBytes/isAvailable/
-// isCached/isLoaded/isActive`) is the documented canon for every
-// future module picker (STT engine selection, TTS voice, etc.) so
-// SDK + UI code can be templated. See AGENTS.md "Module model
-// picker pattern" for the recipe.
+// `POST /v1/touchup/model`. The same shape — `models`, `activeId`,
+// `id / displayName / description / tier / sizeBytes / loadState /
+// isActive` — is the documented canon for every future module
+// picker (STT engine selection, TTS voice, etc.) so SDK + UI code
+// can be templated. See AGENTS.md "Module model picker pattern".
+//
+// Visibility note: these types are intentionally `internal` to the
+// app target. The SDK ships its own copies in
+// `Sources/YoozEngineClient/Types/TouchUpTypes.swift`; cross-shape
+// drift is caught by `TouchUpModelInfoBoundaryTests` which encodes
+// here and decodes there. Marking them `public` here would invite
+// a future "fix" that re-exports the engine type and couples the
+// SDK module to the app target.
+
+/// Coarse class for a TouchUp model. Mirrored on both engine and
+/// SDK sides. Adding a tier is a wire-shape extension; adding a
+/// case here without bumping the SDK leaves older clients decoding
+/// `unknown` — which is intentionally the fallback so a v0.7
+/// engine can ship a new tier without breaking v0.6 SDK consumers.
+enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
+    /// Fast default. Primary picker option.
+    case light
+    /// Higher-quality backend; usually carries a Pro badge in app UX.
+    case quality
+    /// OS-provided backend (Apple Intelligence). No download.
+    case premium
+    /// Fallback for forward-compat. SDK consumers see this when the
+    /// server reports a tier value they don't recognise yet.
+    case unknown
+}
+
+/// Lifecycle state of a single picker row. Replaces the previous
+/// three boolean flags (`isAvailable / isCached / isLoaded`) with a
+/// total ordering that makes illegal combinations unrepresentable
+/// (`loaded ⇒ cached ⇒ available` was previously expressed only in
+/// prose).
+///
+/// Wire raw values are stable; new states append at the end so
+/// older SDK clients decode unknown values as `.unavailable`
+/// (the safest fallback — picker UI greys the row out).
+enum TouchUpModelLoadState: String, Codable, Sendable, CaseIterable {
+    /// User cannot select this row right now (e.g. Apple
+    /// Intelligence on pre-26 macOS or a non-opted-in user).
+    case unavailable
+    /// Selectable but not yet on disk; first use will download.
+    case available
+    /// Weights present in the local cache; first use loads from disk.
+    case cached
+    /// Weights resident in memory; calls hit the model immediately.
+    case loaded
+}
 
 /// One model in the TouchUp picker. All fields are server-authoritative
 /// — the client treats this as a snapshot and re-fetches after a
-/// `setModel(...)` to learn the new active id and any cache/load
-/// changes the preload triggered.
-public struct TouchUpModelInfo: Codable, Sendable, Equatable, ResponseEncodable {
+/// `setModel(...)` to learn the new active id and any state changes
+/// the preload triggered.
+struct TouchUpModelInfo: Codable, Sendable, Equatable, ResponseEncodable {
     /// Stable wire id (e.g. `yooz-light-v3`). Matches
     /// `TouchUpModelSelection.rawValue`.
-    public let id: String
+    let id: String
     /// Picker-visible name (e.g. "Yooz-Light").
-    public let displayName: String
+    let displayName: String
     /// One-line subtitle for picker UX (latency hint etc.).
-    public let description: String
-    /// Coarse tier label (`light` / `quality` / `premium`). UI
-    /// renders Pro badges or sort hints off this.
-    public let tier: String
+    let description: String
+    /// Coarse class for badge / sort UX.
+    let tier: TouchUpModelTier
     /// Approximate on-disk size after first-run download. `nil` for
-    /// OS-provided backends (Apple Intelligence).
-    public let sizeBytes: Int64?
-    /// Whether this option is selectable on this system. False for
-    /// Apple Intelligence on pre-26 macOS or non-opted-in users.
-    public let isAvailable: Bool
-    /// Whether the weights are already on disk (no download needed).
-    public let isCached: Bool
-    /// Whether the model is currently resident in memory.
-    public let isLoaded: Bool
+    /// OS-provided backends (`.premium` tier).
+    let sizeBytes: Int64?
+    /// Lifecycle state. Encodes the `loaded ⇒ cached ⇒ available`
+    /// invariant in a single field rather than three loose booleans.
+    let loadState: TouchUpModelLoadState
     /// Whether `/v1/touchup` currently routes through this model.
-    public let isActive: Bool
-
-    public init(
-        id: String,
-        displayName: String,
-        description: String,
-        tier: String,
-        sizeBytes: Int64?,
-        isAvailable: Bool,
-        isCached: Bool,
-        isLoaded: Bool,
-        isActive: Bool
-    ) {
-        self.id = id
-        self.displayName = displayName
-        self.description = description
-        self.tier = tier
-        self.sizeBytes = sizeBytes
-        self.isAvailable = isAvailable
-        self.isCached = isCached
-        self.isLoaded = isLoaded
-        self.isActive = isActive
-    }
+    /// Exactly one row per response has `isActive == true` (pinned
+    /// by `availableModels()`'s precondition).
+    let isActive: Bool
 }
 
 /// Response for `GET /v1/touchup/models`. `activeId` is the id of
 /// the entry where `isActive == true` — surfaced separately so a
 /// client that only cares about the current selection does not
 /// have to scan the array.
-public struct TouchUpModelsResponse: Codable, Sendable, ResponseCodable {
-    public let models: [TouchUpModelInfo]
-    public let activeId: String
-
-    public init(models: [TouchUpModelInfo], activeId: String) {
-        self.models = models
-        self.activeId = activeId
-    }
+struct TouchUpModelsResponse: Codable, Sendable, ResponseCodable {
+    let models: [TouchUpModelInfo]
+    let activeId: String
 }
 
 /// Request body for `POST /v1/touchup/model`. `preload` defaults
 /// to `true` server-side so a one-shot picker change is enough to
 /// avoid a cold-start on the next `/v1/touchup` call.
-struct TouchUpSetModelRequest: Decodable {
+///
+/// `Codable` (not just `Decodable`) so route tests can build the
+/// payload via the typed initializer rather than hand-rolled JSON
+/// — keeps the request shape under test if a field is renamed.
+struct TouchUpSetModelRequest: Codable {
     let id: String
     let preload: Bool?
 }
