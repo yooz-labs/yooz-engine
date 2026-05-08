@@ -270,6 +270,205 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertNil(status.language)
     }
 
+    /// Forward compat: pre-#41 servers omit `progress`, so the SDK
+    /// must still decode the legacy 3-field shape with `progress = nil`.
+    func testSTTStatusDecodingOmittedProgressIsNil() throws {
+        let json = """
+        {"loaded": true, "language": "en", "streaming": false}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(STTStatus.self, from: data)
+        XCTAssertNil(status.progress, "Older servers omit progress entirely")
+    }
+
+    /// New #41 servers report `progress` as a fraction; the SDK
+    /// surfaces it untouched. Without this, polling clients silently
+    /// drop the download-percent UX after the server starts emitting it.
+    func testSTTStatusDecodingProgressFraction() throws {
+        let json = """
+        {"loaded": false, "language": "en", "streaming": false, "progress": 0.42}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(STTStatus.self, from: data)
+        XCTAssertEqual(try XCTUnwrap(status.progress), 0.42, accuracy: 1e-9)
+    }
+
+    /// SDK round-trip for the canonical picker shape (issue #97).
+    /// Pinning the wire keys catches an accidental rename on either
+    /// side that would cause silent picker breakage in apps.
+    func testTouchUpModelInfoCodableRoundTrip() throws {
+        let info = TouchUpModelInfo(
+            id: "yooz-light-v3",
+            displayName: "Yooz-Light",
+            description: "Fast proofreading (~200ms)",
+            tier: .light,
+            sizeBytes: 276 * 1024 * 1024,
+            loadState: .loaded,
+            isActive: true
+        )
+        let encoded = try JSONEncoder().encode(info)
+        let decoded = try JSONDecoder().decode(TouchUpModelInfo.self, from: encoded)
+        XCTAssertEqual(decoded, info)
+    }
+
+    /// Boundary test (drift catch): the engine app target and the
+    /// SDK module both define `TouchUpModelInfo` independently. If
+    /// either side renames a JSON key or changes a field type, this
+    /// literal JSON sample — the *current* engine wire shape —
+    /// fails to decode on the SDK side. Cheaper than a single
+    /// shared type and catches the drift that would otherwise
+    /// surface as a runtime decode error in production picker UIs.
+    func testTouchUpModelsResponseDecoding() throws {
+        let json = """
+        {
+            "models": [
+                {
+                    "id": "yooz-light-v3",
+                    "displayName": "Yooz-Light",
+                    "description": "Fast",
+                    "tier": "light",
+                    "sizeBytes": 289406976,
+                    "loadState": "loaded",
+                    "isActive": true
+                },
+                {
+                    "id": "yooz-quality-v3",
+                    "displayName": "Yooz-Quality",
+                    "description": "High quality",
+                    "tier": "quality",
+                    "sizeBytes": 444596224,
+                    "loadState": "available",
+                    "isActive": false
+                }
+            ],
+            "activeId": "yooz-light-v3"
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(TouchUpModelsResponse.self, from: data)
+        XCTAssertEqual(response.models.count, 2)
+        XCTAssertEqual(response.activeId, "yooz-light-v3")
+        XCTAssertEqual(response.models.first?.id, "yooz-light-v3")
+        XCTAssertEqual(response.models.first?.loadState, .loaded)
+        XCTAssertTrue(response.models.first?.isActive ?? false)
+    }
+
+    /// Forward compat: an SDK consumer running against a newer
+    /// engine that ships an unrecognised tier (e.g. `"reserved"`)
+    /// must decode `.unknown` instead of failing the whole picker
+    /// fetch. Same contract for `loadState` falling back to
+    /// `.unavailable`. Without this, a future engine field
+    /// addition would brick every shipped SDK consumer.
+    func testTouchUpModelTierAndLoadStateForwardCompat() throws {
+        let json = """
+        {
+            "id": "future-model-v9",
+            "displayName": "Future",
+            "description": "Forward compat",
+            "tier": "totally-new-tier",
+            "sizeBytes": null,
+            "loadState": "totally-new-state",
+            "isActive": false
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let info = try JSONDecoder().decode(TouchUpModelInfo.self, from: data)
+        XCTAssertEqual(info.tier, .unknown)
+        XCTAssertEqual(info.loadState, .unavailable)
+    }
+
+    // MARK: - STT picker (canonical adopter #2, #99)
+
+    /// Round-trip the new STT picker shape so SDK consumers
+    /// (whisper, notes) detect drift between engine and SDK at
+    /// build time, not in production.
+    func testSTTBackendInfoCodableRoundTrip() throws {
+        let info = STTBackendInfo(
+            id: "parakeet",
+            displayName: "Parakeet (Recommended)",
+            description: "Multilingual Latin / European",
+            tier: .quality,
+            sizeBytes: nil,
+            loadState: .available,
+            isActive: true,
+            supportsBatch: true,
+            supportsStreaming: true,
+            supportedLanguages: ["en", "es", "fr"]
+        )
+        let encoded = try JSONEncoder().encode(info)
+        let decoded = try JSONDecoder().decode(STTBackendInfo.self, from: encoded)
+        XCTAssertEqual(decoded, info)
+    }
+
+    /// Boundary test (drift catch): the engine app target and SDK
+    /// each define `STTBackendInfo` independently. A literal JSON
+    /// sample from the engine wire shape must decode on the SDK
+    /// side or the picker breaks silently.
+    func testSTTBackendsResponseDecoding() throws {
+        let json = """
+        {
+            "backends": [
+                {
+                    "id": "apple_stt",
+                    "displayName": "Apple Speech (On-device)",
+                    "description": "On-device, no download",
+                    "tier": "premium",
+                    "sizeBytes": null,
+                    "loadState": "loaded",
+                    "isActive": true,
+                    "supportsBatch": true,
+                    "supportsStreaming": true,
+                    "supportedLanguages": ["en", "es"]
+                }
+            ],
+            "activeId": "apple_stt"
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(STTBackendsResponse.self, from: data)
+        XCTAssertEqual(response.activeId, "apple_stt")
+        XCTAssertEqual(response.backends.first?.tier, .premium)
+        XCTAssertTrue(response.backends.first?.isActive ?? false)
+    }
+
+    /// `TranscriptionResult.tokens` was dropped during the SDK
+    /// simplification; restored in #99 because whisper's
+    /// hallucination filter (`ChunkProcessor`) and any
+    /// timing-sensitive caller relies on it. Pin the field +
+    /// `AlignedToken` shape so a future re-removal breaks the
+    /// build, not whisper's runtime.
+    func testTranscriptionResultDecodesTokens() throws {
+        let json = """
+        {
+            "text": "hello world",
+            "finalized": "hello world",
+            "draft": "",
+            "language": "en",
+            "tokens": [
+                { "text": "hello", "start": 0.0, "end": 0.42 },
+                { "text": " world", "start": 0.42, "end": 0.95 }
+            ]
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(result.tokens?.count, 2)
+        XCTAssertEqual(result.tokens?.first?.text, "hello")
+        XCTAssertEqual(try XCTUnwrap(result.tokens?.last?.end), 0.95, accuracy: 1e-5)
+    }
+
+    /// Back-compat: a server that doesn't emit `tokens` decodes
+    /// to `nil` (not a decode error). Older Yooz Engine builds in
+    /// the wild emit no `tokens` field for non-aligned routes.
+    func testTranscriptionResultWithoutTokensDecodesAsNil() throws {
+        let json = """
+        {"text":"hello","finalized":"hello","draft":""}
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertNil(result.tokens)
+    }
+
     func testSTTLanguageInfoDecoding() throws {
         let json = """
         {

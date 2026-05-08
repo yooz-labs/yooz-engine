@@ -74,54 +74,98 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
     case cantonese = "yue"
 }
 
-// MARK: - Engine-picker wire types
+// MARK: - STT Backend Picker (canonical pattern, second adopter)
+//
+// Mirror of the engine's `STTBackendInfo` / `STTBackendsResponse`
+// wire shapes (#99). Same tier + loadState typed enums as TouchUp
+// (`ModelTier`, `ModelLoadState`) so consumer apps can template a
+// single ModelPickerStore<T> across modules.
 
-/// Identifies which STT backend the engine should route to.
+/// Stable wire id for an STT backend. Mirrors engine-side
+/// `STTBackendID`. Renaming a case is a major SDK bump.
 ///
-/// Yooz Engine exposes three speech backends:
+/// Yooz Engine exposes four speech backends today:
 /// - `.parakeet` — MLX Parakeet TDT (Latin/European languages, high accuracy,
 ///    ~600 MB runtime)
 /// - `.fastConformer` — MLX FastConformer (Arabic, Persian; RTL scripts)
 /// - `.appleSTT` — Apple's built-in STT (`SFSpeechRecognizer` on macOS 14-25,
 ///    `SpeechAnalyzer` on macOS 26+). Zero MLX footprint; the only backend
 ///    linked into `YoozEngineLite`.
+/// - `.qwen3ASRPreview` — preview Qwen3-ASR backend (variant-gated).
 ///
-/// Picker lives server-side; clients consult `STTClient.availableEngineTypes()`
+/// Picker lives server-side; clients consult `STTClient.availableEngines()`
 /// to discover which are linked into the running build variant. Requesting an
 /// unbundled engine returns HTTP 501 `module_not_bundled`.
-public enum STTEngineType: String, Codable, Sendable, CaseIterable {
+public enum STTBackendID: String, Codable, Sendable, CaseIterable {
     case parakeet
     case fastConformer = "fast_conformer"
     case appleSTT = "apple_stt"
+    case qwen3ASRPreview = "qwen3_asr_preview"
 }
 
-/// Response body for `GET /v1/stt/engine`.
-///
-/// Advertises the currently active backend, every backend linked into the
-/// build variant, and capability flags clients need for dispatch (e.g.
-/// `hasBuiltInVAD` lets a client skip its own VAD pipeline when Apple STT
-/// is selected).
-public struct STTEngineResponse: Codable, Sendable, Equatable {
-    public let current: STTEngineType
-    public let available: [STTEngineType]
-    public let hasBuiltInVAD: Bool
+/// One STT backend in the picker. Canonical fields mirror
+/// `TouchUpModelInfo`; STT-specific capability flags ride along
+/// as optional extensions per AGENTS.md "Module-specific picker
+/// extensions". The extensions are `Optional` on the wire so a
+/// future engine that drops a capability (e.g. once every backend
+/// streams, `supportsStreaming` becomes meaningless) does not
+/// brick older SDK consumers.
+public struct STTBackendInfo: Codable, Sendable, Equatable {
+    public let id: String
+    public let displayName: String
+    public let description: String
+    public let tier: ModelTier
+    public let sizeBytes: Int64?
+    public let loadState: ModelLoadState
+    public let isActive: Bool
+    public let supportsBatch: Bool?
+    public let supportsStreaming: Bool?
+    public let supportedLanguages: [String]?
 
-    public init(current: STTEngineType, available: [STTEngineType], hasBuiltInVAD: Bool) {
-        self.current = current
-        self.available = available
-        self.hasBuiltInVAD = hasBuiltInVAD
+    public init(
+        id: String,
+        displayName: String,
+        description: String,
+        tier: ModelTier,
+        sizeBytes: Int64?,
+        loadState: ModelLoadState,
+        isActive: Bool,
+        supportsBatch: Bool? = nil,
+        supportsStreaming: Bool? = nil,
+        supportedLanguages: [String]? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.description = description
+        self.tier = tier
+        self.sizeBytes = sizeBytes
+        self.loadState = loadState
+        self.isActive = isActive
+        self.supportsBatch = supportsBatch
+        self.supportsStreaming = supportsStreaming
+        self.supportedLanguages = supportedLanguages
     }
 }
 
-/// Request body for `POST /v1/stt/engine`.
-///
-/// Switching cancels any in-flight WebSocket stream for the session but does
-/// not reset the chosen language — the new engine will load the same language
-/// on its next transcribe call.
-public struct STTEngineSwitchRequest: Codable, Sendable, Equatable {
-    public let engine: STTEngineType
+/// Response for `availableEngines()`. `activeId` is the id of the
+/// entry where `isActive == true`.
+public struct STTBackendsResponse: Codable, Sendable {
+    public let backends: [STTBackendInfo]
+    public let activeId: String
 
-    public init(engine: STTEngineType) {
-        self.engine = engine
+    public init(backends: [STTBackendInfo], activeId: String) {
+        self.backends = backends
+        self.activeId = activeId
+    }
+}
+
+/// Request body for `setEngine(id:preload:)`.
+public struct STTSetBackendRequest: Codable, Sendable {
+    public let id: String
+    public let preload: Bool?
+
+    public init(id: String, preload: Bool? = nil) {
+        self.id = id
+        self.preload = preload
     }
 }

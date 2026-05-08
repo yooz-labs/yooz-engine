@@ -12,7 +12,8 @@ build/
 # Swift Package Manager
 .build/
 .swiftpm/
-Package.resolved
+# Package.resolved IS committed to enforce the SharpAI mlx-swift /
+# mlx-swift-lm pins called out in project.yml. See issue #10.
 
 # Release artifacts (built locally by scripts/release-engine.sh)
 dist/
@@ -34,9 +35,22 @@ Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
 # Context docs (project-local)
 .context/
 
+# Python (research/finetune)
+.venv/
+__pycache__/
+*.pyc
+.envrc
+finetune-pipeline/outputs/
+finetune-pipeline/data
+finetune-pipeline/data/
+bench-tools/gold_standard.jsonl
+
 # macOS
 .DS_Store
 
 # IDE
 .vscode/
 .idea/
+
+# Reference repos cloned for research (issue #10 TurboQuant)
+external/

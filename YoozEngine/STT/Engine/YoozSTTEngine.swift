@@ -44,6 +44,17 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     @Published public private(set) var lastError: String?
     @Published public private(set) var currentLanguage: STTLanguage = .english
 
+    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
+    /// download. Resets to 0 on `start(language:)` and on failure;
+    /// reaches 1.0 on successful load. UI clients poll via the
+    /// `progress` field of `/v1/stt/status`.
+    @Published public private(set) var downloadProgress: Double = 0
+
+    /// Active STT backend. Default is `.parakeet`; switchable via
+    /// `setBackend(_:)` (HTTP `POST /v1/stt/engine`) or the
+    /// `YOOZ_STT_BACKEND` env var honored by `EngineConfig`.
+    @Published public private(set) var currentBackend: STTBackendID = .parakeet
+
     // MARK: - Callbacks
 
     /// Callback for transcription updates
@@ -63,16 +74,89 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
     // MARK: - Initialization
 
-    private init() {}
+    private init() {
+        // Honor the env-driven default at construction time.
+        self.currentBackend = EngineConfig.sttBackend
+    }
+
+    // MARK: - Backend Selection
+
+    /// Switch the active STT backend. Unloads any model held by the
+    /// previous backend so the next `start(language:)` /
+    /// `batchTranscribe(...)` call starts cleanly.
+    ///
+    /// This call is light-weight: it does NOT trigger a model fetch
+    /// or pipeline load. Heavy work happens lazily on the next
+    /// transcribe call, matching the existing Parakeet flow.
+    public func setBackend(_ backend: STTBackendID) async {
+        guard backend != currentBackend else { return }
+        NSLog(
+            "YoozSTTEngine: switching backend %@ -> %@",
+            currentBackend.rawValue, backend.rawValue
+        )
+
+        // Drop Parakeet/FastConformer state.
+        stop()
+
+        // Drop Qwen3 state if it was loaded.
+        await Qwen3ASRBackend.shared.unload()
+
+        await MainActor.run {
+            self.currentBackend = backend
+            self.isReady = false
+        }
+    }
+
+    /// Whether the currently-selected backend has a model loaded and
+    /// ready to transcribe. Differs from `isReady` only for the Qwen3
+    /// backend, which keeps its load state inside the actor.
+    public func isCurrentBackendLoaded() async -> Bool {
+        switch currentBackend {
+        case .parakeet, .fastConformer, .appleSTT:
+            return isRunning
+        case .qwen3ASRPreview:
+            return await Qwen3ASRBackend.shared.isLoaded
+        }
+    }
 
     // MARK: - Model Management
 
-    /// Load the model for a specific language
-    /// - Parameter language: The target language (defaults to English)
-    /// - Throws: YoozSTTError if model loading fails
-    public func start(language: STTLanguage = .english) async throws {
+    /// Load the model for a specific language.
+    /// - Parameters:
+    ///   - language: The target language (defaults to English).
+    ///   - allowFetch: When `true` (default), the engine pulls the
+    ///     model from Hugging Face if no local snapshot is staged
+    ///     under `EngineConfig.modelsDirectory` or the bundle. When
+    ///     `false`, the load fails with `modelNotFound` rather than
+    ///     hitting the network. Mirrors the wire shape `/v1/stt/load`
+    ///     already exposes for the Qwen3 backend.
+    /// - Throws: `YoozSTTError` if model loading fails.
+    public func start(
+        language: STTLanguage = .english,
+        allowFetch: Bool = true
+    ) async throws {
         NSLog("YoozSTTEngine: start(language: %@) called", language.rawValue)
 
+        // Backend-specific dispatch: the Qwen3 backend lives entirely
+        // inside its actor and does not touch `model` / `currentLanguage`.
+        if currentBackend == .qwen3ASRPreview {
+            try await startQwen3Backend(language: language)
+            return
+        }
+
+        try await loadParakeetModel(language: language, allowFetch: allowFetch)
+    }
+
+    /// Load the Parakeet/FastConformer model for `language` without
+    /// touching `currentBackend`. Used by the auto-fallback adapter so
+    /// the hook can run a single Parakeet transcription without
+    /// permanently flipping the engine's backend selection — the
+    /// user's preview pick is honored at next process start (or after
+    /// a manual `POST /v1/stt/engine`).
+    public func loadParakeetModel(
+        language: STTLanguage,
+        allowFetch: Bool = true
+    ) async throws {
         // Check if already loaded with same language
         if model != nil && currentLanguage == language {
             NSLog("YoozSTTEngine: Already started with language %@", language.rawValue)
@@ -87,6 +171,11 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         NSLog("YoozSTTEngine: Loading model for %@...", language.displayName)
 
+        // Reset progress at the start of every load so a stale 1.0
+        // from a prior run does not mislead clients polling
+        // /v1/stt/status during the early phase of a switch.
+        await MainActor.run { self.downloadProgress = 0 }
+
         do {
             // Check if language is implemented before we touch the model
             // cache — no point downloading 700 MB to find out we can't use
@@ -95,17 +184,19 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
                 throw YoozSTTError.languageNotSupported(language)
             }
 
-            // Resolve (or download on first run) the model directory.
-            // Precedence inside the resolver:
-            //   1. already cached under EngineConfig.modelsDirectory
-            //   2. legacy yooz-whisper Application Support path
-            //   3. GHCR OCI manifest → tar.gz
-            //   4. GitHub Releases tar.gz
-            // Any failure surfaces as YoozSTTError.modelLoadFailed below.
-            let modelDir = try await resolveModelDirectory(for: language)
+            // Resolve (or download on first run) the HF snapshot for
+            // this language. Cached snapshots stay in
+            // ~/.cache/huggingface/hub per HubClient defaults; missing
+            // snapshots download on the first call when allowFetch is
+            // true. Any failure surfaces as YoozSTTError.modelLoadFailed
+            // below.
+            let modelDir = try await getModelDirectory(
+                for: language,
+                allowFetch: allowFetch
+            )
             NSLog("YoozSTTEngine: Got model directory: %@", modelDir.path)
 
-            // Load model
+
             NSLog("YoozSTTEngine: Calling ParakeetModel.fromDirectory...")
             let loadedModel = try ParakeetModel.fromDirectory(modelDir, dtype: .bfloat16)
 
@@ -116,25 +207,29 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             await MainActor.run {
                 self.isReady = true
                 self.currentLanguage = language
+                self.downloadProgress = 1
             }
 
             NSLog("YoozSTTEngine: Model loaded successfully for %@!", language.displayName)
-        } catch let error as YoozSTTError {
-            let errorMsg = error.localizedDescription ?? "Unknown error"
-            NSLog("YoozSTTEngine: ERROR - %@", errorMsg)
-            await MainActor.run {
-                self.lastError = errorMsg
-            }
-            onError?(errorMsg)
-            throw error
+        } catch is CancellationError {
+            // Task cancellation is not a failure — the user / caller
+            // requested it. Surface it cleanly so awaiting tasks see
+            // the cooperative cancellation contract; do not record
+            // `lastError` so the menu-bar UI doesn't render a red
+            // banner for a deliberate stop.
+            await MainActor.run { self.downloadProgress = 0 }
+            throw CancellationError()
         } catch {
-            let errorMsg = "Failed to load model: \(error.localizedDescription)"
-            NSLog("YoozSTTEngine: ERROR - %@", errorMsg)
+            // Reset progress so a polling client doesn't see a
+            // stalled mid-download fraction after a failed load.
+            let message = error.localizedDescription
+            NSLog("YoozSTTEngine: ERROR - %@", message)
             await MainActor.run {
-                self.lastError = errorMsg
+                self.lastError = message
+                self.downloadProgress = 0
             }
-            onError?(errorMsg)
-            throw YoozSTTError.modelLoadFailed(error.localizedDescription)
+            onError?(message)
+            throw error
         }
     }
 
@@ -434,151 +529,160 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         )
     }
 
-    // MARK: - Private Methods
+    // MARK: - Qwen3 Backend
 
-    /// Resolve a model directory for the requested language, downloading
-    /// the weights if they are not already on disk.
-    ///
-    /// Called from `start(language:)`. Preserves the original bundle /
-    /// Application Support lookup (`getModelDirectory`) as a fast path so
-    /// developer builds that pre-populate Resources/Models/ keep working,
-    /// and delegates to `STTModelDownloader` for the download + legacy
-    /// import paths when the cache is cold.
-    private func resolveModelDirectory(for language: STTLanguage) async throws -> URL {
-        // Prefer an already-resolved location.
-        if let existing = locateExistingModelDirectory() {
-            return existing
+    /// Load the Qwen3-ASR pipeline for the given language. The
+    /// pipeline auto-detects language at runtime, so the language
+    /// parameter is mostly informational (recorded as
+    /// `currentLanguage`). Requires the model directory to be ready
+    /// on disk; callers run `Qwen3ASRModelFetcher` first if needed.
+    private func startQwen3Backend(language: STTLanguage) async throws {
+        guard
+            STTBackendID.qwen3ASRPreview.supportedLanguages.contains(language)
+        else {
+            throw YoozSTTError.languageNotSupported(language)
         }
 
-        // Pick the descriptor for the model family. Only Parakeet TDT is
-        // wired into the downloader today — FastConformer Arabic/Persian
-        // weights are bundled with legacy whisper, so the legacy-import
-        // path inside `STTModelDownloader` still covers them once we add
-        // their descriptors. Until then, fail loudly for those families.
-        let descriptor: STTModelDescriptor
-        switch language.modelFamily {
-        case .parakeetTDT:
-            descriptor = .parakeetTDT06B
-        default:
+        let modelDir = Qwen3ASRModelFetcher.defaultModelDir
+        guard FileManager.default.fileExists(
+            atPath: modelDir.appendingPathComponent("config.json").path
+        ) else {
             throw YoozSTTError.modelNotFound(
-                "No download descriptor for model family \(language.modelFamily.rawValue); only Parakeet TDT is wired up today."
+                "Qwen3-ASR model directory not ready at "
+                + "\(modelDir.path) — run model fetch first"
             )
         }
 
-        NSLog("YoozSTTEngine: Model not cached; invoking STTModelDownloader")
-        return try await STTModelDownloader.shared.ensureAvailable(descriptor) { progress in
-            NSLog("YoozSTTEngine: Download progress %.0f%%", progress * 100)
+        do {
+            try await Qwen3ASRBackend.shared.ensureLoaded(modelDir: modelDir)
+            await MainActor.run {
+                self.isReady = true
+                self.currentLanguage = language
+            }
+            NSLog(
+                "YoozSTTEngine: Qwen3-ASR ready (language=%@)",
+                language.rawValue
+            )
+        } catch {
+            let msg = "Failed to load Qwen3-ASR pipeline: \(error)"
+            NSLog("YoozSTTEngine: ERROR - %@", msg)
+            await MainActor.run {
+                self.lastError = msg
+            }
+            onError?(msg)
+            throw YoozSTTError.modelLoadFailed(msg)
         }
     }
 
-    /// Synchronous lookup of an already-present model directory. Returns
-    /// `nil` when nothing is cached; callers must then invoke the
-    /// downloader.
+    /// Run a Qwen3-ASR batch transcription. Returns a `ParakeetResult`
+    /// so callers (the existing HTTP layer) don't have to branch on
+    /// the backend type. Errors are SWALLOWED — the swallow is
+    /// historical (preserved for callers that don't care about
+    /// distinguishing failure modes); new code should call
+    /// `batchTranscribeQwen3Throwing(...)` and map the typed error.
+    @available(
+        *, deprecated,
+        message: "Errors are silently swallowed as `.empty`; SDK consumers see blank text on every failure mode. Prefer batchTranscribeQwen3Throwing(samples:language:) and map the typed Qwen3ASRError."
+    )
+    public func batchTranscribeQwen3(
+        samples: [Float],
+        language: STTLanguage
+    ) async -> ParakeetResult {
+        do {
+            return try await batchTranscribeQwen3Throwing(
+                samples: samples,
+                language: language
+            )
+        } catch {
+            NSLog(
+                "YoozSTTEngine: Qwen3 batch transcribe failed: %@",
+                String(describing: error)
+            )
+            return .empty
+        }
+    }
+
+    /// Run a Qwen3-ASR batch transcription, propagating the typed
+    /// `Qwen3ASRError` (or any other underlying error) so the
+    /// HTTP layer can map cases to the right status code.
+    public func batchTranscribeQwen3Throwing(
+        samples: [Float],
+        language: STTLanguage
+    ) async throws -> ParakeetResult {
+        // `STTLanguage.qwen3LanguageHint` is the single source of
+        // truth for this mapping, shared with
+        // `Qwen3ASRPreviewBackendAdapter`.
+        let result = try await Qwen3ASRBackend.shared.transcribe(
+            pcm: samples,
+            language: language.qwen3LanguageHint
+        )
+        return ParakeetResult(
+            text: result.text,
+            finalized: result.text,
+            draft: ""
+        )
+    }
+
+    // MARK: - Private Methods
+
+    /// Resolve the on-disk directory for the active STT model.
     ///
-    /// A directory qualifies when it contains both `config.json` and at
-    /// least one weights file (`.safetensors` / `.npz`). Requiring the
-    /// weights file guards against a torn partial download from being
-    /// treated as a valid cache hit.
-    private func locateExistingModelDirectory() -> URL? {
-        let fm = FileManager.default
+    /// Step 1-3: probe the EngineConfig models directory + the app
+    /// bundle's Resources/Models/ (developer setups that pre-populated
+    /// weights). Step 4 falls through to the HuggingFace HubClient
+    /// snapshot path. `allowFetch == false` forces offline-only — a
+    /// cold cache surfaces as `HubCacheError.cachedPathResolutionFailed`,
+    /// which `APIServer.mapSTTLoadError` demuxes into the
+    /// `model_not_cached` wire code.
+    private func getModelDirectory(
+        for language: STTLanguage,
+        allowFetch: Bool
+    ) async throws -> URL {
+        NSLog(
+            "YoozSTTEngine: getModelDirectory(for: %@, allowFetch: %@)",
+            language.rawValue, allowFetch ? "true" : "false"
+        )
 
-        // 1. EngineConfig.modelsDirectory/<identifier>/ — this is where
-        //    `STTModelDownloader` places downloaded weights. Walk one level
-        //    so we don't need to know the identifier up front.
-        let root = EngineConfig.modelsDirectory
-        if let children = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
-            for child in children where directoryContainsCompleteModel(child) {
-                return child
-            }
-        }
-
-        // 2. Legacy: EngineConfig.modelsDirectory itself contains the model.
-        //    Preserved to match the previous `getModelDirectory()` behaviour
-        //    for developer setups that manually unpacked into Models/.
-        if directoryContainsCompleteModel(root) {
-            return root
-        }
-
-        // 3. App bundle Resources/Models/ and Resources/ (flat layout).
-        if let resources = Bundle.main.resourcePath {
-            let resourceDir = URL(fileURLWithPath: resources)
-            let modelsDir = resourceDir.appendingPathComponent("Models")
-            if directoryContainsCompleteModel(modelsDir) {
-                return modelsDir
-            }
-            if directoryContainsCompleteModel(resourceDir) {
-                return resourceDir
-            }
-        }
-
-        return nil
-    }
-
-    private func directoryContainsCompleteModel(_ dir: URL) -> Bool {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
-            return false
-        }
-        guard let enumerator = fm.enumerator(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else {
-            return false
-        }
-        for case let url as URL in enumerator {
-            let ext = url.pathExtension.lowercased()
-            if ext == "safetensors" || ext == "npz" {
-                return true
-            }
-        }
-        return false
-    }
-
-    /// Legacy synchronous model lookup — retained for callers (tests, tools)
-    /// that have no async context. Throws when nothing is cached.
-    private func getModelDirectory() throws -> URL {
-        NSLog("YoozSTTEngine: getModelDirectory called")
-
-        // 1. Check EngineConfig.modelsDirectory (Application Support)
+        // Step 1-3: probe legacy on-disk locations. `config.json` is
+        // the readiness sentinel; a partial drop falls through to the
+        // HF cache lookup below.
         let engineModelsDir = EngineConfig.modelsDirectory
-        let engineConfigPath = engineModelsDir.appendingPathComponent("config.json").path
-        NSLog("YoozSTTEngine: Checking engine models dir: %@", engineConfigPath)
-
-        if FileManager.default.fileExists(atPath: engineConfigPath) {
-            NSLog("YoozSTTEngine: Found model at engine models directory")
+        if FileManager.default.fileExists(
+            atPath: engineModelsDir.appendingPathComponent("config.json").path
+        ) {
             return engineModelsDir
         }
 
-        // 2. Check app bundle Resources/Models/
-        guard let resourcePath = Bundle.main.resourcePath else {
-            NSLog("YoozSTTEngine: ERROR - resourcePath is nil")
-            throw YoozSTTError.modelNotFound("Bundle.main.resourcePath is nil")
+        if let resourcePath = Bundle.main.resourcePath {
+            let resourceDir = URL(fileURLWithPath: resourcePath)
+            for candidate in [
+                resourceDir.appendingPathComponent("Models"),
+                resourceDir
+            ] {
+                if FileManager.default.fileExists(
+                    atPath: candidate.appendingPathComponent("config.json").path
+                ) {
+                    return candidate
+                }
+            }
         }
 
-        let resourceDir = URL(fileURLWithPath: resourcePath)
-        let modelsDir = resourceDir.appendingPathComponent("Models")
-        let modelsConfigPath = modelsDir.appendingPathComponent("config.json").path
-        NSLog("YoozSTTEngine: Checking %@", modelsConfigPath)
-
-        if FileManager.default.fileExists(atPath: modelsConfigPath) {
-            NSLog("YoozSTTEngine: Found model at Resources/Models/")
-            return modelsDir
-        }
-
-        // 3. Check Resources/ directly (xcodegen may flatten structure)
-        let directConfigPath = resourceDir.appendingPathComponent("config.json").path
-        NSLog("YoozSTTEngine: Checking %@", directConfigPath)
-
-        if FileManager.default.fileExists(atPath: directConfigPath) {
-            NSLog("YoozSTTEngine: Found model at Resources/")
-            return resourceDir
-        }
-
-        // Model not found
-        NSLog("YoozSTTEngine: ERROR - Model not found!")
-        throw YoozSTTError.modelNotFound(
-            "STT model not found. Checked: \(engineModelsDir.path), \(resourceDir.path)"
+        // Step 4: HF cache. `localFilesOnly: !allowFetch` lets the
+        // downstream `HubClient` itself enforce offline mode by
+        // throwing `HubCacheError.cachedPathResolutionFailed` on a
+        // cache miss. That error propagates verbatim so
+        // `APIServer.mapSTTLoadError` can demux it into the
+        // `model_not_cached` wire code instead of getting flattened
+        // into a generic 500.
+        try Task.checkCancellation()
+        return try await STTModelHFDownloader.snapshot(
+            for: language,
+            localFilesOnly: !allowFetch,
+            progress: { fraction in
+                Task { @MainActor in
+                    self.downloadProgress = fraction
+                }
+            }
         )
     }
 }

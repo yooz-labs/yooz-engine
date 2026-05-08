@@ -1,0 +1,2 @@
+model,context_len,mode,decode_tokens,load_s,prefill_s,ttft_ms,decode_tps,kv_bytes,kv_mib,kv_bytes_tight,kv_mib_tight,kv_bytes_packed_est,kv_mib_packed_est,rss_start_mib,rss_peak_mib,head_dim,n_kv_heads,n_layers,decoded_preview
+qwen3-1.7b-ojus-4bit,32768,fp16,63,3.456,56.5262,56526.23,22.935,7574913024,7224.0,7530872832,7182.0,7530872832,7182.0,18.3,1591.4,128,8,28, triggering on background noise. The Silero v6 CoreML port runs at roughly sixty

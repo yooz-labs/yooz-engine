@@ -1,0 +1,2 @@
+model,context_len,mode,decode_tokens,load_s,prefill_s,ttft_ms,decode_tps,kv_bytes,kv_mib,kv_bytes_tight,kv_mib_tight,kv_bytes_packed_est,kv_mib_packed_est,rss_start_mib,rss_peak_mib,head_dim,n_kv_heads,n_layers,decoded_preview
+qwen3-1.7b-ojus-4bit,16384,fp16,63,0.649,18.7482,18748.18,28.33,3816816640,3640.0,3772776448,3598.0,3772776448,3598.0,18.5,1411.0,128,8,28, pipelines has to balance responsiveness against false-positive triggering on ba

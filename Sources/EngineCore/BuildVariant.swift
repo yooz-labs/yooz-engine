@@ -48,4 +48,34 @@ public enum BuildVariant: String, Sendable, Codable {
         }
         return variant
     }
+
+    /// Whether MLX-based STT (Parakeet / FastConformer / Qwen3) is bundled
+    /// into this variant. `.lite` drops it entirely and relies on Apple STT
+    /// for transcription.
+    public var includesMLXSTT: Bool {
+        switch self {
+        case .full, .whisper: return true
+        case .lite: return false
+        }
+    }
+
+    /// Whether the CoreML VAD model (`silero-vad-unified-v6.0.0`) is bundled
+    /// into this variant. `.whisper` hosts its own embedded VAD because the
+    /// ~64ms call rate makes an HTTP round-trip non-viable; `.lite` has no
+    /// need for VAD on its hot path.
+    public var includesVAD: Bool {
+        switch self {
+        case .full: return true
+        case .whisper, .lite: return false
+        }
+    }
+
+    /// Whether the LLM stack (MLX-Swift backends + Apple Intelligence when
+    /// available) is bundled. All three variants ship LLM — it is the
+    /// engine's primary value-add over native OS APIs.
+    public var includesLLM: Bool { true }
+
+    /// Grammar (`YoozTextCleanup` xcframework) is always linked. The Rust
+    /// FFI loads on first reference; engine-side cost is ~0.
+    public var includesGrammar: Bool { true }
 }

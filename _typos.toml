@@ -3,6 +3,12 @@ extend-exclude = [
     "Vendor/",
     "*.xcframework",
     "*.mlpackage",
+    "text-cleanup/",
+    # Issue #10 research artifacts: raw transcripts in CSV / JSON contain
+    # voice-recognition fragments (truncated words, sentence-boundary
+    # tokens) that look like typos but are intentional input data.
+    "results/phase2_prototype/*.csv",
+    "results/phase2_prototype/*.json",
 ]
 
 [default.extend-words]
@@ -14,3 +20,8 @@ stt = "stt"
 mlx = "mlx"
 codable = "codable"
 hel = "hel"
+# Walsh-Hadamard Transform abbreviation, used throughout the issue #10
+# TurboQuant feasibility doc.
+WHT = "WHT"
+# `arange` is the numpy-style range builder, not a misspelling of `arrange`.
+arange = "arange"

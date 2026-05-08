@@ -56,6 +56,12 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
             await registerModules()
 
             do {
+                // `server.start()` boots the HTTP server and (in
+                // production) kicks off the variant-aware module
+                // eager-load. The eager-load runs in the background;
+                // this `await` returns once the server is listening
+                // and the kickoff Task is spawned, not when the
+                // modules finish loading.
                 try await server.start()
             } catch {
                 server.logger.error("Failed to start server: \(error)")

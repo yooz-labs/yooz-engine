@@ -78,43 +78,59 @@ public struct STTClient: Sendable {
         return response.languages
     }
 
-    // MARK: - Engine picker
-
-    /// The STT backend currently serving `/v1/stt/batch` + `/v1/stt/stream`.
-    public func currentEngineType() async throws -> STTEngineType {
-        try await engineInfo().current
+    /// Batch transcribe with token alignment. Same wire as
+    /// `transcribe(...)` but the response includes per-token
+    /// timestamps in `tokens`. Used by callers that need word- or
+    /// sub-word-level timing (chunk-boundary deduplication,
+    /// hallucination filters, subtitle rendering).
+    public func batchTranscribeAligned(
+        audioSamples: [Float],
+        language: STTLanguage = .english,
+        mode: AudioMode = .normal
+    ) async throws -> TranscriptionResult {
+        let request = BatchSTTRequest(
+            samples: audioSamples,
+            language: language.rawValue,
+            mode: mode.rawValue,
+            aligned: true
+        )
+        let body = try JSONEncoder().encode(request)
+        let data = try await engine.post("/v1/stt/batch", body: body)
+        return try JSONDecoder().decode(TranscriptionResult.self, from: data)
     }
 
-    /// All STT backends linked into the running build variant. Lite variants
-    /// return `[.appleSTT]`; full/whisper variants return all three.
-    public func availableEngineTypes() async throws -> [STTEngineType] {
-        try await engineInfo().available
-    }
+    // MARK: - Picker (canonical module-picker pattern, #99)
+    //
+    // Mirrors `TouchUpClient.availableModels()` /
+    // `setModel(id:preload:)` so consumer apps can template a
+    // single ModelPickerStore<T> across pickers. See AGENTS.md
+    // "Module model picker pattern" for the full recipe.
 
-    /// Whether the currently selected backend performs its own endpointing
-    /// (voice activity detection). True for Apple STT; false for the MLX
-    /// backends. Clients use this to decide whether to run their own VAD.
-    public func hasBuiltInVAD() async throws -> Bool {
-        try await engineInfo().hasBuiltInVAD
-    }
-
-    /// Switch the active STT backend. Cancels any in-flight stream; the new
-    /// backend will load the current language on its next request.
-    ///
-    /// Throws `YoozEngineError.httpError(statusCode: 501)` when the requested
-    /// engine type isn't bundled in this build variant.
-    public func setEngineType(_ type: STTEngineType) async throws {
-        let body = try JSONEncoder().encode(STTEngineSwitchRequest(engine: type))
-        _ = try await engine.post("/v1/stt/engine", body: body)
-    }
-
-    /// Fetch the full engine-picker response in one round trip.
-    ///
-    /// Prefer this when you need `current` + `available` + capability bits;
-    /// the three `current/available/hasBuiltInVAD` helpers wrap this.
-    public func engineInfo() async throws -> STTEngineResponse {
+    /// List every STT backend the engine knows about, with
+    /// lifecycle state + active flag + STT-specific capability
+    /// extensions (`supportsBatch`, `supportsStreaming`,
+    /// `supportedLanguages`).
+    public func availableEngines() async throws -> STTBackendsResponse {
         let data = try await engine.get("/v1/stt/engine")
-        return try JSONDecoder().decode(STTEngineResponse.self, from: data)
+        return try JSONDecoder().decode(STTBackendsResponse.self, from: data)
+    }
+
+    /// Set the active STT backend. `preload` is accepted for shape
+    /// parity with the TouchUp picker but is currently a no-op on
+    /// the server — STT models load lazily on the first
+    /// `/v1/stt/batch` or `/v1/stt/load` call after the switch.
+    /// Documented as a future enhancement so the SDK shape stays
+    /// stable as the engine adds eager preload.
+    @discardableResult
+    public func setEngine(
+        id: String,
+        preload: Bool = true
+    ) async throws -> STTBackendInfo {
+        let body = try JSONEncoder().encode(
+            STTSetBackendRequest(id: id, preload: preload)
+        )
+        let data = try await engine.post("/v1/stt/engine", body: body)
+        return try JSONDecoder().decode(STTBackendInfo.self, from: data)
     }
 
     // MARK: - WebSocket Streaming
@@ -244,6 +260,21 @@ public struct STTStatus: Codable, Sendable {
     public let loaded: Bool
     public let language: String?
     public let streaming: Bool
+    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
+    /// download. `nil` when the server omits the field (older builds).
+    public let progress: Double?
+
+    public init(
+        loaded: Bool,
+        language: String?,
+        streaming: Bool,
+        progress: Double? = nil
+    ) {
+        self.loaded = loaded
+        self.language = language
+        self.streaming = streaming
+        self.progress = progress
+    }
 }
 
 public enum AudioMode: String, Codable, Sendable {
