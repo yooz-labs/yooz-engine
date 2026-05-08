@@ -166,6 +166,25 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// Hugging Face repository the engine pulls weights from when no
+    /// local snapshot is staged under `EngineConfig.modelsDirectory`
+    /// or the app bundle. `nil` means no mirror is wired yet for the
+    /// language family; the downloader surfaces that as a typed
+    /// `unsupportedLanguage` error so the failure is explicit instead
+    /// of a generic 404 deeper in the load path.
+    ///
+    /// All Parakeet TDT languages share the multilingual
+    /// `mlx-community/parakeet-tdt-0.6b-v3` checkpoint. FastConformer
+    /// (Arabic/Persian/Hebrew) and CJK have no MLX mirror yet.
+    public var huggingFaceID: String? {
+        switch modelFamily {
+        case .parakeetTDT:
+            return "mlx-community/parakeet-tdt-0.6b-v3"
+        case .fastConformer, .cjk, .apple:
+            return nil
+        }
+    }
+
     /// Languages that share the same model weights
     /// Useful for knowing which languages can switch instantly
     public var modelSiblings: [STTLanguage] {

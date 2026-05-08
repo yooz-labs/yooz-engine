@@ -107,6 +107,29 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertNil(status.language)
     }
 
+    /// Forward compat: pre-#41 servers omit `progress`, so the SDK
+    /// must still decode the legacy 3-field shape with `progress = nil`.
+    func testSTTStatusDecodingOmittedProgressIsNil() throws {
+        let json = """
+        {"loaded": true, "language": "en", "streaming": false}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(STTStatus.self, from: data)
+        XCTAssertNil(status.progress, "Older servers omit progress entirely")
+    }
+
+    /// New #41 servers report `progress` as a fraction; the SDK
+    /// surfaces it untouched. Without this, polling clients silently
+    /// drop the download-percent UX after the server starts emitting it.
+    func testSTTStatusDecodingProgressFraction() throws {
+        let json = """
+        {"loaded": false, "language": "en", "streaming": false, "progress": 0.42}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(STTStatus.self, from: data)
+        XCTAssertEqual(try XCTUnwrap(status.progress), 0.42, accuracy: 1e-9)
+    }
+
     func testSTTLanguageInfoDecoding() throws {
         let json = """
         {

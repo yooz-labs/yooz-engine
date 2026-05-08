@@ -1,4 +1,5 @@
 import Foundation
+import HuggingFace
 import Hummingbird
 import HummingbirdWebSocket
 import Logging
@@ -305,6 +306,151 @@ final class APIServer: ObservableObject {
                 code: "model_fetch_failed"
             )
         }
+    }
+
+    /// Demux a `/v1/stt/load` failure into a structured wire response.
+    /// Mirrors `mapFetchFailure`'s code surface so a Parakeet/HF-cache
+    /// failure looks identical on the wire to a Qwen3 fetch failure
+    /// of the same root cause. Codes are stable contract — adding a
+    /// new one is fine, renaming an existing one is a breaking change.
+    nonisolated func mapSTTLoadError(_ error: any Error) -> Response {
+        // Cooperative cancellation. 499 (client-closed-request) is a
+        // de-facto convention for "the awaiter went away"; falling
+        // back to 503 would conflate it with server unavailability.
+        if error is CancellationError {
+            return errorResponse(
+                status: .init(code: 499, reasonPhrase: "Client Closed Request"),
+                message: "Load cancelled",
+                code: "cancelled"
+            )
+        }
+
+        // No HF mirror wired for this language family. 501 is the
+        // right code: the request was well-formed and the language
+        // is recognised, but the server has no implementation path
+        // for it on this build.
+        if let download = error as? STTHFDownloadError {
+            switch download {
+            case .unsupportedLanguage(let language):
+                return errorResponse(
+                    status: .notImplemented,
+                    message: download.errorDescription ?? "Language unmirrored: \(language.rawValue)",
+                    code: "language_unmirrored"
+                )
+            }
+        }
+
+        // Offline-mode cache miss (`HubClient.downloadSnapshot` with
+        // `localFilesOnly: true` and no cached snapshot). Distinct
+        // from a generic "not found" — the client retries with
+        // `allow_fetch=true` to recover.
+        if let cacheError = error as? HubCacheError {
+            switch cacheError {
+            case .cachedPathResolutionFailed:
+                return errorResponse(
+                    status: .notFound,
+                    message: cacheError.errorDescription ?? "STT model not in HF cache; retry with allow_fetch=true.",
+                    code: "model_not_cached"
+                )
+            default:
+                return errorResponse(
+                    status: .internalServerError,
+                    message: cacheError.errorDescription ?? "HF cache error",
+                    code: "model_cache_error"
+                )
+            }
+        }
+
+        // HTTP-layer failures from the HF download. Demux on status
+        // code so callers can distinguish auth-required from gone
+        // from upstream-5xx; the codes match `mapFetchFailure` so
+        // the Qwen3 and Parakeet paths look the same on the wire.
+        if let httpError = error as? HTTPClientError {
+            switch httpError {
+            case .responseError(let response, let detail):
+                let body = "\(detail) (HTTP \(response.statusCode) for \(response.url?.absoluteString ?? "unknown"))"
+                switch response.statusCode {
+                case 401:
+                    return errorResponse(
+                        status: .unauthorized,
+                        message: body,
+                        code: "model_fetch_unauthorized"
+                    )
+                case 404:
+                    return errorResponse(
+                        status: .notFound,
+                        message: body,
+                        code: "model_fetch_not_found"
+                    )
+                case 500..<600:
+                    return errorResponse(
+                        status: .badGateway,
+                        message: body,
+                        code: "model_fetch_upstream_5xx"
+                    )
+                default:
+                    return errorResponse(
+                        status: .badGateway,
+                        message: body,
+                        code: "model_fetch_failed"
+                    )
+                }
+            case .requestError(let detail), .unexpectedError(let detail):
+                return errorResponse(
+                    status: .badGateway,
+                    message: detail,
+                    code: "model_fetch_failed"
+                )
+            case .decodingError(let response, let detail):
+                return errorResponse(
+                    status: .badGateway,
+                    message: "\(detail) (HTTP \(response.statusCode))",
+                    code: "model_fetch_failed"
+                )
+            }
+        }
+
+        // Network-layer failures (offline, DNS, timeout) — caller
+        // should retry; not a server bug.
+        if let urlError = error as? URLError {
+            return errorResponse(
+                status: .badGateway,
+                message: urlError.localizedDescription,
+                code: "model_fetch_network_error"
+            )
+        }
+
+        // Engine-side validation. `languageNotSupported` is a 400
+        // (the client sent a code we don't implement); any other
+        // YoozSTTError surfaces as a generic load failure.
+        if let sttError = error as? YoozSTTError {
+            switch sttError {
+            case .languageNotSupported:
+                return errorResponse(
+                    status: .badRequest,
+                    message: sttError.errorDescription ?? "Language not supported",
+                    code: "language_not_supported"
+                )
+            case .modelNotFound(let message):
+                return errorResponse(
+                    status: .notFound,
+                    message: message,
+                    code: "model_not_found"
+                )
+            default:
+                return errorResponse(
+                    status: .internalServerError,
+                    message: sttError.errorDescription ?? "Load failed",
+                    code: "load_failed"
+                )
+            }
+        }
+
+        return errorResponse(
+            status: .internalServerError,
+            message: error.localizedDescription,
+            code: "load_failed"
+        )
     }
 
     private nonisolated func parseLanguage(_ code: String?) throws -> STTLanguage {
@@ -699,7 +845,8 @@ final class APIServer: ObservableObject {
             return STTStatusResponse(
                 loaded: backendLoaded,
                 language: language,
-                streaming: sttEngine.isStreaming
+                streaming: sttEngine.isStreaming,
+                progress: sttEngine.downloadProgress
             )
         }
 
@@ -785,19 +932,23 @@ final class APIServer: ObservableObject {
                 }
             }
 
+            // See `YoozSTTEngine.getModelDirectory` for resolution
+            // order. `allowFetch` defaults to true; clients that want
+            // to fail fast on a missing model pass `allow_fetch=false`.
+            let allowFetch = body.allowFetch ?? true
             do {
-                try await sttEngine.start(language: language)
+                try await sttEngine.start(
+                    language: language,
+                    allowFetch: allowFetch
+                )
                 return try jsonResponse(STTStatusResponse(
                     loaded: true,
                     language: language.rawValue,
-                    streaming: false
+                    streaming: false,
+                    progress: sttEngine.downloadProgress
                 ))
             } catch {
-                return errorResponse(
-                    status: .internalServerError,
-                    message: error.localizedDescription,
-                    code: "load_failed"
-                )
+                return mapSTTLoadError(error)
             }
         }
 
