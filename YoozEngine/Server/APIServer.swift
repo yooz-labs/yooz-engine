@@ -666,7 +666,12 @@ final class APIServer: ObservableObject {
                 ))
             }
 
-            let result = await TouchUpEngine.shared.process(
+            // Route through the picker-aware path so the model the
+            // user picked via `POST /v1/touchup/model` is honored.
+            // For callers that never set a model, this is identical
+            // to the legacy `process(...)` path (default
+            // `activeModel == .yoozLight`).
+            let result = await TouchUpEngine.shared.processWithActiveModel(
                 text: body.text,
                 mode: body.mode
             )
@@ -683,6 +688,78 @@ final class APIServer: ObservableObject {
                 modelUsed: result.modelUsed.rawValue,
                 warnings: warnings
             ))
+        }
+
+        // TouchUp: List available models for the picker UI.
+        // See AGENTS.md "Module model picker pattern" — this is the
+        // canonical shape every module's picker endpoint should
+        // follow (id / displayName / description / tier / sizeBytes
+        // / isAvailable / isCached / isLoaded / isActive).
+        router.get("/v1/touchup/models") { _, _ in
+            let models = await TouchUpEngine.shared.availableModels()
+            let activeId = await TouchUpEngine.shared.activeModel.rawValue
+            return TouchUpModelsResponse(models: models, activeId: activeId)
+        }
+
+        // TouchUp: Set active model. `preload` defaults to true so a
+        // one-shot picker change is enough to warm the model before
+        // the next `/v1/touchup` call. Returns the new active row so
+        // clients don't need a follow-up GET.
+        router.post("/v1/touchup/model") { [self] request, context in
+            let body: TouchUpSetModelRequest
+            do {
+                body = try await request.decode(
+                    as: TouchUpSetModelRequest.self, context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            guard let selection = TouchUpModelSelection(rawValue: body.id) else {
+                let known = TouchUpModelSelection.allCases.map(\.rawValue).joined(separator: ", ")
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown TouchUp model id '\(body.id)'. Known: \(known).",
+                    code: "invalid_model"
+                )
+            }
+
+            do {
+                let active = try await TouchUpEngine.shared.setActiveModel(
+                    selection,
+                    preload: body.preload ?? true
+                )
+                return try jsonResponse(active)
+            } catch let error as LLMError {
+                // `notAvailable` is the FoundationModels-on-pre-26
+                // case — surface as 501 so the picker UI can render
+                // "not supported on this Mac" cleanly. Any other
+                // load failure (network, OOM) is 500.
+                switch error {
+                case .notAvailable(let detail):
+                    return errorResponse(
+                        status: .notImplemented,
+                        message: detail,
+                        code: "model_unavailable"
+                    )
+                default:
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: error.localizedDescription,
+                        code: "model_set_failed"
+                    )
+                }
+            } catch {
+                return errorResponse(
+                    status: .internalServerError,
+                    message: error.localizedDescription,
+                    code: "model_set_failed"
+                )
+            }
         }
 
         // Grammar: Check text

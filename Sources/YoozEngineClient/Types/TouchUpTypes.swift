@@ -26,3 +26,120 @@ public struct TouchUpResponse: Codable, Sendable {
     public let modelUsed: String?
     public let warnings: [String]?
 }
+
+// MARK: - Picker (canonical module-picker pattern)
+//
+// Mirror of the engine's `TouchUpModelInfo` / `TouchUpModelsResponse`
+// wire shapes. SDK-side copies (instead of importing the engine
+// target) keep the SDK self-contained — consumers only depend on
+// the SDK module. `TouchUpModelInfoBoundaryTests` encodes one side
+// and decodes the other to catch drift.
+
+/// Coarse class for a TouchUp model. Mirrored on engine + SDK.
+/// `unknown` is the forward-compat fallback: an SDK consumer
+/// running against a newer engine that ships a fifth tier sees
+/// `.unknown` rather than failing to decode.
+public enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
+    case light
+    case quality
+    case premium
+    case unknown
+
+    /// Tolerant decode: any unknown raw value maps to `.unknown`
+    /// instead of throwing. Forward compat for picker UIs that
+    /// poll a newer engine than the SDK was built against.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TouchUpModelTier(rawValue: raw) ?? .unknown
+    }
+}
+
+/// Lifecycle state of a single picker row. Replaces three boolean
+/// flags so the `loaded ⇒ cached ⇒ available` invariant is encoded
+/// in the type system (illegal combinations like
+/// "loaded but not cached" become unrepresentable).
+public enum TouchUpModelLoadState: String, Codable, Sendable, CaseIterable {
+    /// Picker UI greys this out — not selectable on this system.
+    case unavailable
+    /// Selectable but first use will download.
+    case available
+    /// Weights present in cache; first use loads from disk.
+    case cached
+    /// Resident in memory; calls hit the model immediately.
+    case loaded
+
+    /// Tolerant decode: any unknown raw value maps to
+    /// `.unavailable` (the safest fallback — picker greys it out).
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TouchUpModelLoadState(rawValue: raw) ?? .unavailable
+    }
+}
+
+/// One model in the TouchUp picker. Snapshot at the time of the
+/// `availableModels()` call; re-fetch after `setModel(_:preload:)`
+/// to learn the new active id and any cache/load changes the
+/// preload triggered.
+public struct TouchUpModelInfo: Codable, Sendable, Equatable {
+    /// Stable wire id (e.g. `"yooz-light-v3"`).
+    public let id: String
+    /// Picker-visible name (e.g. "Yooz-Light").
+    public let displayName: String
+    /// One-line subtitle for picker UX (latency hint etc.).
+    public let description: String
+    /// Coarse class for badge / sort UX.
+    public let tier: TouchUpModelTier
+    /// Approximate on-disk size after first-run download. `nil` for
+    /// OS-provided backends (`.premium` tier).
+    public let sizeBytes: Int64?
+    /// Lifecycle state. Encodes the `loaded ⇒ cached ⇒ available`
+    /// invariant in a single field.
+    public let loadState: TouchUpModelLoadState
+    /// Whether `/v1/touchup` currently routes through this model.
+    /// The engine guarantees exactly one row per response has
+    /// `isActive == true`.
+    public let isActive: Bool
+
+    public init(
+        id: String,
+        displayName: String,
+        description: String,
+        tier: TouchUpModelTier,
+        sizeBytes: Int64?,
+        loadState: TouchUpModelLoadState,
+        isActive: Bool
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.description = description
+        self.tier = tier
+        self.sizeBytes = sizeBytes
+        self.loadState = loadState
+        self.isActive = isActive
+    }
+}
+
+/// Response for `availableModels()`. `activeId` is the id of the
+/// entry where `isActive == true`.
+public struct TouchUpModelsResponse: Codable, Sendable {
+    public let models: [TouchUpModelInfo]
+    public let activeId: String
+
+    public init(models: [TouchUpModelInfo], activeId: String) {
+        self.models = models
+        self.activeId = activeId
+    }
+}
+
+/// Request body for `setModel(_:preload:)`. `preload` defaults to
+/// `true` server-side; consumers rarely need to construct this
+/// directly (use `TouchUpClient.setModel(id:preload:)`).
+public struct TouchUpSetModelRequest: Codable, Sendable {
+    public let id: String
+    public let preload: Bool?
+
+    public init(id: String, preload: Bool? = nil) {
+        self.id = id
+        self.preload = preload
+    }
+}
