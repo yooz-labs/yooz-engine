@@ -25,6 +25,10 @@ final class EngineConfigHelperModeTests: XCTestCase {
         XCTAssertEqual(EngineConfig.headlessEnvVar, "YOOZ_ENGINE_HEADLESS")
     }
 
+    func testPortEnvVarNameIsStable() {
+        XCTAssertEqual(EngineConfig.portEnvVar, "YOOZ_ENGINE_PORT")
+    }
+
     /// `isHelper` reads the env var from `ProcessInfo` lazily on every
     /// call. Mutating the in-process environment table via `setenv` and
     /// `unsetenv` is observed by `ProcessInfo` on the next read, so we
@@ -62,5 +66,31 @@ final class EngineConfigHelperModeTests: XCTestCase {
 
         setenv(EngineConfig.headlessEnvVar, "", 1)
         XCTAssertFalse(EngineConfig.isHelper, "empty value should not enable helper mode")
+    }
+
+    func testPortFollowsValidatedEnvVar() {
+        let prior = ProcessInfo.processInfo.environment[EngineConfig.portEnvVar]
+        defer {
+            if let prior {
+                setenv(EngineConfig.portEnvVar, prior, 1)
+            } else {
+                unsetenv(EngineConfig.portEnvVar)
+            }
+        }
+
+        unsetenv(EngineConfig.portEnvVar)
+        XCTAssertEqual(EngineConfig.port, EngineConfig.defaultPort)
+
+        setenv(EngineConfig.portEnvVar, "19921", 1)
+        XCTAssertEqual(EngineConfig.port, 19921)
+
+        setenv(EngineConfig.portEnvVar, "0", 1)
+        XCTAssertEqual(EngineConfig.port, EngineConfig.defaultPort)
+
+        setenv(EngineConfig.portEnvVar, "65536", 1)
+        XCTAssertEqual(EngineConfig.port, EngineConfig.defaultPort)
+
+        setenv(EngineConfig.portEnvVar, "not-a-port", 1)
+        XCTAssertEqual(EngineConfig.port, EngineConfig.defaultPort)
     }
 }

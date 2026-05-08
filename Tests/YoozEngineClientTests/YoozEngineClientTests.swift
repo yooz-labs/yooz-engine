@@ -13,6 +13,22 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(client.baseURL.absoluteString, "http://127.0.0.1:8080")
     }
 
+    #if canImport(AppKit)
+    func testHelperLaunchEnvironmentIncludesCustomPort() {
+        let client = YoozEngineClient(port: 19921)
+        XCTAssertEqual(client.helperLaunchEnvironment[YoozEngineClient.headlessEnvVar], "1")
+        XCTAssertEqual(client.helperLaunchEnvironment[YoozEngineClient.portEnvVar], "19921")
+    }
+
+    func testBundledHelperLaunchConfigurationCanCreateNewInstance() {
+        let client = YoozEngineClient(port: 19921)
+        let config = client.helperOpenConfiguration(createsNewInstance: true)
+        XCTAssertFalse(config.activates)
+        XCTAssertTrue(config.createsNewApplicationInstance)
+        XCTAssertEqual(config.environment[YoozEngineClient.portEnvVar], "19921")
+    }
+    #endif
+
     func testHealthStatusDecoding() throws {
         let json = """
         {

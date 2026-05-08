@@ -20,6 +20,8 @@ public final class YoozEngineClient: Sendable {
     public let port: Int
     private let session: URLSession
     private let engineBundleID = "live.yooz.engine"
+    static let headlessEnvVar = "YOOZ_ENGINE_HEADLESS"
+    static let portEnvVar = "YOOZ_ENGINE_PORT"
 
     /// Structured log channel for lifecycle events (connect, launch,
     /// stale-engine recovery). Uses OSLog so Console.app can filter by
@@ -340,7 +342,7 @@ public final class YoozEngineClient: Sendable {
         // system-installed standalone engine.
         if let helperURL = bundledHelperURL() {
             logger.info("launch: using bundled helper at \(helperURL.path, privacy: .public)")
-            try await openApplication(at: helperURL)
+            try await openApplication(at: helperURL, createsNewInstance: true)
             return
         }
 
@@ -351,22 +353,39 @@ public final class YoozEngineClient: Sendable {
             throw YoozEngineError.engineNotInstalled
         }
         logger.info("launch: using installed engine at \(engineURL.path, privacy: .public)")
-        try await openApplication(at: engineURL)
+        try await openApplication(at: engineURL, createsNewInstance: false)
         #else
         throw YoozEngineError.engineNotInstalled
         #endif
     }
 
     #if canImport(AppKit)
-    private func openApplication(at url: URL) async throws {
+    var helperLaunchEnvironment: [String: String] {
+        [
+            Self.headlessEnvVar: "1",
+            Self.portEnvVar: "\(port)"
+        ]
+    }
+
+    func helperOpenConfiguration(createsNewInstance: Bool) -> NSWorkspace.OpenConfiguration {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
+        config.createsNewApplicationInstance = createsNewInstance
         // Run the helper as a headless service: skip the menu-bar
         // status item + Settings scene so the host app's UI is the
         // only surface the user sees. `EngineConfig.isHelper` reads
         // this var at startup and forces `.prohibited` activation
         // policy. Harmless on engine builds that don't honor it.
-        config.environment = ["YOOZ_ENGINE_HEADLESS": "1"]
+        //
+        // Port isolation uses the same launch-time contract: a host app
+        // with `YoozEngineClient(port:)` launches its bundled helper with
+        // `YOOZ_ENGINE_PORT` so each app binds its own loopback port.
+        config.environment = helperLaunchEnvironment
+        return config
+    }
+
+    private func openApplication(at url: URL, createsNewInstance: Bool) async throws {
+        let config = helperOpenConfiguration(createsNewInstance: createsNewInstance)
         do {
             _ = try await NSWorkspace.shared.openApplication(
                 at: url,
