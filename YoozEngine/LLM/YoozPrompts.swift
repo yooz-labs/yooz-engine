@@ -1,5 +1,5 @@
 // YoozPrompts.swift
-// YoozEngine
+// LLMModule
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 

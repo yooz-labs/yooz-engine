@@ -28,6 +28,35 @@ public struct STTClient: Sendable {
         return try JSONDecoder().decode(TranscriptionResult.self, from: data)
     }
 
+    /// Batch transcribe with word/token-level timestamps.
+    ///
+    /// Identical to `transcribe(...)` but sets the server-side `aligned` flag
+    /// so the response includes `TranscriptionResult.tokens` — each token's
+    /// `start` / `end` is seconds from the start of `audioSamples`. Used by
+    /// callers that need chunk-boundary deduplication, subtitle alignment, or
+    /// per-word highlighting.
+    ///
+    /// Supported backends: Parakeet (TDT token alignment), FastConformer, and
+    /// Apple STT (derived from `SFTranscriptionSegment`). `tokens` is non-nil
+    /// (possibly empty) on every response from this method — the server ships
+    /// `"tokens": []` on silent audio rather than omitting the key. Only the
+    /// text-only `transcribe(...)` path ever returns `nil` tokens.
+    public func batchTranscribeAligned(
+        audioSamples: [Float],
+        language: STTLanguage = .english,
+        mode: AudioMode = .normal
+    ) async throws -> TranscriptionResult {
+        let request = BatchSTTRequest(
+            samples: audioSamples,
+            language: language.rawValue,
+            mode: mode.rawValue,
+            aligned: true
+        )
+        let body = try JSONEncoder().encode(request)
+        let data = try await engine.post("/v1/stt/batch", body: body)
+        return try JSONDecoder().decode(TranscriptionResult.self, from: data)
+    }
+
     /// Pre-load the STT model for a language.
     public func loadModel(language: STTLanguage = .english) async throws -> STTStatus {
         let request = STTLoadRequest(language: language.rawValue)
@@ -47,27 +76,6 @@ public struct STTClient: Sendable {
         let data = try await engine.get("/v1/stt/languages")
         let response = try JSONDecoder().decode(STTLanguagesResponse.self, from: data)
         return response.languages
-    }
-
-    /// Batch transcribe with token alignment. Same wire as
-    /// `transcribe(...)` but the response includes per-token
-    /// timestamps in `tokens`. Used by callers that need word- or
-    /// sub-word-level timing (chunk-boundary deduplication,
-    /// hallucination filters, subtitle rendering).
-    public func batchTranscribeAligned(
-        audioSamples: [Float],
-        language: STTLanguage = .english,
-        mode: AudioMode = .normal
-    ) async throws -> TranscriptionResult {
-        let request = BatchSTTRequest(
-            samples: audioSamples,
-            language: language.rawValue,
-            mode: mode.rawValue,
-            aligned: true
-        )
-        let body = try JSONEncoder().encode(request)
-        let data = try await engine.post("/v1/stt/batch", body: body)
-        return try JSONDecoder().decode(TranscriptionResult.self, from: data)
     }
 
     // MARK: - Picker (canonical module-picker pattern, #99)
@@ -176,22 +184,28 @@ struct BatchSTTRequest: Codable {
     let samples: [Float]
     let language: String
     let mode: String
-    /// Opt into per-token alignment. When `true`, the response's
-    /// `tokens` array carries start/end timestamps. Default `nil`
-    /// (omitted) so the server's "no alignment" path is the
-    /// default; explicit `true` requests alignment.
+    /// Opt-in flag for per-token alignment in the response. Omitted on the
+    /// wire (`encodeIfPresent`) when `nil` so old clients and servers that
+    /// predate issue #34 remain byte-identical with today's traffic.
     let aligned: Bool?
 
-    init(
-        samples: [Float],
-        language: String,
-        mode: String,
-        aligned: Bool? = nil
-    ) {
+    init(samples: [Float], language: String, mode: String, aligned: Bool? = nil) {
         self.samples = samples
         self.language = language
         self.mode = mode
         self.aligned = aligned
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case samples, language, mode, aligned
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(samples, forKey: .samples)
+        try container.encode(language, forKey: .language)
+        try container.encode(mode, forKey: .mode)
+        try container.encodeIfPresent(aligned, forKey: .aligned)
     }
 }
 

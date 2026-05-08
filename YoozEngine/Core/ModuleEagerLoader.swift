@@ -3,8 +3,21 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 import os.log
+#if canImport(GrammarModule)
+import GrammarModule
+#endif
+#if canImport(LLMModule)
+import LLMModule
+#endif
+#if canImport(STTModule)
+import STTModule
+#endif
+#if canImport(VADModule)
+import VADModule
+#endif
 
 private let logger = Logger(
     subsystem: "live.yooz.engine",
@@ -104,7 +117,7 @@ public actor ModuleEagerLoader {
     /// Idempotent: calling twice on the same loader returns the same
     /// task. Returns immediately once the child tasks are spawned;
     /// `await waitForCompletion()` to block until they all finish.
-    public func kickoff(variant: EngineVariant) {
+    public func kickoff(variant: BuildVariant) {
         if hasKickedOff { return }
         hasKickedOff = true
 
@@ -129,7 +142,7 @@ public actor ModuleEagerLoader {
     /// snapshot reflects the variant policy even when the engine
     /// stays cold. Idempotent across `applyVariantGating` and
     /// `kickoff`: the first call wins; the second is a no-op.
-    public func markVariantUnavailableModules(variant: EngineVariant) {
+    public func markVariantUnavailableModules(variant: BuildVariant) {
         if hasKickedOff { return }
         applyVariantGating(variant: variant)
     }
@@ -177,7 +190,7 @@ public actor ModuleEagerLoader {
 
     // MARK: - Internals
 
-    private func applyVariantGating(variant: EngineVariant) {
+    private func applyVariantGating(variant: BuildVariant) {
         // STT — `unavailable` on .lite; otherwise leave the
         // pre-kickoff state alone (becomes `loading` once kickoff
         // spawns the loadSTT task, then `ready` / `error`).
@@ -221,7 +234,7 @@ public actor ModuleEagerLoader {
         states[module.rawValue] = ModuleDetail(state: state, detail: detail)
     }
 
-    private func runLoadGroup(variant: EngineVariant) async {
+    private func runLoadGroup(variant: BuildVariant) async {
         await withTaskGroup(of: Void.self) { group in
             // Grammar — already loaded on first reference to
             // `GrammarEngine.shared` (FFI in init). We just probe and
@@ -322,6 +335,7 @@ public actor ModuleEagerLoader {
     }
 
     private func loadVAD() async {
+        #if canImport(VADModule)
         setState(.vad, .loading)
         do {
             try await VADEngine.shared.load()
@@ -332,5 +346,11 @@ public actor ModuleEagerLoader {
             setState(.vad, .error, detail: msg)
             logger.error("VAD eager-load failed: \(msg, privacy: .public)")
         }
+        #else
+        // Variant doesn't bundle VAD (e.g. YoozEngineWhisper). The
+        // variant-gating pass already marked .vad as .unavailable;
+        // skip the load attempt so we don't fault the readiness map.
+        setState(.vad, .unavailable, detail: "VAD module not bundled")
+        #endif
     }
 }

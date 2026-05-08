@@ -5,7 +5,7 @@ import MLX
 
 /// Streaming transcriber - accumulates audio and transcribes
 /// Note: Real-time streaming preview is a work in progress. Currently uses batch mode.
-final class StreamingTranscriber {
+public final class StreamingTranscriber {
 
     // MARK: - Configuration
 
@@ -43,7 +43,7 @@ final class StreamingTranscriber {
 
     // MARK: - Initialization
 
-    init(
+    public init(
         model: ParakeetModel,
         contextSize: (Int, Int) = (24, 24),
         minChunkDuration: Float = 0.5,
@@ -68,7 +68,7 @@ final class StreamingTranscriber {
 
     /// Add audio samples and get current transcription
     /// Uses batch mode for accuracy (streaming preview disabled for now)
-    func addAudio(samples: [Float]) -> ParakeetResult {
+    public func addAudio(samples: [Float]) -> ParakeetResult {
         // Accumulate audio
         audioBuffer.append(contentsOf: samples)
 
@@ -136,7 +136,7 @@ final class StreamingTranscriber {
     }
 
     /// Finalize transcription
-    func finalize() -> ParakeetResult {
+    public func finalize() -> ParakeetResult {
         let tokens = processAllAudio()
         let text = tokens.map(\.text).joined()
             .trimmingCharacters(in: .whitespaces)
@@ -150,12 +150,12 @@ final class StreamingTranscriber {
 
     /// Finalize transcription with full token information including timestamps
     /// - Returns: TranscriptionResult with aligned tokens containing start/duration
-    func finalizeWithTimestamps() -> TranscriptionResult {
+    public func finalizeWithTimestamps() -> TranscriptionResult {
         TranscriptionResult(tokens: processAllAudio())
     }
 
     /// Reset all state
-    func reset() {
+    public func reset() {
         audioBuffer = []
         finalizedTokens = []
         draftTokens = []

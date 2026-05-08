@@ -1,5 +1,5 @@
 // LLMBackend.swift
-// YoozEngine
+// LLMModule
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
@@ -9,13 +9,19 @@ import Foundation
 
 /// Yooz LLM model types for touch-up processing.
 ///
+/// Identifiers are stable wire values; `/v1/llm/generate` accepts the raw
+/// value as the `model` field. Order of cases matches the public model
+/// lineup (light first, quality second).
+///
 /// Both tiers download from Hugging Face on first use via the
 /// `#huggingFaceLoadModelContainer` macro in `MLXLLMBackend`. There is no
 /// embedded / bundled model path — packaged builds and fresh installs
-/// behave identically (no `/Volumes/S1` dev-cache fallback). Cached
-/// snapshots land under `~/.cache/huggingface/hub/` per swift-transformers
-/// `Hub` defaults.
-enum LLMModelType: String, CaseIterable, Sendable {
+/// behave identically. Cached snapshots land under
+/// `~/.cache/huggingface/hub/` per swift-transformers `Hub` defaults.
+///
+/// `public` because `APIServer` (a different target on the modular
+/// build) consumes this enum directly via the picker routes.
+public enum LLMModelType: String, CaseIterable, Sendable {
     /// Fast proofread tier. Currently unfinetuned base — see issue #91 for
     /// the planned `Yooz-Light v2` LoRA on the gold_standard_v3 corpus.
     case yoozLight = "yooz-light-v3"
@@ -23,7 +29,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
     /// (Qwen3.5-0.8B-MLX-4bit).
     case yoozQuality = "yooz-quality-v3"
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .yoozLight:
             return "Yooz-Light"
@@ -32,7 +38,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
         }
     }
 
-    var description: String {
+    public var description: String {
         switch self {
         case .yoozLight:
             return "Fast proofreading (~200ms)"
@@ -44,7 +50,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
     /// Approximate on-disk size after HF download (used for picker UX
     /// hints in consumer apps). Numbers are the published 4-bit MLX
     /// snapshot sizes, not raw weights.
-    var estimatedSize: Int64 {
+    public var estimatedSize: Int64 {
         switch self {
         case .yoozLight:
             return 276 * 1024 * 1024   // ~276 MB (Qwen2.5-0.5B-Instruct-4bit)
@@ -58,7 +64,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
     /// on first load. `revision` defaults to `main`; pin a commit here
     /// only if a future upstream change breaks compatibility with our
     /// backend assumptions.
-    var huggingFaceID: String {
+    public var huggingFaceID: String {
         switch self {
         case .yoozLight:
             // Stock Qwen2.5-0.5B-Instruct 4-bit MLX. No fine-tune yet
@@ -83,7 +89,7 @@ enum LLMModelType: String, CaseIterable, Sendable {
 
 // MARK: - Errors
 
-enum LLMError: Error, LocalizedError, Sendable {
+public enum LLMError: Error, LocalizedError, Sendable {
     case notLoaded
     case loadFailed(String)
     case generationFailed(String)
@@ -91,7 +97,7 @@ enum LLMError: Error, LocalizedError, Sendable {
     case downloadFailed(String)
     case parsingFailed(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .notLoaded:
             return "Model not loaded"
@@ -111,7 +117,10 @@ enum LLMError: Error, LocalizedError, Sendable {
 
 // MARK: - Protocol
 
-/// Protocol for LLM backends used in touch-up processing
+/// Protocol for LLM backends used in touch-up processing.
+///
+/// Kept `internal` on purpose; `TouchUpEngine` is the only out-of-module
+/// caller and it exposes its own domain API, not the backend abstraction.
 protocol LLMBackend: Actor {
     var identifier: String { get }
     var modelType: LLMModelType { get }

@@ -1,8 +1,9 @@
 // TouchUpEngine.swift
-// YoozEngine
+// LLMModule
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 import os.log
 
@@ -15,11 +16,11 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpEng
 /// - **Yooz-Light** (Qwen2.5-0.5B): Fast proofreading, ~200ms latency
 /// - **Yooz-Quality** (Qwen3-1.7B): Higher quality proofreading, ~490ms latency
 /// - **Apple Intelligence** (Foundation Models 3B): macOS 26+, structured generation
-actor TouchUpEngine {
+public actor TouchUpEngine {
 
     // MARK: - Singleton
 
-    static let shared = TouchUpEngine()
+    public static let shared = TouchUpEngine()
 
     // MARK: - Properties
 
@@ -40,13 +41,23 @@ actor TouchUpEngine {
     /// clients through the picker API (`GET /v1/touchup/models`).
     /// Defaults to `.yoozLight` so callers that never `setActiveModel`
     /// see the pre-picker behaviour.
-    private(set) var activeModel: TouchUpModelSelection = .yoozLight
+    public private(set) var activeModel: TouchUpModelSelection = .yoozLight
 
     /// Whether the engine has been preloaded
-    private(set) var isPreloaded: Bool = false
+    public private(set) var isPreloaded: Bool = false
+
+    /// User-preferred LLM for touch-up. Routing inside `process()` remains
+    /// mode-based (light-fast path, quality when replacements warrant it);
+    /// this property exists so thin clients can round-trip a dropdown
+    /// selection through the server. Held for the engine process lifetime
+    /// only — clients that need cross-session persistence must cache
+    /// their own selection and re-apply via `POST /v1/llm/model` on
+    /// reconnect. Wire contract: `LLMModelType.rawValue` surfaced by
+    /// `GET /v1/llm/models.current` and set by `POST /v1/llm/model`.
+    public private(set) var preferredModel: LLMModelType = .yoozLight
 
     /// Whether the light model is loaded
-    var isLightModelLoaded: Bool {
+    public var isLightModelLoaded: Bool {
         get async {
             guard let model = lightModel else { return false }
             return await model.isLoaded
@@ -54,7 +65,7 @@ actor TouchUpEngine {
     }
 
     /// Whether the quality model is loaded
-    var isQualityModelLoaded: Bool {
+    public var isQualityModelLoaded: Bool {
         get async {
             guard let model = qualityModel else { return false }
             return await model.isLoaded
@@ -62,7 +73,7 @@ actor TouchUpEngine {
     }
 
     /// Whether Apple Intelligence is available and loaded
-    var isFoundationModelsLoaded: Bool {
+    public var isFoundationModelsLoaded: Bool {
         get async {
             guard let backend = foundationModelsBackend else { return false }
             return await backend.isLoaded
@@ -71,7 +82,10 @@ actor TouchUpEngine {
 
     // MARK: - Initialization
 
-    init(bundleIdentifier: String = "live.yooz.engine") {
+    /// Private to preserve the `.shared` singleton contract used across the
+    /// engine. Tests that need to inspect a fresh instance should do so via
+    /// the shared actor.
+    private init(bundleIdentifier: String = "live.yooz.engine") {
         self.bundleIdentifier = bundleIdentifier
     }
 
@@ -82,7 +96,7 @@ actor TouchUpEngine {
     /// This loads the light model (Yooz-Light) which is embedded in the app bundle.
     /// The quality model (Yooz-Quality) is loaded on-demand when needed.
     /// Apple Intelligence is loaded if available (macOS 26+).
-    func preload(loadQuality: Bool = false) async throws {
+    public func preload(loadQuality: Bool = false) async throws {
         logger.info("Preloading TouchUpEngine...")
 
         if lightModel == nil {
@@ -113,7 +127,7 @@ actor TouchUpEngine {
 
     /// Ensure the quality model is loaded.
     /// Downloads from GHCR if not cached.
-    func loadQualityModel() async throws {
+    public func loadQualityModel() async throws {
         if qualityModel == nil {
             qualityModel = MLXLLMBackend.createQuality(bundleIdentifier: bundleIdentifier)
         }
@@ -144,7 +158,7 @@ actor TouchUpEngine {
     }
 
     /// Unload all models from memory.
-    func unload() async {
+    public func unload() async {
         if let light = lightModel {
             await light.unload()
         }
@@ -156,6 +170,54 @@ actor TouchUpEngine {
         }
         isPreloaded = false
         logger.info("TouchUpEngine unloaded")
+    }
+
+    /// Unload a single model's weights from memory. Used by whisper's
+    /// AI tab when the user switches to "touch-up off" or picks a
+    /// different model — reclaims GPU memory without tearing down the
+    /// whole engine. Idempotent: unloading an already-unloaded model
+    /// is a no-op.
+    public func unload(_ modelType: LLMModelType) async {
+        switch modelType {
+        case .yoozLight:
+            if let light = lightModel {
+                await light.unload()
+            }
+        case .yoozQuality:
+            if let quality = qualityModel {
+                await quality.unload()
+            }
+        }
+    }
+
+    /// Record the user-preferred LLM. Does not load weights — call
+    /// `preloadModel(_:)` (or the /v1/llm/preload route) to warm
+    /// the model after switching.
+    public func setPreferredModel(_ modelType: LLMModelType) {
+        preferredModel = modelType
+        logger.info("TouchUpEngine preferredModel set to \(modelType.rawValue, privacy: .public)")
+    }
+
+    /// Ensure a specific model's weights are resident. Idempotent;
+    /// loads the light model in-place (it is embedded in the app
+    /// bundle) and triggers a GHCR download for the quality model on
+    /// first use. Invoked by `POST /v1/llm/preload`.
+    public func preloadModel(_ modelType: LLMModelType) async throws {
+        switch modelType {
+        case .yoozLight:
+            if lightModel == nil {
+                lightModel = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
+            }
+            guard let light = lightModel else {
+                throw LLMError.notLoaded
+            }
+            if await !light.isLoaded {
+                try await light.load()
+                logger.info("Yooz-Light model preloaded on demand")
+            }
+        case .yoozQuality:
+            try await loadQualityModel()
+        }
     }
 
     // MARK: - Raw LLM Generation
@@ -173,7 +235,7 @@ actor TouchUpEngine {
     ///     model's mode, a temporary backend is constructed for this call
     ///     so the cached model's prompt-cache state is preserved.
     /// - Returns: Generated text
-    func generate(
+    public func generate(
         prompt: String,
         systemPrompt: String,
         modelType: LLMModelType = .yoozLight,
@@ -228,7 +290,7 @@ actor TouchUpEngine {
     ///   - prompt: The user prompt
     ///   - systemPrompt: Optional system prompt
     /// - Returns: Generated text
-    func generateWithFoundationModels(
+    public func generateWithFoundationModels(
         prompt: String,
         systemPrompt: String? = nil
     ) async throws -> String {
@@ -247,9 +309,9 @@ actor TouchUpEngine {
     ///   - mode: Processing mode controlling prompt and model selection
     ///   - replacements: List of (original, replacement) tuples to validate
     /// - Returns: ProcessResult with cleaned text and metadata
-    func process(
+    public func process(
         text: String,
-        mode: ServerTouchUpMode,
+        mode: TouchUpMode,
         replacements: [(original: String, replacement: String)] = []
     ) async -> TouchUpProcessor.ProcessResult {
         let replacementStructs = replacements.map {
@@ -331,9 +393,9 @@ actor TouchUpEngine {
 
     /// Process text using Apple Intelligence backend directly.
     /// Falls back to MLX models if Foundation Models unavailable.
-    func processWithFoundationModels(
+    public func processWithFoundationModels(
         text: String,
-        mode: ServerTouchUpMode
+        mode: TouchUpMode
     ) async -> TouchUpProcessor.ProcessResult {
         let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -386,7 +448,7 @@ actor TouchUpEngine {
     }
 
     /// Process text with regex only (no LLM).
-    nonisolated func processRegexOnly(
+    public nonisolated func processRegexOnly(
         text: String,
         replacements: [(original: String, replacement: String)] = []
     ) -> TouchUpProcessor.ProcessResult {
@@ -400,7 +462,7 @@ actor TouchUpEngine {
 
     /// Select the appropriate proofread prompt based on mode and model availability.
     private func selectPrompt(
-        for mode: ServerTouchUpMode,
+        for mode: TouchUpMode,
         qualityAvailable: Bool
     ) -> String {
         switch mode {
@@ -429,7 +491,7 @@ actor TouchUpEngine {
     /// Whether the Light model snapshot is on disk in the HF cache.
     /// Both tiers download from HF on first use (PR #93 / issue #77),
     /// so neither is "always cached".
-    var isLightModelCached: Bool {
+    public var isLightModelCached: Bool {
         get async {
             guard let light = lightModel else {
                 let temp = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
@@ -440,7 +502,7 @@ actor TouchUpEngine {
     }
 
     /// Whether the Quality model snapshot is on disk in the HF cache.
-    var isQualityModelCached: Bool {
+    public var isQualityModelCached: Bool {
         get async {
             guard let quality = qualityModel else {
                 let temp = MLXLLMBackend.createQuality(bundleIdentifier: bundleIdentifier)
@@ -468,7 +530,7 @@ actor TouchUpEngine {
     /// `precondition(...)` below catches a future drift if a new
     /// case is added to `TouchUpModelSelection` without updating
     /// this method's row list.
-    func availableModels() async -> [TouchUpModelInfo] {
+    public func availableModels() async -> [TouchUpModelInfo] {
         let lightLoaded = await isLightModelLoaded
         let qualityLoaded = await isQualityModelLoaded
         let lightCached = await isLightModelCached
@@ -552,7 +614,7 @@ actor TouchUpEngine {
     /// `.foundationModels` on a system without Apple Intelligence,
     /// or any error from the underlying load path otherwise.
     @discardableResult
-    func setActiveModel(
+    public func setActiveModel(
         _ selection: TouchUpModelSelection,
         preload: Bool = true
     ) async throws -> TouchUpModelInfo {
@@ -609,9 +671,9 @@ actor TouchUpEngine {
     /// runs inference directly through the loaded quality backend
     /// so a user-picked Quality is honored regardless of whether
     /// replacements are present.
-    func processWithActiveModel(
+    public func processWithActiveModel(
         text: String,
-        mode: ServerTouchUpMode,
+        mode: TouchUpMode,
         replacements: [(original: String, replacement: String)] = []
     ) async -> TouchUpProcessor.ProcessResult {
         switch activeModel {
@@ -664,7 +726,7 @@ actor TouchUpEngine {
     }
 
     /// Get model info for display
-    func getModelInfo() async -> (light: LLMModelInfo, quality: LLMModelInfo) {
+    public func getModelInfo() async -> (light: LLMModelInfo, quality: LLMModelInfo) {
         let lightLoaded = await isLightModelLoaded
         let qualityLoaded = await isQualityModelLoaded
         let lightCached = await isLightModelCached
@@ -688,12 +750,12 @@ actor TouchUpEngine {
 // MARK: - LLM Model Info
 
 /// Information about a model's status (renamed from ModelInfo to avoid collision with APITypes.ModelInfo)
-struct LLMModelInfo: Sendable {
-    let type: LLMModelType
-    let isLoaded: Bool
-    let isCached: Bool
+public struct LLMModelInfo: Sendable {
+    public let type: LLMModelType
+    public let isLoaded: Bool
+    public let isCached: Bool
 
-    init(type: LLMModelType, isLoaded: Bool, isCached: Bool) {
+    public init(type: LLMModelType, isLoaded: Bool, isCached: Bool) {
         self.type = type
         self.isLoaded = isLoaded
         self.isCached = isCached

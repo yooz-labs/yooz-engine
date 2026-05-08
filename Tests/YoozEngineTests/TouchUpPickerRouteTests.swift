@@ -20,6 +20,8 @@
 import Foundation
 import XCTest
 @testable import YoozEngine
+@testable import EngineCore
+@testable import LLMModule
 
 final class TouchUpPickerRouteTests: XCTestCase {
 

@@ -1,4 +1,8 @@
+import EngineCore
 import Hummingbird
+#if canImport(LLMModule)
+import LLMModule
+#endif
 
 struct HealthResponse: ResponseCodable {
     let status: String
@@ -57,6 +61,14 @@ struct BatchSTTRequest: Decodable {
     let samples: [Float]
     let language: String?
     let mode: String?
+    /// Request per-token timestamps in the response.
+    ///
+    /// When `true`, the handler routes to each backend's alignment-aware
+    /// entry point (`YoozSTTEngine.batchTranscribeAligned` for MLX,
+    /// `AppleSTTEngine.batchTranscribeAligned` for Apple STT) and returns
+    /// `BatchSTTResponse.tokens`. Absent / `false` keeps today's
+    /// token-less behaviour byte-identical with v0.5.x clients.
+    let aligned: Bool?
 }
 
 struct BatchSTTResponse: ResponseCodable {
@@ -64,6 +76,51 @@ struct BatchSTTResponse: ResponseCodable {
     let finalized: String
     let draft: String
     let language: String
+    /// Non-nil iff the request set `aligned = true`. Timestamps are in
+    /// seconds from the start of the submitted audio buffer. `encodeIfPresent`
+    /// keeps the field off the wire for non-aligned responses so v0.5.x
+    /// clients see byte-identical traffic.
+    let tokens: [AlignedTokenWire]?
+
+    init(
+        text: String,
+        finalized: String,
+        draft: String,
+        language: String,
+        tokens: [AlignedTokenWire]? = nil
+    ) {
+        self.text = text
+        self.finalized = finalized
+        self.draft = draft
+        self.language = language
+        self.tokens = tokens
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case text, finalized, draft, language, tokens
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(text, forKey: .text)
+        try container.encode(finalized, forKey: .finalized)
+        try container.encode(draft, forKey: .draft)
+        try container.encode(language, forKey: .language)
+        try container.encodeIfPresent(tokens, forKey: .tokens)
+    }
+}
+
+/// Wire-level aligned-token shape for `/v1/stt/batch` with `aligned=true`.
+///
+/// Mirrors `YoozEngineClient.AlignedToken` exactly (text + start + end as
+/// seconds). Engine-side `AlignedToken` types from STTModule
+/// (`start + duration`) and AppleSTTModule (derived from
+/// `SFTranscriptionSegment`) are both mapped into this shape at the route
+/// boundary so the SDK surface stays backend-agnostic.
+struct AlignedTokenWire: Codable, Sendable {
+    let text: String
+    let start: Float
+    let end: Float
 }
 
 struct STTLanguagesResponse: ResponseCodable {
@@ -267,6 +324,20 @@ enum ServerTouchUpMode: String, Codable, Sendable {
     case light
     case standard
     case full
+
+    #if canImport(LLMModule)
+    /// Map the wire enum to the LLMModule domain enum. The two enums are
+    /// intentionally distinct so the module stays free of server DTOs;
+    /// mapping lives here, at the wire boundary.
+    var asDomain: TouchUpMode {
+        switch self {
+        case .off: return .off
+        case .light: return .light
+        case .standard: return .standard
+        case .full: return .full
+        }
+    }
+    #endif
 }
 
 struct LLMGenerateServerRequest: Decodable {
@@ -311,6 +382,31 @@ struct LLMGenerateServerResponse: ResponseCodable {
     let processingTimeMs: Int?
 }
 
+// MARK: - LLM Model Management Types
+
+/// Wire body for `GET /v1/llm/models` response. Field set mirrors the
+/// SDK's `LLMModelInfo` exactly so JSON round-trips through the thin
+/// client without custom CodingKeys.
+struct LLMModelInfoServer: ResponseCodable {
+    let id: String
+    let displayName: String
+    let sizeBytes: Int64?
+    let loaded: Bool
+    let latencyHintMs: Int?
+}
+
+struct LLMModelsServerResponse: ResponseCodable {
+    let current: String
+    let available: [LLMModelInfoServer]
+}
+
+/// Shared body for `POST /v1/llm/model`, `POST /v1/llm/preload`, and
+/// `POST /v1/llm/unload`. Single field so new options can be added
+/// without breaking existing clients.
+struct LLMModelSelectionRequest: Decodable {
+    let model: String
+}
+
 // MARK: - TouchUp Types
 
 struct TouchUpServerRequest: Decodable {
@@ -336,98 +432,15 @@ struct TouchUpServerResponse: ResponseCodable {
 // picker (STT engine selection, TTS voice, etc.) so SDK + UI code
 // can be templated. See AGENTS.md "Module model picker pattern".
 //
-// Visibility note: these types are intentionally `internal` to the
-// app target. The SDK ships its own copies in
-// `Sources/YoozEngineClient/Types/TouchUpTypes.swift`; cross-shape
-// drift is caught by `TouchUpModelInfoBoundaryTests` which encodes
-// here and decodes there. Marking them `public` here would invite
-// a future "fix" that re-exports the engine type and couples the
-// SDK module to the app target.
-
-/// Coarse class for a TouchUp model. Mirrored on both engine and
-/// SDK sides. Adding a tier is a wire-shape extension; adding a
-/// case here without bumping the SDK leaves older clients decoding
-/// `unknown` — which is intentionally the fallback so a v0.7
-/// engine can ship a new tier without breaking v0.6 SDK consumers.
-enum ModelTier: String, Codable, Sendable, CaseIterable {
-    /// Fast default. Primary picker option.
-    case light
-    /// Higher-quality backend; usually carries a Pro badge in app UX.
-    case quality
-    /// OS-provided backend (Apple Intelligence). No download.
-    case premium
-    /// Fallback for forward-compat. SDK consumers see this when the
-    /// server reports a tier value they don't recognise yet.
-    case unknown
-}
-
-/// Lifecycle state of a single picker row. Replaces the previous
-/// three boolean flags (`isAvailable / isCached / isLoaded`) with a
-/// total ordering that makes illegal combinations unrepresentable
-/// (`loaded ⇒ cached ⇒ available` was previously expressed only in
-/// prose).
-///
-/// Wire raw values are stable; new states append at the end so
-/// older SDK clients decode unknown values as `.unavailable`
-/// (the safest fallback — picker UI greys the row out).
-enum ModelLoadState: String, Codable, Sendable, CaseIterable {
-    /// User cannot select this row right now (e.g. Apple
-    /// Intelligence on pre-26 macOS or a non-opted-in user).
-    case unavailable
-    /// Selectable but not yet on disk; first use will download.
-    case available
-    /// Weights present in the local cache; first use loads from disk.
-    case cached
-    /// Weights resident in memory; calls hit the model immediately.
-    case loaded
-}
-
-/// One model in the TouchUp picker. All fields are server-authoritative
-/// — the client treats this as a snapshot and re-fetches after a
-/// `setModel(...)` to learn the new active id and any state changes
-/// the preload triggered.
-struct TouchUpModelInfo: Codable, Sendable, Equatable, ResponseEncodable {
-    /// Stable wire id (e.g. `yooz-light-v3`). Matches
-    /// `TouchUpModelSelection.rawValue`.
-    let id: String
-    /// Picker-visible name (e.g. "Yooz-Light").
-    let displayName: String
-    /// One-line subtitle for picker UX (latency hint etc.).
-    let description: String
-    /// Coarse class for badge / sort UX.
-    let tier: ModelTier
-    /// Approximate on-disk size after first-run download. `nil` for
-    /// OS-provided backends (`.premium` tier).
-    let sizeBytes: Int64?
-    /// Lifecycle state. Encodes the `loaded ⇒ cached ⇒ available`
-    /// invariant in a single field rather than three loose booleans.
-    let loadState: ModelLoadState
-    /// Whether `/v1/touchup` currently routes through this model.
-    /// Exactly one row per response has `isActive == true` (pinned
-    /// by `availableModels()`'s precondition).
-    let isActive: Bool
-}
-
-/// Response for `GET /v1/touchup/models`. `activeId` is the id of
-/// the entry where `isActive == true` — surfaced separately so a
-/// client that only cares about the current selection does not
-/// have to scan the array.
-struct TouchUpModelsResponse: Codable, Sendable, ResponseCodable {
-    let models: [TouchUpModelInfo]
-    let activeId: String
-}
-
-/// Request body for `POST /v1/touchup/model`. `preload` defaults
-/// to `true` server-side so a one-shot picker change is enough to
-/// avoid a cold-start on the next `/v1/touchup` call.
-///
-/// `Codable` (not just `Decodable`) so route tests can build the
-/// payload via the typed initializer rather than hand-rolled JSON
-/// — keeps the request shape under test if a field is renamed.
-struct TouchUpSetModelRequest: Codable {
-    let id: String
-    let preload: Bool?
-}
+// Visibility note: the picker types now live in LLMModule
+// (`YoozEngine/TouchUp/TouchUpPickerTypes.swift`) so the producer
+// (TouchUpEngine) can construct them without depending on Hummingbird.
+// `ModelTier` and `ModelLoadState` live in EngineCore (shared with
+// STTModule). The Hummingbird `ResponseEncodable` / `ResponseCodable`
+// conformances are added as extensions in this file because the wire
+// concern belongs here, not in LLMModule.
+extension TouchUpModelInfo: ResponseEncodable {}
+extension TouchUpModelsResponse: ResponseEncodable {}
 
 // MARK: - Grammar Types
 

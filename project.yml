@@ -10,6 +10,8 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "1"
 
 packages:
   hummingbird:
@@ -57,13 +59,156 @@ packages:
     url: https://github.com/huggingface/swift-huggingface
     minVersion: "0.9.0"
     maxVersion: "0.10.0"
+  # Local Swift package at repo root. Used by IntegrationTests (A8 / #32)
+  # so the end-to-end harness talks to the engine through the same SDK
+  # that thin clients use in production. No version pin — xcodegen tracks
+  # `Package.swift` directly.
+  YoozEngineClient:
+    path: .
 
 targets:
+  EngineCore:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/EngineCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.core
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+
+  GrammarModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/Grammar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.grammar
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: EngineCore
+      - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+        embed: false
+
+  VADModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/VAD
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.vad
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: EngineCore
+
+  LLMModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/LLM
+      - YoozEngine/TouchUp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.llm
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: EngineCore
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift
+        product: MLXNN
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      # mlx-swift-lm 3.x decoupled tokenizer + downloader from mlx-swift-lm
+      # itself. The `#huggingFaceTokenizerLoader` and HF downloader macros
+      # expand into types from swift-transformers + swift-huggingface, so
+      # both packages must be linked into LLMModule directly.
+      - package: mlx-swift-lm
+        product: MLXHuggingFace
+      - package: swift-transformers
+        product: Tokenizers
+      - package: swift-transformers
+        product: Hub
+      - package: swift-huggingface
+        product: HuggingFace
+
+  STTModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/STT
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.stt
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: EngineCore
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift
+        product: MLXNN
+      - package: mlx-swift
+        product: MLXRandom
+      - package: mlx-swift
+        product: MLXFast
+      # mlx-swift-lm common runtime types — used by the qwen3 pipeline
+      # (LMCommon `Tokens`, `KVCacheSimple`, etc.). Kept off LLMModule's
+      # dep list because LLMModule consumes them through MLXLLM.
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      # Tokenizers — qwen3 pipeline uses Apple's swift-transformers
+      # for the BPE tokenizer.
+      - package: swift-transformers
+        product: Tokenizers
+      # HF auto-download support for STT models (#95).
+      - package: swift-huggingface
+        product: HuggingFace
+
+  # Apple STT backend — wraps SFSpeechRecognizer (macOS 14-25) and
+  # SpeechAnalyzer (macOS 26+, gated by #available). No MLX footprint; used by
+  # YoozEngineLite to ship a sub-GB engine bundle, and listed alongside
+  # STTModule in full/whisper variants so the engine-picker can offer all
+  # three backends (parakeet, fast_conformer, apple_stt).
+  AppleSTTModule:
+    type: framework
+    platform: macOS
+    sources:
+      - YoozEngine/AppleSTT
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.apple-stt
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: EngineCore
+
   YoozEngine:
     type: application
     platform: macOS
     sources:
-      - YoozEngine
+      - path: YoozEngine
+        excludes:
+          - AppleSTT/**
+          - Grammar/**
+          - LLM/**
+          - STT/**
+          - TouchUp/**
+          - VAD/**
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine
@@ -75,6 +220,11 @@ targets:
         # under the natural name.
         PRODUCT_MODULE_NAME: YoozEngine
         INFOPLIST_FILE: YoozEngine/Info.plist
+        # Runtime variant dispatch — substituted into Info.plist's
+        # `YoozBuildVariant` key via the `$(YOOZ_BUILD_VARIANT)` template.
+        # Swift compile conditions can't be used because EngineCore.framework
+        # is built once and shared across all three app variants.
+        YOOZ_BUILD_VARIANT: full
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
         LD_RUNPATH_SEARCH_PATHS:
@@ -96,34 +246,121 @@ targets:
         Release:
           ENABLE_HARDENED_RUNTIME: true
     dependencies:
+      - target: EngineCore
+      - target: AppleSTTModule
+      - target: GrammarModule
+      - target: LLMModule
+      - target: STTModule
+      - target: VADModule
       - package: hummingbird
         product: Hummingbird
       - package: hummingbird-websocket
         product: HummingbirdWebSocket
-      - package: mlx-swift
-        product: MLX
-      - package: mlx-swift
-        product: MLXFast
-      - package: mlx-swift
-        product: MLXNN
-      - package: mlx-swift
-        product: MLXRandom
-      - package: mlx-swift-lm
-        product: MLXLLM
-      - package: mlx-swift-lm
-        product: MLXLMCommon
-      # mlx-swift-lm 3.x requires concrete Downloader + TokenizerLoader
-      # implementations. MLXHuggingFace ships the macros; the runtime types
-      # (Tokenizers.AutoTokenizer, HuggingFace.HubClient) come from
-      # swift-transformers + swift-huggingface, which the macros expand into.
-      - package: mlx-swift-lm
-        product: MLXHuggingFace
-      - package: swift-transformers
-        product: Tokenizers
-      - package: swift-transformers
-        product: Hub
+      # APIServer.mapSTTLoadError demuxes HubCacheError directly so the
+      # HuggingFace package must be linked into the app target, not just
+      # the per-module targets that produce the errors.
       - package: swift-huggingface
         product: HuggingFace
+      - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+        embed: false
+
+  # Slim build variant: bundled into yooz-whisper.app as an embedded helper.
+  # Identical sources to the full YoozEngine target, but deliberately omits
+  # VADModule — whisper keeps VAD embedded locally in the client (A1 design §4).
+  # VAD-dependent code in APIServer/EngineAppDelegate is gated by
+  # `#if canImport(VADModule)` so it compiles out cleanly here. The remaining
+  # differentiation today is the VARIANT_WHISPER compile condition and bundle
+  # identity; downstream slim variants (Notes, Voice) will drop more modules.
+  #
+  # A5 (#29): CODE_SIGN_ENTITLEMENTS points at the whisper-specific file so
+  # future permission tightening (e.g. dropping network.server once the host
+  # app proxies) doesn't churn the full engine's entitlements. The file is
+  # a verbatim copy of YoozEngine.entitlements today.
+  YoozEngineWhisper:
+    type: application
+    platform: macOS
+    sources:
+      - path: YoozEngine
+        excludes:
+          - AppleSTT/**
+          - Grammar/**
+          - LLM/**
+          - STT/**
+          - TouchUp/**
+          - VAD/**
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.whisper
+        PRODUCT_NAME: Yooz Engine (Whisper)
+        INFOPLIST_FILE: YoozEngine/Info.plist
+        # Runtime variant dispatch — see the equivalent comment on the full
+        # variant target.
+        YOOZ_BUILD_VARIANT: whisper
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngineWhisper.entitlements
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        ENABLE_HARDENED_RUNTIME: true
+        LSUIElement: true
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "VARIANT_WHISPER"
+    dependencies:
+      - target: EngineCore
+      - target: AppleSTTModule
+      - target: GrammarModule
+      - target: LLMModule
+      - target: STTModule
+      - package: hummingbird
+        product: Hummingbird
+      - package: hummingbird-websocket
+        product: HummingbirdWebSocket
+      - package: swift-huggingface
+        product: HuggingFace
+      - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
+        embed: false
+
+  # Sub-GB build variant for Remi-class apps, iOS ports (future epic), and
+  # any Mac app that wants an engine without the MLX runtime. Deliberately
+  # omits STTModule (MLX Parakeet + FastConformer) and VADModule. Apple STT
+  # is the sole speech backend. Sources mirror the full variant; the
+  # `VARIANT_LITE` compile condition toggles `BuildVariant.current`, and all
+  # MLX-dependent code paths are already gated by `#if canImport(STTModule)`
+  # / `#if canImport(VADModule)` in APIServer + EngineAppDelegate.
+  YoozEngineLite:
+    type: application
+    platform: macOS
+    sources:
+      - path: YoozEngine
+        excludes:
+          - AppleSTT/**
+          - Grammar/**
+          - LLM/**
+          - STT/**
+          - TouchUp/**
+          - VAD/**
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.lite
+        PRODUCT_NAME: Yooz Engine (Lite)
+        INFOPLIST_FILE: YoozEngine/Info.plist
+        # Runtime variant dispatch — see the equivalent comment on the full
+        # variant target.
+        YOOZ_BUILD_VARIANT: lite
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        ENABLE_HARDENED_RUNTIME: true
+        LSUIElement: true
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "VARIANT_LITE"
+    dependencies:
+      - target: EngineCore
+      - target: AppleSTTModule
+      - target: GrammarModule
+      - target: LLMModule
+      - package: hummingbird
+        product: Hummingbird
+      - package: hummingbird-websocket
+        product: HummingbirdWebSocket
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
@@ -140,14 +377,114 @@ targets:
         # "Could not find test host."
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Yooz Engine.app/Contents/MacOS/Yooz Engine"
         BUNDLE_LOADER: "$(TEST_HOST)"
-        # XcodeGen does not auto-generate an Info.plist for test bundles
-        # under the modern toolchain; let Xcode synthesize one so we don't
-        # have to maintain a separate Info.plist for tests.
         GENERATE_INFOPLIST_FILE: "YES"
         PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.tests
     dependencies:
       - target: YoozEngine
+      # Explicit module deps let tests `import` modules directly instead of
+      # relying on transitive framework search paths from the app target.
+      # ModulesEndpointTests uses real singletons (GrammarEngine, VADEngine)
+      # without mocks, per yooz-engine policy.
+      - target: EngineCore
+      - target: GrammarModule
+      - target: VADModule
 
+  EngineCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/EngineCoreTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: EngineCore
+
+  GrammarModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/GrammarModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: GrammarModule
+      - target: EngineCore
+
+  LLMModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/LLMModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: LLMModule
+      - target: EngineCore
+
+  STTModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/STTModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: STTModule
+      - target: EngineCore
+
+  AppleSTTModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/AppleSTTModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: AppleSTTModule
+      - target: EngineCore
+
+  VADModuleTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/VADModuleTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: VADModule
+      - target: EngineCore
+
+  # A8 / #32 — end-to-end integration harness.
+  # Drives a freshly-built Yooz Engine.app subprocess through the
+  # YoozEngineClient SPM package (added under `packages:` above).
+  # Gated at runtime by YOOZ_INTEGRATION=1; default CI runs only the
+  # harness-helper unit tests. See scripts/run-integration.sh for the
+  # full run entry point and Tests/IntegrationTests/CLAUDE notes in
+  # EndToEndTests.swift for scope.
+  IntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/IntegrationTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - package: YoozEngineClient
+        product: YoozEngineClient
+
+# Explicit schemes so XcodeGen emits `.xcscheme` files with test plans wired
+# in. Without this block xcodegen auto-generates schemes per target but drops
+# no `TestPlans` reference, and `xcodebuild -testPlan` fails with
+# "The test plan ... was not found". Plans live in `TestPlans/` at repo root
+# so they are not wiped by `xcodegen generate` (which recreates the .xcodeproj
+# directory, including xcshareddata/xcschemes).
 schemes:
   YoozEngine:
     build:
@@ -159,7 +496,25 @@ schemes:
       gatherCoverageData: false
       targets:
         - YoozEngineTests
+        # EngineCore is a framework target shared across the three app
+        # variants; its unit tests (BuildVariant, ModuleHealth, and the
+        # EngineConfig helper-mode contract for #42) belong in the
+        # default scheme so a regression in helper suppression surfaces
+        # in the standard CI sweep rather than at integration time.
+        - EngineCoreTests
     run:
       config: Debug
     archive:
       config: Release
+  IntegrationTests:
+    build:
+      targets:
+        YoozEngine: [run, test]
+        IntegrationTests: [test]
+    test:
+      config: Debug
+      testPlans:
+        - path: TestPlans/IntegrationTests.xctestplan
+          defaultPlan: true
+      targets:
+        - IntegrationTests

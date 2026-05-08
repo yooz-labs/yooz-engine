@@ -1,17 +1,23 @@
 import Foundation
 
-/// A single token from an aligned transcription with start/end
-/// timestamps. Used by callers that need word- or sub-word-level
-/// timing (chunk-boundary deduplication, subtitle rendering,
-/// hallucination filters). Timestamps are seconds from the start
-/// of the submitted audio buffer.
+/// A single token from an aligned transcription with start/end timestamps.
 ///
-/// Only populated on responses from aligned transcription paths
-/// (`STTClient.batchTranscribeAligned`). Restored on the SDK in
-/// #99 after the simplification dropped it.
+/// Used by callers that need word- or sub-word-level timing (e.g. chunk-
+/// boundary deduplication, subtitle rendering, word highlighting). Timestamps
+/// are in seconds from the start of the submitted audio buffer.
+///
+/// Only populated on responses from aligned transcription paths (see
+/// `STTClient.batchTranscribeAligned`). The shape `text/start/end` is
+/// intentionally backend-agnostic: Parakeet + FastConformer surface native
+/// TDT token alignments, Apple STT derives them from `SFTranscriptionSegment`
+/// (`timestamp` + `duration`).
 public struct AlignedToken: Codable, Sendable, Equatable {
+    /// Token text. May be a word, sub-word, or punctuation fragment depending
+    /// on backend tokenization; do not assume one-token-per-word.
     public let text: String
+    /// Seconds from start of the audio buffer.
     public let start: Float
+    /// Seconds from start of the audio buffer. `end >= start`.
     public let end: Float
 
     public init(text: String, start: Float, end: Float) {
@@ -26,10 +32,11 @@ public struct TranscriptionResult: Codable, Sendable {
     public let finalized: String
     public let draft: String
     public let language: String?
-    /// Aligned tokens with timestamps. `nil` when the request did
-    /// not opt into alignment or when the backend for the active
-    /// engine did not return alignment information. Present on
-    /// every response from `STTClient.batchTranscribeAligned`.
+    /// Aligned tokens with timestamps. Non-nil (possibly empty) on every
+    /// response from `STTClient.batchTranscribeAligned` for the MLX + Apple
+    /// backends — the server ships `"tokens": []` on silent audio rather than
+    /// omitting the key. `nil` only on responses from `STTClient.transcribe`,
+    /// which never opts into the aligned path.
     public let tokens: [AlignedToken]?
 
     public init(
@@ -71,11 +78,24 @@ public enum STTLanguage: String, Codable, Sendable, CaseIterable {
 //
 // Mirror of the engine's `STTBackendInfo` / `STTBackendsResponse`
 // wire shapes (#99). Same tier + loadState typed enums as TouchUp
-// (`TouchUpModelTier`, `TouchUpModelLoadState`) so consumer apps
-// can template a single ModelPickerStore<T> across modules.
+// (`ModelTier`, `ModelLoadState`) so consumer apps can template a
+// single ModelPickerStore<T> across modules.
 
 /// Stable wire id for an STT backend. Mirrors engine-side
 /// `STTBackendID`. Renaming a case is a major SDK bump.
+///
+/// Yooz Engine exposes four speech backends today:
+/// - `.parakeet` — MLX Parakeet TDT (Latin/European languages, high accuracy,
+///    ~600 MB runtime)
+/// - `.fastConformer` — MLX FastConformer (Arabic, Persian; RTL scripts)
+/// - `.appleSTT` — Apple's built-in STT (`SFSpeechRecognizer` on macOS 14-25,
+///    `SpeechAnalyzer` on macOS 26+). Zero MLX footprint; the only backend
+///    linked into `YoozEngineLite`.
+/// - `.qwen3ASRPreview` — preview Qwen3-ASR backend (variant-gated).
+///
+/// Picker lives server-side; clients consult `STTClient.availableEngines()`
+/// to discover which are linked into the running build variant. Requesting an
+/// unbundled engine returns HTTP 501 `module_not_bundled`.
 public enum STTBackendID: String, Codable, Sendable, CaseIterable {
     case parakeet
     case fastConformer = "fast_conformer"

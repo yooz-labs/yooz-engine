@@ -1,5 +1,6 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 
 /// Identifier for the active STT backend.
@@ -88,7 +89,7 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
     /// report `.quality`; Apple STT reports `.premium` (OS-provided);
     /// preview backends report `.unknown` so the UI can render a
     /// "preview" hint without inventing a new tier.
-    var pickerTier: ModelTier {
+    public var pickerTier: ModelTier {
         switch self {
         case .parakeet, .fastConformer: return .quality
         case .appleSTT:                 return .premium

@@ -23,11 +23,11 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "GrammarEng
 /// ## Correction Paths
 /// - `check(text:categories:usePOS:)`: API-facing, category-based
 /// - `correct(_:tier:usePOS:)`: Tier-based convenience for internal use
-actor GrammarEngine {
+public actor GrammarEngine {
 
     // MARK: - Singleton
 
-    static let shared = GrammarEngine()
+    public static let shared = GrammarEngine()
 
     // MARK: - Properties
 
@@ -45,24 +45,24 @@ actor GrammarEngine {
     private nonisolated let counts: RuleCounts
 
     /// Whether grammar correction is available (FFI loaded and rules present).
-    nonisolated var isAvailable: Bool { counts.isAvailable }
+    public nonisolated var isAvailable: Bool { counts.isAvailable }
 
-    nonisolated var simpleRuleCount: UInt32 { counts.simple }
-    nonisolated var posRuleCount: UInt32 { counts.pos }
-    nonisolated var totalRuleCount: UInt32 { counts.total }
-    nonisolated var programmaticRuleCount: UInt32 { counts.programmatic }
+    public nonisolated var simpleRuleCount: UInt32 { counts.simple }
+    public nonisolated var posRuleCount: UInt32 { counts.pos }
+    public nonisolated var totalRuleCount: UInt32 { counts.total }
+    public nonisolated var programmaticRuleCount: UInt32 { counts.programmatic }
 
     /// Number of grammar rules available (cached total).
-    nonisolated var ruleCount: Int { Int(counts.total) }
+    public nonisolated var ruleCount: Int { Int(counts.total) }
 
     /// Library version string from Rust FFI.
-    nonisolated var version: String {
+    public nonisolated var version: String {
         guard isAvailable else { return "unavailable" }
         return getVersion()
     }
 
     /// Available categories for English.
-    nonisolated var availableCategories: [Category] {
+    public nonisolated var availableCategories: [Category] {
         guard isAvailable else { return [] }
         return getAvailableCategoriesForLanguage(language: .english)
     }
@@ -147,7 +147,7 @@ actor GrammarEngine {
     ///   - usePOS: Whether to use NLTagger POS tagging (more accurate, slightly slower).
     ///             Defaults to true. When false, uses heuristic POS from Rust side.
     /// - Returns: Corrected text and number of corrections applied.
-    func check(
+    public func check(
         text: String,
         categories: [String]?,
         usePOS: Bool = true
@@ -193,7 +193,7 @@ actor GrammarEngine {
     /// The engine itself is tier-agnostic at the API level (clients send
     /// categories). This enum exists for internal convenience when the
     /// engine needs tier-aware defaults (e.g., TouchUp pipeline integration).
-    enum Tier: String, Sendable {
+    public enum Tier: String, Sendable {
         /// Subset of rules (basic, grammar, articles, informal)
         case free
         /// All XML + POS rules (all categories)
@@ -212,7 +212,7 @@ actor GrammarEngine {
     ///   - tier: Subscription tier controlling which rules apply.
     ///   - usePOS: Use NLTagger POS tagging. Defaults to true. Ignored for free tier (always uses simple rules).
     /// - Returns: Corrected text.
-    func correct(_ text: String, tier: Tier, usePOS: Bool = true) -> String {
+    public func correct(_ text: String, tier: Tier, usePOS: Bool = true) -> String {
         guard !text.isEmpty else { return text }
         guard isAvailable else {
             logger.warning("Grammar correction skipped; rules not loaded")
@@ -239,7 +239,7 @@ actor GrammarEngine {
     }
 
     /// Map tier to rule categories.
-    func categoriesForTier(_ tier: Tier) -> [Category] {
+    public func categoriesForTier(_ tier: Tier) -> [Category] {
         switch tier {
         case .free:
             return getFreeCategories()

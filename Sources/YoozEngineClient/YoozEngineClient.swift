@@ -2,6 +2,10 @@ import Foundation
 #if canImport(AppKit)
 import AppKit
 #endif
+#if canImport(Darwin)
+import Darwin
+#endif
+import OSLog
 
 /// Thin client SDK for communicating with the Yooz Engine service.
 ///
@@ -13,8 +17,14 @@ import AppKit
 /// ```
 public final class YoozEngineClient: Sendable {
     public let baseURL: URL
+    public let port: Int
     private let session: URLSession
     private let engineBundleID = "live.yooz.engine"
+
+    /// Structured log channel for lifecycle events (connect, launch,
+    /// stale-engine recovery). Uses OSLog so Console.app can filter by
+    /// subsystem `live.yooz.engine.client`.
+    private let logger = Logger(subsystem: "live.yooz.engine.client", category: "lifecycle")
 
     public init(
         host: String = "127.0.0.1",
@@ -24,6 +34,7 @@ public final class YoozEngineClient: Sendable {
             preconditionFailure("YoozEngineClient: invalid host '\(host)' or port \(port)")
         }
         self.baseURL = url
+        self.port = port
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -31,26 +42,52 @@ public final class YoozEngineClient: Sendable {
         self.session = URLSession(configuration: config)
     }
 
-    /// Check if the engine is reachable and launch it if not.
+    /// Check if the engine is reachable, launching the helper if not.
+    ///
+    /// Resolution order:
+    /// 1. Probe `/v1/health`. If 200 OK, return.
+    /// 2. If the TCP socket is **refused**, locate the engine binary
+    ///    (bundled helper first, then system-installed app) and launch
+    ///    it. Poll `/v1/health` for up to 10s.
+    /// 3. If the TCP socket is **accepted** but `/v1/health` does not
+    ///    respond, a stale/crashed engine is holding the port. Throw
+    ///    `YoozEngineError.portHeldByStaleEngine`, unless the env var
+    ///    `YOOZ_ENGINE_AUTO_RECOVER=1` is set — in which case attempt
+    ///    to terminate the holder via `kill -9` and relaunch.
     public func connect() async throws {
         try Task.checkCancellation()
-        if try await isReachable() { return }
 
-        try await launchEngine()
-
-        // Wait for engine to become ready (up to 15 seconds)
-        for _ in 0..<30 {
-            try Task.checkCancellation()
-            try await Task.sleep(for: .milliseconds(500))
-            if try await isReachable() { return }
+        logger.debug("connect: probing engine at \(self.baseURL.absoluteString, privacy: .public)")
+        switch await probeEngine() {
+        case .healthy:
+            logger.info("connect: engine already running — reusing existing instance")
+            return
+        case .refused:
+            logger.info("connect: engine not running — launching helper")
+            try await launchAndWaitForReady()
+            return
+        case .staleHolder:
+            logger.error("connect: port \(self.port, privacy: .public) held by stale engine")
+            if ProcessInfo.processInfo.environment["YOOZ_ENGINE_AUTO_RECOVER"] == "1" {
+                logger.warning("connect: YOOZ_ENGINE_AUTO_RECOVER=1 — terminating stale holder")
+                try await recoverStaleEngine()
+                return
+            }
+            throw YoozEngineError.portHeldByStaleEngine(port: port)
         }
-
-        throw YoozEngineError.engineNotReachable
     }
 
     /// Check if the engine is currently reachable.
-    /// Throws CancellationError if the task is cancelled.
-    /// Returns true if reachable, false if connection refused.
+    ///
+    /// Returns `true` iff `/v1/health` answered. Any `URLError` is
+    /// treated as "not reachable"; `DecodingError` is treated as
+    /// "reachable but wire format drift" (engine is up with a newer
+    /// schema). Throws `CancellationError` when cancelled.
+    ///
+    /// Conflates "connection refused" (engine not running) with
+    /// "connection timeout" (stale engine pinning the port). Callers
+    /// that need that distinction should use `connect()` which
+    /// delegates to `probeEngine()` and its three-outcome result.
     public func isReachable() async throws -> Bool {
         do {
             let _ = try await health()
@@ -71,6 +108,15 @@ public final class YoozEngineClient: Sendable {
     public func health() async throws -> HealthStatus {
         let data = try await get("/v1/health")
         return try JSONDecoder().decode(HealthStatus.self, from: data)
+    }
+
+    /// Get the full module manifest: build variant, engine version, and every
+    /// registered module with its current health. Thin clients read this to
+    /// render "About" panels and to decide which endpoints are served by the
+    /// running build variant. See `Types/ModulesResponse.swift`.
+    public func modules() async throws -> ModulesResponse {
+        let data = try await get("/v1/modules")
+        return try JSONDecoder().decode(ModulesResponse.self, from: data)
     }
 
     // MARK: - Service clients
@@ -119,29 +165,249 @@ public final class YoozEngineClient: Sendable {
         }
     }
 
-    // MARK: - Engine lifecycle
+    // MARK: - Probe
+
+    /// Three-outcome probe that distinguishes healthy / refused / stale.
+    ///
+    /// - `healthy`: `/v1/health` returned 200.
+    /// - `refused`: TCP connect refused — no process on the port.
+    /// - `staleHolder`: TCP connect accepted, but `/v1/health` timed out
+    ///    or returned an unexpected response. Engine is dead or wedged.
+    enum ProbeOutcome: Sendable, Equatable {
+        case healthy
+        case refused
+        case staleHolder
+    }
+
+    func probeEngine() async -> ProbeOutcome {
+        // Short TCP connect check first. If the connection is refused
+        // outright we short-circuit — no need to fire an HTTP request.
+        let tcpOpen = await isTCPOpen(host: baseURL.host ?? "127.0.0.1", port: port, timeout: 0.5)
+        if !tcpOpen {
+            return .refused
+        }
+
+        // Port is accepting connections — now see whether the process
+        // behind it speaks our /v1/health contract.
+        let healthConfig = URLSessionConfiguration.ephemeral
+        healthConfig.timeoutIntervalForRequest = 1.0
+        healthConfig.timeoutIntervalForResource = 2.0
+        let probeSession = URLSession(configuration: healthConfig)
+        defer { probeSession.invalidateAndCancel() }
+
+        let url = baseURL.appendingPathComponent("/v1/health")
+        do {
+            let (_, response) = try await probeSession.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return .staleHolder
+            }
+            return .healthy
+        } catch {
+            return .staleHolder
+        }
+    }
+
+    /// Best-effort TCP reachability check; returns true when a socket
+    /// `connect()` succeeds within `timeout`. Used as the "refused vs
+    /// stale" discriminator. Non-throwing — any failure short-circuits
+    /// to `false` (refused).
+    private func isTCPOpen(host: String, port: Int, timeout: TimeInterval) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                #if canImport(Darwin)
+                let fd = socket(AF_INET, SOCK_STREAM, 0)
+                guard fd >= 0 else { continuation.resume(returning: false); return }
+                defer { close(fd) }
+
+                // Non-blocking so we can enforce a connect timeout.
+                let flags = fcntl(fd, F_GETFL, 0)
+                _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+                var addr = sockaddr_in()
+                addr.sin_family = sa_family_t(AF_INET)
+                addr.sin_port = in_port_t(UInt16(port).bigEndian)
+                addr.sin_addr.s_addr = inet_addr(host)
+                if addr.sin_addr.s_addr == INADDR_NONE {
+                    continuation.resume(returning: false)
+                    return
+                }
+
+                let rc = withUnsafePointer(to: &addr) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { saPtr in
+                        Darwin.connect(fd, saPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
+                }
+                if rc == 0 {
+                    continuation.resume(returning: true)
+                    return
+                }
+                guard errno == EINPROGRESS else {
+                    continuation.resume(returning: false)
+                    return
+                }
+
+                // poll for writability within timeout
+                var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                let ms = Int32(timeout * 1000)
+                let pollRc = poll(&pfd, 1, ms)
+                if pollRc <= 0 {
+                    continuation.resume(returning: false)
+                    return
+                }
+
+                var err: Int32 = 0
+                var errLen = socklen_t(MemoryLayout<Int32>.size)
+                let soRc = getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errLen)
+                continuation.resume(returning: soRc == 0 && err == 0)
+                #else
+                continuation.resume(returning: false)
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Engine launch / recovery
+
+    private func launchAndWaitForReady() async throws {
+        try await launchEngine()
+
+        logger.debug("launch: polling /v1/health for up to 10s")
+        // Wait for engine to become ready (up to 10 seconds)
+        for _ in 0..<20 {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(500))
+            if case .healthy = await probeEngine() {
+                logger.info("launch: engine reported healthy")
+                return
+            }
+        }
+
+        logger.error("launch: engine did not become ready within 10s")
+        throw YoozEngineError.engineNotReachable
+    }
+
+    private func recoverStaleEngine() async throws {
+        #if canImport(Darwin)
+        // Find the PID holding the port and SIGKILL it.
+        if let pid = pidHoldingPort(port) {
+            logger.warning("recover: terminating pid \(pid, privacy: .public) holding port \(self.port, privacy: .public)")
+            _ = kill(pid_t(pid), SIGKILL)
+            // Give the OS a moment to release the socket.
+            try await Task.sleep(for: .milliseconds(500))
+        } else {
+            logger.error("recover: could not resolve pid holding port; launching anyway")
+        }
+
+        try await launchAndWaitForReady()
+        #else
+        throw YoozEngineError.engineNotReachable
+        #endif
+    }
+
+    /// Ask `lsof` which PID is listening on the given TCP port. Returns
+    /// nil on any failure — diagnostic only.
+    private func pidHoldingPort(_ port: Int) -> Int? {
+        let task = Process()
+        task.launchPath = "/usr/sbin/lsof"
+        task.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else { return nil }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        let firstLine = output
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        return Int(firstLine)
+    }
 
     private func launchEngine() async throws {
         #if canImport(AppKit)
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = false
+        // Prefer the bundled helper when the SDK is embedded in a host
+        // app (e.g. Yooz Whisper ships the engine under
+        // Contents/Helpers/Yooz Engine (Whisper).app). Fall back to the
+        // system-installed standalone engine.
+        if let helperURL = bundledHelperURL() {
+            logger.info("launch: using bundled helper at \(helperURL.path, privacy: .public)")
+            try await openApplication(at: helperURL)
+            return
+        }
 
         guard let engineURL = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: engineBundleID
         ) else {
+            logger.error("launch: no bundled helper and no installed engine for bundle id \(self.engineBundleID, privacy: .public)")
             throw YoozEngineError.engineNotInstalled
         }
+        logger.info("launch: using installed engine at \(engineURL.path, privacy: .public)")
+        try await openApplication(at: engineURL)
+        #else
+        throw YoozEngineError.engineNotInstalled
+        #endif
+    }
 
+    #if canImport(AppKit)
+    private func openApplication(at url: URL) async throws {
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        // Run the helper as a headless service: skip the menu-bar
+        // status item + Settings scene so the host app's UI is the
+        // only surface the user sees. `EngineConfig.isHelper` reads
+        // this var at startup and forces `.prohibited` activation
+        // policy. Harmless on engine builds that don't honor it.
+        config.environment = ["YOOZ_ENGINE_HEADLESS": "1"]
         do {
             _ = try await NSWorkspace.shared.openApplication(
-                at: engineURL,
+                at: url,
                 configuration: config
             )
         } catch {
             throw YoozEngineError.engineLaunchFailed(error.localizedDescription)
         }
+    }
+    #endif
+
+    /// Check whether the SDK is embedded in a host app that ships an
+    /// engine helper under `Contents/Helpers/`.
+    ///
+    /// Convention (see phase5_epic.md, ship model):
+    /// `<host>.app/Contents/Helpers/Yooz Engine*.app`
+    private func bundledHelperURL() -> URL? {
+        #if canImport(AppKit)
+        // `Bundle.main.bundleURL` → `<host>.app`
+        // We look in `<host>.app/Contents/Helpers/` for any `.app`
+        // whose name matches the Yooz Engine family.
+        let helpersURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Helpers", isDirectory: true)
+
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: helpersURL.path, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
+
+        guard let entries = try? fm.contentsOfDirectory(
+            at: helpersURL,
+            includingPropertiesForKeys: nil
+        ) else { return nil }
+
+        return entries.first { url in
+            url.pathExtension == "app" && url.lastPathComponent.lowercased().contains("yooz engine")
+        }
         #else
-        throw YoozEngineError.engineNotInstalled
+        return nil
         #endif
     }
 }

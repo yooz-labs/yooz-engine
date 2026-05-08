@@ -1,5 +1,7 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import Combine
+import EngineCore
 import Foundation
 import MLX
 
@@ -29,11 +31,6 @@ public struct ParakeetResult: Equatable, Sendable {
 /// Supports Parakeet TDT (English/European), FastConformer (Arabic/Persian/Hebrew), and CJK models
 /// Drop-in replacement for ParakeetMLXManager (Python bridge)
 public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
-
-    // MARK: - Version
-
-    /// STT component version (independent of EngineConfig.version).
-    public static let version = "0.6.6"
 
     // MARK: - Singleton
 
@@ -180,15 +177,25 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         await MainActor.run { self.downloadProgress = 0 }
 
         do {
+            // Check if language is implemented before we touch the model
+            // cache — no point downloading 700 MB to find out we can't use
+            // it yet.
             guard language.isImplemented else {
                 throw YoozSTTError.languageNotSupported(language)
             }
 
+            // Resolve (or download on first run) the HF snapshot for
+            // this language. Cached snapshots stay in
+            // ~/.cache/huggingface/hub per HubClient defaults; missing
+            // snapshots download on the first call when allowFetch is
+            // true. Any failure surfaces as YoozSTTError.modelLoadFailed
+            // below.
             let modelDir = try await getModelDirectory(
                 for: language,
                 allowFetch: allowFetch
             )
             NSLog("YoozSTTEngine: Got model directory: %@", modelDir.path)
+
 
             NSLog("YoozSTTEngine: Calling ParakeetModel.fromDirectory...")
             let loadedModel = try ParakeetModel.fromDirectory(modelDir, dtype: .bfloat16)
@@ -478,10 +485,15 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     ///
     /// - Parameter samples: Audio samples at 16kHz
     /// - Returns: TranscriptionResult with aligned tokens containing timestamps
-    public func batchTranscribeAligned(samples: [Float], mode: AudioMode = .normal) async -> TranscriptionResult {
+    /// - Throws: `YoozSTTError.notReady` when no model is loaded. The text-only
+    ///   `batchTranscribe` path preserves legacy empty-return behaviour, but the
+    ///   aligned path (engine#34) refuses to silently impersonate a silent
+    ///   transcription — callers get an explicit error instead of a 200 OK with
+    ///   empty tokens that would be indistinguishable from genuine silence.
+    public func batchTranscribeAligned(samples: [Float], mode: AudioMode = .normal) async throws -> TranscriptionResult {
         guard let transcriber = createBatchTranscriber(mode: mode) else {
             print("YoozSTTEngine: Cannot batch transcribe - model not loaded")
-            return TranscriptionResult(tokens: [])
+            throw YoozSTTError.notReady
         }
 
         // Process all audio at once
@@ -498,7 +510,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     ///
     /// Used by the API server to create per-WebSocket streaming sessions
     /// without interfering with the singleton streaming state.
-    func createBatchTranscriber(mode: AudioMode = .normal) -> StreamingTranscriber? {
+    public func createBatchTranscriber(mode: AudioMode = .normal) -> StreamingTranscriber? {
         lock.lock()
         defer { lock.unlock() }
 
@@ -613,6 +625,15 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
     // MARK: - Private Methods
 
+    /// Resolve the on-disk directory for the active STT model.
+    ///
+    /// Step 1-3: probe the EngineConfig models directory + the app
+    /// bundle's Resources/Models/ (developer setups that pre-populated
+    /// weights). Step 4 falls through to the HuggingFace HubClient
+    /// snapshot path. `allowFetch == false` forces offline-only — a
+    /// cold cache surfaces as `HubCacheError.cachedPathResolutionFailed`,
+    /// which `APIServer.mapSTTLoadError` demuxes into the
+    /// `model_not_cached` wire code.
     private func getModelDirectory(
         for language: STTLanguage,
         allowFetch: Bool

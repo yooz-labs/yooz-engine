@@ -186,12 +186,12 @@ enum STTModelHFDownloader {
 /// the route handler can map them to existing wire codes (see
 /// `APIServer.mapSTTLoadError`). Only the truly STT-specific cases live
 /// in this enum.
-enum STTHFDownloadError: Error, LocalizedError, Sendable, Equatable {
+public enum STTHFDownloadError: Error, LocalizedError, Sendable, Equatable {
     /// The requested language has no HF repo wired in `STTLanguage`.
     /// Maps to `language_unmirrored` (501 Not Implemented) on the wire.
     case unsupportedLanguage(STTLanguage)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .unsupportedLanguage(let lang):
             return "STT language \(lang.rawValue) (\(lang.modelFamily.rawValue))"

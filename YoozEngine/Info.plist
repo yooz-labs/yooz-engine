@@ -24,5 +24,9 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Yooz Engine uses Apple's on-device Speech Recognition as an optional STT backend. Transcription runs locally; audio never leaves your device.</string>
+    <key>YoozBuildVariant</key>
+    <string>$(YOOZ_BUILD_VARIANT)</string>
 </dict>
 </plist>

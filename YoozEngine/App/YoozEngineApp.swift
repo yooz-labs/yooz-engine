@@ -1,3 +1,4 @@
+import EngineCore
 import SwiftUI
 
 /// SwiftUI application entry for the standalone (non-helper) engine.

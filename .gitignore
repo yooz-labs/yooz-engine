@@ -15,6 +15,9 @@ build/
 # Package.resolved IS committed to enforce the SharpAI mlx-swift /
 # mlx-swift-lm pins called out in project.yml. See issue #10.
 
+# Release artifacts (built locally by scripts/release-engine.sh)
+dist/
+
 # Models (large binary files)
 YoozEngine/Resources/Models/*.mlpackage
 YoozEngine/Resources/Models/*.safetensors

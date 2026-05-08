@@ -3,6 +3,7 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 
 /// Identifier for the active TouchUp model. Distinct from
@@ -23,7 +24,7 @@ import Foundation
 /// Picker presentation is a property of the *selection* — the
 /// engine-side `LLMModelType` stays headless so a backend rename
 /// cannot silently change picker text.
-enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
+public enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
     case yoozLight = "yooz-light-v3"
     case yoozQuality = "yooz-quality-v3"
     case foundationModels = "foundation-models"

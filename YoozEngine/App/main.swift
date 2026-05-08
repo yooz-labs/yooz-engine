@@ -25,6 +25,7 @@
 // Hummingbird server exactly as it does in standalone mode.
 
 import AppKit
+import EngineCore
 
 if EngineConfig.isHelper {
     // The whole helper bootstrap is `@MainActor`-isolated:

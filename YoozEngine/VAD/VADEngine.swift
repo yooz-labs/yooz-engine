@@ -34,16 +34,16 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "VADEngine"
 ///
 /// This pattern is implemented in yooz-whisper's `ChunkProcessor` and should be
 /// replicated in any thin client that performs real-time transcription via the engine.
-actor VADEngine {
+public actor VADEngine {
 
     // MARK: - Singleton
 
-    static let shared = VADEngine()
+    public static let shared = VADEngine()
 
     // MARK: - Constants
 
-    static let sampleRate: Int = 16000
-    static let windowSize: Int = 512
+    public static let sampleRate: Int = 16000
+    public static let windowSize: Int = 512
     private let speechThreshold: Float = 0.5
     private let preSpeechFrames: Int
     private let postSpeechFrames: Int
@@ -51,7 +51,7 @@ actor VADEngine {
     // MARK: - State
 
     private var model: MLModel?
-    private(set) var isLoaded: Bool = false
+    public private(set) var isLoaded: Bool = false
     private var hiddenState: MLMultiArray?
     private var cellState: MLMultiArray?
 
@@ -64,13 +64,13 @@ actor VADEngine {
     ///     transitioning to speech state. Default is 2 (64ms).
     ///   - postSpeechFrames: Number of consecutive silence frames required before
     ///     transitioning to silence state. Default is 8 (256ms).
-    init(preSpeechFrames: Int = 2, postSpeechFrames: Int = 8) {
+    private init(preSpeechFrames: Int = 2, postSpeechFrames: Int = 8) {
         self.preSpeechFrames = preSpeechFrames
         self.postSpeechFrames = postSpeechFrames
     }
 
     /// Load the Silero VAD CoreML model from the app bundle.
-    func load() throws {
+    public func load() throws {
         guard !isLoaded else { return }
 
         guard let modelURL = Bundle.main.url(
@@ -93,7 +93,7 @@ actor VADEngine {
     }
 
     /// Reset RNN hidden state (call between recordings).
-    func reset() throws {
+    public func reset() throws {
         try resetState()
     }
 
@@ -113,7 +113,7 @@ actor VADEngine {
     ///     the same recording to preserve inter-frame state continuity.
     /// - Returns: Array of detected speech segments with start/end in milliseconds.
     /// - Throws: ``VADError/modelNotLoaded`` if the model has not been loaded.
-    func detect(samples: [Float], resetState shouldReset: Bool = true) throws -> [VADSegmentResult] {
+    public func detect(samples: [Float], resetState shouldReset: Bool = true) throws -> [VADSegmentResult] {
         guard isLoaded else {
             throw VADError.modelNotLoaded
         }
@@ -271,17 +271,23 @@ actor VADEngine {
 
 // MARK: - Types
 
-struct VADSegmentResult {
-    let startMs: Int
-    let endMs: Int
-    let probability: Float
+public struct VADSegmentResult: Sendable {
+    public let startMs: Int
+    public let endMs: Int
+    public let probability: Float
+
+    public init(startMs: Int, endMs: Int, probability: Float) {
+        self.startMs = startMs
+        self.endMs = endMs
+        self.probability = probability
+    }
 }
 
-enum VADError: LocalizedError {
+public enum VADError: LocalizedError {
     case modelNotFound
     case modelNotLoaded
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .modelNotFound:
             return "Silero VAD model not found in app bundle"
