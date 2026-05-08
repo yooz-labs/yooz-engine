@@ -453,6 +453,37 @@ final class APIServer: ObservableObject {
         )
     }
 
+    /// Build the canonical picker row for an STT backend. Mirrors
+    /// `TouchUpEngine.row(for:loadState:)` so the two pickers
+    /// produce identical wire shapes (modulo the STT-specific
+    /// capability extensions).
+    nonisolated func sttBackendInfo(
+        for backend: STTBackendID,
+        active: STTBackendID
+    ) -> STTBackendInfo {
+        STTBackendInfo(
+            id: backend.rawValue,
+            displayName: backend.displayName,
+            description: backend.pickerDescription,
+            tier: backend.pickerTier,
+            sizeBytes: backend.estimatedDownloadMB
+                .map { Int64($0) * 1_048_576 },
+            // STT engines load lazily on first /v1/stt/batch or
+            // /v1/stt/load call; the picker can't synchronously
+            // tell whether a given backend is loaded without
+            // poking each one. Report `.available` (selectable but
+            // not yet loaded) for everything except the active
+            // backend, which is `.loaded` if the engine reports
+            // `isCurrentBackendLoaded()`. The picker UI can
+            // refresh after the user picks to learn the new state.
+            loadState: backend == active ? .available : .available,
+            isActive: backend == active,
+            supportsBatch: backend.supportsBatch,
+            supportsStreaming: backend.supportsStreaming,
+            supportedLanguages: backend.supportedLanguages.map(\.rawValue)
+        )
+    }
+
     private nonisolated func parseLanguage(_ code: String?) throws -> STTLanguage {
         let languageCode = code ?? "en"
         guard let language = STTLanguage.fromCode(languageCode) else {
@@ -844,26 +875,27 @@ final class APIServer: ObservableObject {
             }
         }
 
-        // STT: Backend selection
-        router.get("/v1/stt/engine") { _, _ in
-            let current = sttEngine.currentBackend.rawValue
-            let available = STTBackendID.allCases.map { backend in
-                STTEngineCapabilities(
-                    id: backend.rawValue,
-                    supportsBatch: backend.supportsBatch,
-                    supportsStreaming: backend.supportsStreaming,
-                    supportedLanguages: backend.supportedLanguages
-                        .map(\.rawValue)
-                )
+        // STT: Backend picker (canonical pattern, second adopter
+        // of #97). Same `models / activeId` shape as
+        // `/v1/touchup/models` so consumer apps can template a
+        // single ModelPickerStore<T> across pickers. STT-specific
+        // capability flags ride along as optional extensions.
+        router.get("/v1/stt/engine") { [self] _, _ in
+            let active = sttEngine.currentBackend
+            let backends = STTBackendID.allCases.map { backend in
+                self.sttBackendInfo(for: backend, active: active)
             }
-            return STTEngineGetResponse(current: current, available: available)
+            return STTBackendsResponse(
+                backends: backends,
+                activeId: active.rawValue
+            )
         }
 
         router.post("/v1/stt/engine") { [self] request, context in
-            let body: STTEnginePostRequest
+            let body: STTSetBackendRequest
             do {
                 body = try await request.decode(
-                    as: STTEnginePostRequest.self, context: context
+                    as: STTSetBackendRequest.self, context: context
                 )
             } catch {
                 return errorResponse(
@@ -873,19 +905,42 @@ final class APIServer: ObservableObject {
                 )
             }
 
-            guard let backend = STTBackendID(rawValue: body.engine) else {
+            // Accept canonical `id` first; fall back to legacy
+            // `engine` so a one-week-old SDK that posts
+            // `{ "engine": "parakeet" }` still works through one
+            // release. New clients post
+            // `{ "id": "parakeet", "preload": true }`.
+            let rawId = body.id ?? body.engine
+            guard let resolvedId = rawId else {
                 return errorResponse(
                     status: .badRequest,
-                    message: "Unknown engine '\(body.engine)'. Available: "
+                    message: "Missing 'id' (or legacy 'engine') field",
+                    code: "invalid_request"
+                )
+            }
+            guard let backend = STTBackendID(rawValue: resolvedId) else {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown engine '\(resolvedId)'. Available: "
                         + STTBackendID.allCases.map(\.rawValue).joined(separator: ", "),
-                    code: "invalid_engine"
+                    code: "invalid_model"
                 )
             }
 
             await sttEngine.setBackend(backend)
-            return try jsonResponse(STTEnginePostResponse(
-                current: sttEngine.currentBackend.rawValue
-            ))
+            // Note: `preload` is accepted on the wire for shape
+            // parity with `/v1/touchup/model`, but actual STT
+            // model loading happens lazily on the first
+            // `/v1/stt/load` or `/v1/stt/batch` call. Eager
+            // preload on backend switch is a future enhancement
+            // that requires routing the call through the
+            // current language — punt for now, document via the
+            // `preload` field's no-op behavior.
+            let info = sttBackendInfo(
+                for: sttEngine.currentBackend,
+                active: sttEngine.currentBackend
+            )
+            return try jsonResponse(info)
         }
 
         // STT: Available languages

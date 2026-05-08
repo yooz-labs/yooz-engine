@@ -73,6 +73,29 @@ public enum STTBackendID: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// One-line subtitle for the canonical picker (`/v1/stt/engine`
+    /// GET response, mirrored on `STTBackendInfo.description`).
+    public var pickerDescription: String {
+        switch self {
+        case .parakeet:        return "Multilingual Latin / European"
+        case .fastConformer:   return "Optimised for Arabic / Persian / Hebrew"
+        case .appleSTT:        return "On-device, no download"
+        case .qwen3ASRPreview: return "Multilingual preview (~3.5 GB)"
+        }
+    }
+
+    /// Coarse tier label for the canonical picker. MLX backends
+    /// report `.quality`; Apple STT reports `.premium` (OS-provided);
+    /// preview backends report `.unknown` so the UI can render a
+    /// "preview" hint without inventing a new tier.
+    var pickerTier: TouchUpModelTier {
+        switch self {
+        case .parakeet, .fastConformer: return .quality
+        case .appleSTT:                 return .premium
+        case .qwen3ASRPreview:          return .unknown
+        }
+    }
+
     /// Estimated first-run download size in megabytes. Returns `nil`
     /// for built-in backends (Parakeet, Apple) that ship with the
     /// engine and don't need a runtime fetch.

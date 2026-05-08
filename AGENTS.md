@@ -159,6 +159,17 @@ Every picker route maps these error codes consistently. Picker UIs branch on `co
 | 501 | `model_unavailable` | Selectable per `loadState` is no on this system (e.g. Apple Intelligence on pre-26 macOS) |
 | 500 | `model_set_failed` | Underlying load failure (network, OOM, weights corrupt) |
 
+### Module-specific picker extensions
+
+The canonical fields above MUST appear on every picker so the SDK's `ModelPickerStore<T>` template stays generic. When a module genuinely needs additional state that doesn't fit (e.g. `STTBackendInfo` carries `supportsBatch`, `supportsStreaming`, `supportedLanguages`), add them as **optional** fields on the same struct rather than inventing a parallel response shape. Picker UIs that don't care about the extension ignore it; the few that do read it directly. Document the extension in the module's `<Module>BackendID.swift` source-of-truth file.
+
+Adopters today:
+
+| Module | Selection enum | Picker types | Routes |
+|---|---|---|---|
+| TouchUp | `TouchUpModelSelection` | `TouchUpModelInfo` / `TouchUpModelsResponse` | `GET/POST /v1/touchup/model[s]` |
+| STT engine | `STTBackendID` | `STTBackendInfo` / `STTBackendsResponse` (+ `supportsBatch`, `supportsStreaming`, `supportedLanguages`) | `GET/POST /v1/stt/engine` |
+
 ### SDK
 
 Two methods per module client:
