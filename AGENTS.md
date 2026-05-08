@@ -129,7 +129,7 @@ GET  /v1/<module>/models   → ModelsResponse { models: [ModelInfo], activeId: S
 POST /v1/<module>/model    body { id: String, preload: Bool? } → ModelInfo (the new active row)
 ```
 
-`ModelInfo` fields (all required, no module-specific extensions — keep the picker template generic):
+`ModelInfo` fields below MUST appear on every picker; modules MAY add **optional** extension fields per the "Module-specific picker extensions" subsection below.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -156,8 +156,19 @@ Every picker route maps these error codes consistently. Picker UIs branch on `co
 |---|---|---|
 | 400 | `invalid_request` | Body fails to decode |
 | 400 | `invalid_model` | `id` not in the module's selection enum |
-| 501 | `model_unavailable` | Selectable per `loadState` is no on this system (e.g. Apple Intelligence on pre-26 macOS) |
+| 501 | `model_unavailable` | Backend declared selectable per `loadState` but cannot actually load on this system (e.g. Apple Intelligence on pre-26 macOS) |
 | 500 | `model_set_failed` | Underlying load failure (network, OOM, weights corrupt) |
+
+### Module-specific picker extensions
+
+The canonical fields above MUST appear on every picker so the SDK's `ModelPickerStore<T>` template stays generic. When a module genuinely needs additional state that doesn't fit (e.g. `STTBackendInfo` carries `supportsBatch`, `supportsStreaming`, `supportedLanguages`), add them as **optional** fields on the same struct rather than inventing a parallel response shape. Picker UIs that don't care about the extension ignore it; the few that do read it directly. Document the extension in the module's `<Module>BackendID.swift` source-of-truth file.
+
+Adopters today:
+
+| Module | Selection enum | Picker types | Routes |
+|---|---|---|---|
+| TouchUp | `TouchUpModelSelection` | `TouchUpModelInfo` / `TouchUpModelsResponse` | `GET/POST /v1/touchup/model[s]` |
+| STT engine | `STTBackendID` | `STTBackendInfo` / `STTBackendsResponse` (+ `supportsBatch`, `supportsStreaming`, `supportedLanguages`) | `GET/POST /v1/stt/engine` |
 
 ### SDK
 

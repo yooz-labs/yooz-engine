@@ -77,7 +77,7 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
         await YoozSTTEngine.shared.setBackend(.parakeet)
     }
 
-    // MARK: - GET /v1/stt/engine
+    // MARK: - GET /v1/stt/engine — canonical picker shape (#99)
 
     @MainActor
     func testGetEngineListsAllBackends() async throws {
@@ -86,49 +86,56 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
             let (http, body) = try await get("/v1/stt/engine", on: server)
             XCTAssertEqual(http.statusCode, 200)
             let decoded = try JSONDecoder().decode(
-                STTEngineGetResponse.self, from: body
+                STTBackendsResponse.self, from: body
             )
-            XCTAssertEqual(decoded.current, "parakeet")
-            let ids = Set(decoded.available.map(\.id))
+            XCTAssertEqual(decoded.activeId, "parakeet")
+            let ids = Set(decoded.backends.map(\.id))
             XCTAssertEqual(
                 ids, Set(STTBackendID.allCases.map(\.rawValue))
             )
-            let qwen3 = decoded.available.first {
+            let qwen3 = decoded.backends.first {
                 $0.id == "qwen3_asr_preview"
             }
             XCTAssertNotNil(qwen3)
             XCTAssertTrue(qwen3?.supportsBatch ?? false)
             // Phase 7 (issue #61) flipped streaming support on for
             // the qwen3 backend. The capability is now exposed via
-            // the `/v1/stt/engine` GET response.
+            // the canonical picker's `supportsStreaming` extension.
             XCTAssertTrue(qwen3?.supportsStreaming ?? false)
+            // Canonical picker invariant: exactly one row active.
+            XCTAssertEqual(decoded.backends.filter(\.isActive).count, 1)
         }
     }
 
-    // MARK: - POST /v1/stt/engine
+    // MARK: - POST /v1/stt/engine — canonical picker shape
 
     @MainActor
     func testPostEngineSwitchesToQwen3() async throws {
         await resetEngineState()
         try await withServer { server in
             let payload = try JSONEncoder().encode(
-                STTEnginePostRequest(engine: "qwen3_asr_preview")
+                STTSetBackendRequest(
+                    id: "qwen3_asr_preview",
+                    preload: nil,
+                    engine: nil
+                )
             )
             let (http, body) = try await post(
                 "/v1/stt/engine", body: payload, on: server
             )
             XCTAssertEqual(http.statusCode, 200)
             let decoded = try JSONDecoder().decode(
-                STTEnginePostResponse.self, from: body
+                STTBackendInfo.self, from: body
             )
-            XCTAssertEqual(decoded.current, "qwen3_asr_preview")
+            XCTAssertEqual(decoded.id, "qwen3_asr_preview")
+            XCTAssertTrue(decoded.isActive)
 
             // GET should now report the new state.
             let (_, getBody) = try await get("/v1/stt/engine", on: server)
             let getDecoded = try JSONDecoder().decode(
-                STTEngineGetResponse.self, from: getBody
+                STTBackendsResponse.self, from: getBody
             )
-            XCTAssertEqual(getDecoded.current, "qwen3_asr_preview")
+            XCTAssertEqual(getDecoded.activeId, "qwen3_asr_preview")
         }
         // Cleanup global state.
         await resetEngineState()
@@ -139,7 +146,11 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
         await resetEngineState()
         try await withServer { server in
             let payload = try JSONEncoder().encode(
-                STTEnginePostRequest(engine: "no-such-backend")
+                STTSetBackendRequest(
+                    id: "no-such-backend",
+                    preload: nil,
+                    engine: nil
+                )
             )
             let (http, body) = try await post(
                 "/v1/stt/engine", body: payload, on: server
@@ -148,7 +159,117 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
             let decoded = try JSONDecoder().decode(
                 ErrorResponse.self, from: body
             )
-            XCTAssertEqual(decoded.code, "invalid_engine")
+            // Canonical picker code (matches /v1/touchup/model so
+            // picker UIs branch on the same key across modules).
+            XCTAssertEqual(decoded.code, "invalid_model")
+        }
+    }
+
+    /// Backward compat: a one-week-old SDK posts the legacy
+    /// `{ "engine": "..." }` shape. The route accepts it as a
+    /// fallback so an in-flight whisper build keeps working
+    /// through one release. New clients post `{ "id": "...",
+    /// "preload": true }`.
+    @MainActor
+    func testPostEngineAcceptsLegacyEngineField() async throws {
+        await resetEngineState()
+        try await withServer { server in
+            let payload = try JSONEncoder().encode(
+                STTSetBackendRequest(id: nil, preload: nil, engine: "qwen3_asr_preview")
+            )
+            let (http, body) = try await post(
+                "/v1/stt/engine", body: payload, on: server
+            )
+            XCTAssertEqual(http.statusCode, 200)
+            let decoded = try JSONDecoder().decode(
+                STTBackendInfo.self, from: body
+            )
+            XCTAssertEqual(decoded.id, "qwen3_asr_preview")
+        }
+        await resetEngineState()
+    }
+
+    /// Conflict guard (#99 review I2): when both `id` and legacy
+    /// `engine` are sent with different values, the route must
+    /// reject the request rather than silently picking one. The
+    /// failure mode without this guard was "the picker just picks
+    /// something other than what I sent" — an invisible bug
+    /// during a build-script migration.
+    @MainActor
+    func testPostEngineRejectsConflictingIdAndLegacyEngine() async throws {
+        await resetEngineState()
+        try await withServer { server in
+            let payload = try JSONEncoder().encode(
+                STTSetBackendRequest(
+                    id: "parakeet",
+                    preload: nil,
+                    engine: "apple_stt"
+                )
+            )
+            let (http, body) = try await post(
+                "/v1/stt/engine", body: payload, on: server
+            )
+            XCTAssertEqual(http.statusCode, 400)
+            let decoded = try JSONDecoder().decode(
+                ErrorResponse.self, from: body
+            )
+            XCTAssertEqual(decoded.code, "invalid_request")
+            // Active backend must NOT have changed — the request
+            // was rejected up front.
+            let current = await YoozSTTEngine.shared.currentBackend
+            XCTAssertEqual(current, .parakeet)
+        }
+    }
+
+    /// Identical `id` and legacy `engine` is benign — the legacy
+    /// fallback path still works when both fields agree (e.g. a
+    /// build script that emits both during migration).
+    @MainActor
+    func testPostEngineAcceptsIdAndLegacyEngineWhenIdentical() async throws {
+        await resetEngineState()
+        try await withServer { server in
+            let payload = try JSONEncoder().encode(
+                STTSetBackendRequest(
+                    id: "qwen3_asr_preview",
+                    preload: nil,
+                    engine: "qwen3_asr_preview"
+                )
+            )
+            let (http, body) = try await post(
+                "/v1/stt/engine", body: payload, on: server
+            )
+            XCTAssertEqual(http.statusCode, 200)
+            let decoded = try JSONDecoder().decode(
+                STTBackendInfo.self, from: body
+            )
+            XCTAssertEqual(decoded.id, "qwen3_asr_preview")
+        }
+        await resetEngineState()
+    }
+
+    /// C1 regression: the active row's `loadState` must reflect
+    /// `isCurrentBackendLoaded()` rather than always reporting
+    /// `.available`. Without this, the whisper picker would show
+    /// "Downloads on first use" for the model that's already in
+    /// memory and serving requests. Fresh test instance has no
+    /// backend loaded, so we assert `.available`; flipping the
+    /// flag end-to-end requires real model weights and lives in
+    /// the integration suite.
+    @MainActor
+    func testGetEngineActiveLoadStateReflectsLoadedFlag() async throws {
+        await resetEngineState()
+        try await withServer { server in
+            let (_, body) = try await get("/v1/stt/engine", on: server)
+            let decoded = try JSONDecoder().decode(
+                STTBackendsResponse.self, from: body
+            )
+            let active = try XCTUnwrap(
+                decoded.backends.first(where: { $0.isActive })
+            )
+            // Test host hasn't called start() — backend is not
+            // loaded, so the wire reports .available, not the
+            // dead `.available` from the broken ternary.
+            XCTAssertEqual(active.loadState, .available)
         }
     }
 

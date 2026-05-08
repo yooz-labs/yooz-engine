@@ -100,28 +100,74 @@ struct STTStatusResponse: ResponseCodable {
     let progress: Double?
 }
 
-// MARK: - Backend selection
+// MARK: - STT Backend Picker (canonical module-picker pattern, second adopter)
+//
+// Mirrors the TouchUp picker shape from #97 / AGENTS.md "Module
+// model picker pattern". Same `id / displayName / description /
+// tier / sizeBytes / loadState / isActive` fields; STT-specific
+// capability flags (`supportsBatch`, `supportsStreaming`,
+// `supportedLanguages`) are added as optional extensions per the
+// AGENTS.md "Module-specific picker extensions" guidance.
+//
+// The legacy `STTEngineGetResponse` / `STTEnginePostRequest`
+// shapes are kept available on the wire (POST accepts both `id`
+// and the legacy `engine` field) so an in-flight whisper build
+// against a one-week-old SDK still works through one release.
 
-struct STTEngineGetResponse: ResponseCodable {
-    let current: String
-    let available: [STTEngineCapabilities]
-}
-
-struct STTEngineCapabilities: Codable {
+/// One STT backend in the picker. Canonical fields match
+/// `TouchUpModelInfo`; STT-specific fields are optional so the
+/// generic `ModelPickerStore<T>` template still works.
+struct STTBackendInfo: Codable, Sendable, Equatable, ResponseEncodable {
+    /// Stable wire id (e.g. `parakeet`, `fast_conformer`,
+    /// `apple_stt`, `qwen3_asr_preview`). Matches
+    /// `STTBackendID.rawValue`.
     let id: String
-    let supportsBatch: Bool
-    let supportsStreaming: Bool
-    let supportedLanguages: [String]
+    /// Picker-visible name.
+    let displayName: String
+    /// One-line subtitle for picker UX.
+    let description: String
+    /// Coarse tier (`light` / `quality` / `premium` / `unknown`).
+    /// MLX backends report `.quality`; Apple STT reports `.premium`
+    /// (OS-provided); preview backends report `.unknown` so the UI
+    /// can render a "preview" hint without inventing a new tier.
+    let tier: ModelTier
+    /// Approximate first-run download size. `nil` for backends
+    /// that do not require a download (Apple, bundled MLX).
+    let sizeBytes: Int64?
+    /// Lifecycle state. Same total ordering as TouchUp picker.
+    let loadState: ModelLoadState
+    /// Whether `/v1/stt/batch` + `/v1/stt/stream` currently route
+    /// through this backend. Exactly one row per response has
+    /// `isActive == true`.
+    let isActive: Bool
+    // MARK: - STT-specific extensions (optional per AGENTS.md
+    // "Module-specific picker extensions"). Optional on the wire
+    // so a future engine that drops a capability (e.g. once every
+    // backend streams, `supportsStreaming` becomes meaningless)
+    // does not brick older SDK consumers.
+    let supportsBatch: Bool?
+    let supportsStreaming: Bool?
+    let supportedLanguages: [String]?
 }
 
-struct STTEnginePostRequest: Codable {
-    /// New backend identifier. Accepts the `STTBackendID` raw values:
-    /// `parakeet`, `fast_conformer`, `apple_stt`, `qwen3_asr_preview`.
-    let engine: String
+/// Response for `GET /v1/stt/engine` (canonical shape).
+struct STTBackendsResponse: Codable, Sendable, ResponseCodable {
+    let backends: [STTBackendInfo]
+    let activeId: String
 }
 
-struct STTEnginePostResponse: ResponseCodable {
-    let current: String
+/// Request body for `POST /v1/stt/engine` (canonical shape).
+/// The legacy `engine` field is accepted as a fallback for
+/// pre-#99 clients; the route handler reads `id` first, then
+/// `engine` if `id` is absent.
+struct STTSetBackendRequest: Codable {
+    let id: String?
+    let preload: Bool?
+    /// Legacy field accepted as a fallback. Old SDK clients post
+    /// `{ "engine": "parakeet" }`; new clients post
+    /// `{ "id": "parakeet", "preload": true }`. Removed once
+    /// every shipped SDK is on the new shape.
+    let engine: String?
 }
 
 // MARK: - WebSocket STT Messages
@@ -303,7 +349,7 @@ struct TouchUpServerResponse: ResponseCodable {
 /// case here without bumping the SDK leaves older clients decoding
 /// `unknown` — which is intentionally the fallback so a v0.7
 /// engine can ship a new tier without breaking v0.6 SDK consumers.
-enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
+enum ModelTier: String, Codable, Sendable, CaseIterable {
     /// Fast default. Primary picker option.
     case light
     /// Higher-quality backend; usually carries a Pro badge in app UX.
@@ -324,7 +370,7 @@ enum TouchUpModelTier: String, Codable, Sendable, CaseIterable {
 /// Wire raw values are stable; new states append at the end so
 /// older SDK clients decode unknown values as `.unavailable`
 /// (the safest fallback — picker UI greys the row out).
-enum TouchUpModelLoadState: String, Codable, Sendable, CaseIterable {
+enum ModelLoadState: String, Codable, Sendable, CaseIterable {
     /// User cannot select this row right now (e.g. Apple
     /// Intelligence on pre-26 macOS or a non-opted-in user).
     case unavailable
@@ -349,13 +395,13 @@ struct TouchUpModelInfo: Codable, Sendable, Equatable, ResponseEncodable {
     /// One-line subtitle for picker UX (latency hint etc.).
     let description: String
     /// Coarse class for badge / sort UX.
-    let tier: TouchUpModelTier
+    let tier: ModelTier
     /// Approximate on-disk size after first-run download. `nil` for
     /// OS-provided backends (`.premium` tier).
     let sizeBytes: Int64?
     /// Lifecycle state. Encodes the `loaded ⇒ cached ⇒ available`
     /// invariant in a single field rather than three loose booleans.
-    let loadState: TouchUpModelLoadState
+    let loadState: ModelLoadState
     /// Whether `/v1/touchup` currently routes through this model.
     /// Exactly one row per response has `isActive == true` (pinned
     /// by `availableModels()`'s precondition).

@@ -70,7 +70,7 @@ final class TouchUpPickerTests: XCTestCase {
     func testLoadStateForMLXTiersIsAtLeastAvailable() async {
         let engine = TouchUpEngine()
         let models = await engine.availableModels()
-        let allowedMLX: Set<TouchUpModelLoadState> = [.available, .cached, .loaded]
+        let allowedMLX: Set<ModelLoadState> = [.available, .cached, .loaded]
         for row in models where row.id != TouchUpModelSelection.foundationModels.rawValue {
             XCTAssertTrue(
                 allowedMLX.contains(row.loadState),

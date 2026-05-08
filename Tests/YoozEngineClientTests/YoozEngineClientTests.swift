@@ -214,6 +214,98 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(info.loadState, .unavailable)
     }
 
+    // MARK: - STT picker (canonical adopter #2, #99)
+
+    /// Round-trip the new STT picker shape so SDK consumers
+    /// (whisper, notes) detect drift between engine and SDK at
+    /// build time, not in production.
+    func testSTTBackendInfoCodableRoundTrip() throws {
+        let info = STTBackendInfo(
+            id: "parakeet",
+            displayName: "Parakeet (Recommended)",
+            description: "Multilingual Latin / European",
+            tier: .quality,
+            sizeBytes: nil,
+            loadState: .available,
+            isActive: true,
+            supportsBatch: true,
+            supportsStreaming: true,
+            supportedLanguages: ["en", "es", "fr"]
+        )
+        let encoded = try JSONEncoder().encode(info)
+        let decoded = try JSONDecoder().decode(STTBackendInfo.self, from: encoded)
+        XCTAssertEqual(decoded, info)
+    }
+
+    /// Boundary test (drift catch): the engine app target and SDK
+    /// each define `STTBackendInfo` independently. A literal JSON
+    /// sample from the engine wire shape must decode on the SDK
+    /// side or the picker breaks silently.
+    func testSTTBackendsResponseDecoding() throws {
+        let json = """
+        {
+            "backends": [
+                {
+                    "id": "apple_stt",
+                    "displayName": "Apple Speech (On-device)",
+                    "description": "On-device, no download",
+                    "tier": "premium",
+                    "sizeBytes": null,
+                    "loadState": "loaded",
+                    "isActive": true,
+                    "supportsBatch": true,
+                    "supportsStreaming": true,
+                    "supportedLanguages": ["en", "es"]
+                }
+            ],
+            "activeId": "apple_stt"
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(STTBackendsResponse.self, from: data)
+        XCTAssertEqual(response.activeId, "apple_stt")
+        XCTAssertEqual(response.backends.first?.tier, .premium)
+        XCTAssertTrue(response.backends.first?.isActive ?? false)
+    }
+
+    /// `TranscriptionResult.tokens` was dropped during the SDK
+    /// simplification; restored in #99 because whisper's
+    /// hallucination filter (`ChunkProcessor`) and any
+    /// timing-sensitive caller relies on it. Pin the field +
+    /// `AlignedToken` shape so a future re-removal breaks the
+    /// build, not whisper's runtime.
+    func testTranscriptionResultDecodesTokens() throws {
+        let json = """
+        {
+            "text": "hello world",
+            "finalized": "hello world",
+            "draft": "",
+            "language": "en",
+            "tokens": [
+                { "text": "hello", "start": 0.0, "end": 0.42 },
+                { "text": " world", "start": 0.42, "end": 0.95 }
+            ]
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertEqual(result.tokens?.count, 2)
+        XCTAssertEqual(result.tokens?.first?.text, "hello")
+        XCTAssertEqual(try XCTUnwrap(result.tokens?.last?.end), 0.95, accuracy: 1e-5)
+    }
+
+    /// Back-compat: a server that doesn't emit `tokens` decodes
+    /// to `nil` (not a decode error). Older Yooz Engine builds in
+    /// the wild emit no `tokens` field for non-aligned routes.
+    func testTranscriptionResultWithoutTokensDecodesAsNil() throws {
+        let json = """
+        {"text":"hello","finalized":"hello","draft":""}
+        """
+        let data = json.data(using: .utf8)!
+        let result = try JSONDecoder().decode(TranscriptionResult.self, from: data)
+        XCTAssertNil(result.tokens)
+    }
+
     func testSTTLanguageInfoDecoding() throws {
         let json = """
         {

@@ -49,6 +49,61 @@ public struct STTClient: Sendable {
         return response.languages
     }
 
+    /// Batch transcribe with token alignment. Same wire as
+    /// `transcribe(...)` but the response includes per-token
+    /// timestamps in `tokens`. Used by callers that need word- or
+    /// sub-word-level timing (chunk-boundary deduplication,
+    /// hallucination filters, subtitle rendering).
+    public func batchTranscribeAligned(
+        audioSamples: [Float],
+        language: STTLanguage = .english,
+        mode: AudioMode = .normal
+    ) async throws -> TranscriptionResult {
+        let request = BatchSTTRequest(
+            samples: audioSamples,
+            language: language.rawValue,
+            mode: mode.rawValue,
+            aligned: true
+        )
+        let body = try JSONEncoder().encode(request)
+        let data = try await engine.post("/v1/stt/batch", body: body)
+        return try JSONDecoder().decode(TranscriptionResult.self, from: data)
+    }
+
+    // MARK: - Picker (canonical module-picker pattern, #99)
+    //
+    // Mirrors `TouchUpClient.availableModels()` /
+    // `setModel(id:preload:)` so consumer apps can template a
+    // single ModelPickerStore<T> across pickers. See AGENTS.md
+    // "Module model picker pattern" for the full recipe.
+
+    /// List every STT backend the engine knows about, with
+    /// lifecycle state + active flag + STT-specific capability
+    /// extensions (`supportsBatch`, `supportsStreaming`,
+    /// `supportedLanguages`).
+    public func availableEngines() async throws -> STTBackendsResponse {
+        let data = try await engine.get("/v1/stt/engine")
+        return try JSONDecoder().decode(STTBackendsResponse.self, from: data)
+    }
+
+    /// Set the active STT backend. `preload` is accepted for shape
+    /// parity with the TouchUp picker but is currently a no-op on
+    /// the server — STT models load lazily on the first
+    /// `/v1/stt/batch` or `/v1/stt/load` call after the switch.
+    /// Documented as a future enhancement so the SDK shape stays
+    /// stable as the engine adds eager preload.
+    @discardableResult
+    public func setEngine(
+        id: String,
+        preload: Bool = true
+    ) async throws -> STTBackendInfo {
+        let body = try JSONEncoder().encode(
+            STTSetBackendRequest(id: id, preload: preload)
+        )
+        let data = try await engine.post("/v1/stt/engine", body: body)
+        return try JSONDecoder().decode(STTBackendInfo.self, from: data)
+    }
+
     // MARK: - WebSocket Streaming
 
     /// Open a streaming STT session over WebSocket.
@@ -121,6 +176,23 @@ struct BatchSTTRequest: Codable {
     let samples: [Float]
     let language: String
     let mode: String
+    /// Opt into per-token alignment. When `true`, the response's
+    /// `tokens` array carries start/end timestamps. Default `nil`
+    /// (omitted) so the server's "no alignment" path is the
+    /// default; explicit `true` requests alignment.
+    let aligned: Bool?
+
+    init(
+        samples: [Float],
+        language: String,
+        mode: String,
+        aligned: Bool? = nil
+    ) {
+        self.samples = samples
+        self.language = language
+        self.mode = mode
+        self.aligned = aligned
+    }
 }
 
 struct STTLoadRequest: Codable {

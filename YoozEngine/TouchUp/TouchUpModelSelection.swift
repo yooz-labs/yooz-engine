@@ -47,9 +47,9 @@ enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
     }
 
     /// Coarse tier label for badge / sort UX. The wire side uses
-    /// the typed `TouchUpModelTier` enum; this property is the
+    /// the typed `ModelTier` enum; this property is the
     /// engine-side mapping.
-    var tier: TouchUpModelTier {
+    var tier: ModelTier {
         switch self {
         case .yoozLight: return .light
         case .yoozQuality: return .quality
