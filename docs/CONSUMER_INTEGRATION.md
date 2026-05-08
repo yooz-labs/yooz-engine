@@ -204,7 +204,7 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 ## Reference apps
 
 - **yooz-whisper** — the canonical reference. Embeds `YoozEngineWhisper`, drives the LLM + STT pickers, ships an Engine settings tab. See `yooz-whisper/AGENTS.md` after PR #170 lands.
-- **super-yooz** — host-app charter at `superyooz/.context/charter.md`.
+- **super-yooz** — host-app charter at `super-yooz/.context/charter.md`.
 
 ## Common pitfalls
 
