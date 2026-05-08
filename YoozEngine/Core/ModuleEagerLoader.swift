@@ -250,11 +250,19 @@ public actor ModuleEagerLoader {
             }
 
             if variant.includesMLXSTT {
+                #if canImport(STTModule)
                 group.addTask { [weak self] in
                     await self?.loadSTT(
                         language: EngineConfig.defaultSTTLanguage
                     )
                 }
+                #else
+                setState(
+                    .stt,
+                    .unavailable,
+                    detail: "MLX STT module not compiled into this build variant"
+                )
+                #endif
             }
 
             if variant.includesVAD {
@@ -315,6 +323,7 @@ public actor ModuleEagerLoader {
         }
     }
 
+    #if canImport(STTModule)
     private func loadSTT(language: STTLanguage) async {
         setState(.stt, .loading)
         do {
@@ -333,6 +342,7 @@ public actor ModuleEagerLoader {
             logger.error("STT eager-load failed: \(msg, privacy: .public)")
         }
     }
+    #endif
 
     private func loadVAD() async {
         #if canImport(VADModule)

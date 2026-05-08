@@ -1,4 +1,7 @@
 import EngineCore
+#if canImport(AppleSTTModule)
+import AppleSTTModule
+#endif
 #if canImport(STTModule)
 import STTModule
 #endif
@@ -27,12 +30,13 @@ struct EngineMenuView: View {
         .padding(.horizontal, 8)
 
         if server.isRunning {
-            let sttEngine = YoozSTTEngine.shared
             VStack(alignment: .leading, spacing: 2) {
                 Text("Modules")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 4) {
+                    #if canImport(STTModule)
+                    let sttEngine = YoozSTTEngine.shared
                     Circle()
                         .fill(sttEngine.isRunning ? .green : .gray)
                         .frame(width: 6, height: 6)
@@ -43,6 +47,15 @@ struct EngineMenuView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    #elseif canImport(AppleSTTModule)
+                    AppleSTTStatusRow()
+                    #else
+                    Circle()
+                        .fill(.gray)
+                        .frame(width: 6, height: 6)
+                    Text("STT")
+                        .font(.caption)
+                    #endif
                 }
             }
             .padding(.horizontal, 8)
@@ -112,3 +125,32 @@ struct EngineMenuView: View {
         }
     }
 }
+
+#if canImport(AppleSTTModule)
+private struct AppleSTTStatusRow: View {
+    @State private var isLoaded = false
+    @State private var language = AppleSTTLanguage.english
+
+    var body: some View {
+        Group {
+            Circle()
+                .fill(isLoaded ? .green : .gray)
+                .frame(width: 6, height: 6)
+            Text("Apple STT")
+                .font(.caption)
+            if isLoaded {
+                Text("(\(language.rawValue.uppercased()))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task { await refresh() }
+    }
+
+    private func refresh() async {
+        let engine = AppleSTTEngine.shared
+        isLoaded = await engine.isLoaded
+        language = await engine.currentLanguage
+    }
+}
+#endif
