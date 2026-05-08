@@ -78,27 +78,6 @@ public struct STTClient: Sendable {
         return response.languages
     }
 
-    /// Batch transcribe with token alignment. Same wire as
-    /// `transcribe(...)` but the response includes per-token
-    /// timestamps in `tokens`. Used by callers that need word- or
-    /// sub-word-level timing (chunk-boundary deduplication,
-    /// hallucination filters, subtitle rendering).
-    public func batchTranscribeAligned(
-        audioSamples: [Float],
-        language: STTLanguage = .english,
-        mode: AudioMode = .normal
-    ) async throws -> TranscriptionResult {
-        let request = BatchSTTRequest(
-            samples: audioSamples,
-            language: language.rawValue,
-            mode: mode.rawValue,
-            aligned: true
-        )
-        let body = try JSONEncoder().encode(request)
-        let data = try await engine.post("/v1/stt/batch", body: body)
-        return try JSONDecoder().decode(TranscriptionResult.self, from: data)
-    }
-
     // MARK: - Picker (canonical module-picker pattern, #99)
     //
     // Mirrors `TouchUpClient.availableModels()` /
