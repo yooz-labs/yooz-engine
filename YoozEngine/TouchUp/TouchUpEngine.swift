@@ -35,6 +35,13 @@ actor TouchUpEngine {
     /// Bundle identifier for model loading
     private let bundleIdentifier: String
 
+    /// Currently active TouchUp model. Drives `/v1/touchup` routing
+    /// via `processWithActiveModel(...)` and is reflected back to
+    /// clients through the picker API (`GET /v1/touchup/models`).
+    /// Defaults to `.yoozLight` so callers that never `setActiveModel`
+    /// see the pre-picker behaviour.
+    private(set) var activeModel: TouchUpModelSelection = .yoozLight
+
     /// Whether the engine has been preloaded
     private(set) var isPreloaded: Bool = false
 
@@ -440,6 +447,133 @@ actor TouchUpEngine {
                 return await temp.isModelCached
             }
             return await quality.isModelCached
+        }
+    }
+
+    // MARK: - Picker API
+
+    /// Snapshot of every TouchUp model the engine knows about, with
+    /// availability / cache / load / active flags. Drives the picker
+    /// UI in consumer apps via `GET /v1/touchup/models`.
+    ///
+    /// `availability` for FoundationModels is determined at runtime
+    /// (macOS 26+ AND Apple Intelligence opted-in). MLX tiers are
+    /// always available — they download on first use.
+    func availableModels() async -> [TouchUpModelInfo] {
+        let lightLoaded = await isLightModelLoaded
+        let qualityLoaded = await isQualityModelLoaded
+        let lightCached = await isLightModelCached
+        let qualityCached = await isQualityModelCached
+        let fmLoaded = await isFoundationModelsLoaded
+        let fmAvailable = FoundationModelsBackend().isAvailable()
+
+        return [
+            TouchUpModelInfo(
+                id: TouchUpModelSelection.yoozLight.rawValue,
+                displayName: TouchUpModelSelection.yoozLight.displayName,
+                description: TouchUpModelSelection.yoozLight.description,
+                tier: TouchUpModelSelection.yoozLight.tier,
+                sizeBytes: TouchUpModelSelection.yoozLight.estimatedSize,
+                isAvailable: true,
+                isCached: lightCached,
+                isLoaded: lightLoaded,
+                isActive: activeModel == .yoozLight
+            ),
+            TouchUpModelInfo(
+                id: TouchUpModelSelection.yoozQuality.rawValue,
+                displayName: TouchUpModelSelection.yoozQuality.displayName,
+                description: TouchUpModelSelection.yoozQuality.description,
+                tier: TouchUpModelSelection.yoozQuality.tier,
+                sizeBytes: TouchUpModelSelection.yoozQuality.estimatedSize,
+                isAvailable: true,
+                isCached: qualityCached,
+                isLoaded: qualityLoaded,
+                isActive: activeModel == .yoozQuality
+            ),
+            TouchUpModelInfo(
+                id: TouchUpModelSelection.foundationModels.rawValue,
+                displayName: TouchUpModelSelection.foundationModels.displayName,
+                description: TouchUpModelSelection.foundationModels.description,
+                tier: TouchUpModelSelection.foundationModels.tier,
+                sizeBytes: nil,
+                isAvailable: fmAvailable,
+                isCached: fmAvailable,
+                isLoaded: fmLoaded,
+                isActive: activeModel == .foundationModels
+            )
+        ]
+    }
+
+    /// Set the active model and (optionally) preload it. Returns the
+    /// info row for the new active model so the caller does not need
+    /// a follow-up `availableModels()` round-trip.
+    ///
+    /// Throws `LLMError.notAvailable` if the caller picks
+    /// `.foundationModels` on a system without Apple Intelligence,
+    /// or any error from the underlying load path otherwise.
+    @discardableResult
+    func setActiveModel(
+        _ selection: TouchUpModelSelection,
+        preload: Bool = true
+    ) async throws -> TouchUpModelInfo {
+        switch selection {
+        case .yoozLight:
+            if preload {
+                if lightModel == nil {
+                    lightModel = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
+                }
+                if let light = lightModel, await !light.isLoaded {
+                    try await light.load()
+                }
+            }
+        case .yoozQuality:
+            if preload {
+                try await loadQualityModel()
+            }
+        case .foundationModels:
+            let backend = foundationModelsBackend ?? FoundationModelsBackend()
+            guard backend.isAvailable() else {
+                throw LLMError.notAvailable(
+                    "Apple Intelligence is not available on this system. Requires macOS 26+ and an opted-in user."
+                )
+            }
+            if preload, await !backend.isLoaded {
+                try await backend.load()
+            }
+            foundationModelsBackend = backend
+        }
+
+        activeModel = selection
+        logger.info("TouchUp active model set to \(selection.rawValue, privacy: .public)")
+
+        let models = await availableModels()
+        guard let active = models.first(where: { $0.isActive }) else {
+            throw LLMError.notLoaded
+        }
+        return active
+    }
+
+    /// Process text through the currently active model. Used by the
+    /// `/v1/touchup` route; preserves the existing `mode` semantics
+    /// (regex-only vs LLM, prompt strength) while letting the picker
+    /// override which backend handles the LLM call.
+    func processWithActiveModel(
+        text: String,
+        mode: ServerTouchUpMode,
+        replacements: [(original: String, replacement: String)] = []
+    ) async -> TouchUpProcessor.ProcessResult {
+        switch activeModel {
+        case .foundationModels:
+            return await processWithFoundationModels(text: text, mode: mode)
+        case .yoozQuality:
+            // Best-effort: ensure the quality model is loaded before
+            // delegating to the standard MLX path. The MLX path will
+            // still fall back to the light model if quality fails to
+            // load (matches today's `process` behaviour).
+            do { try await loadQualityModel() } catch { /* logged in loadQualityModel */ }
+            return await process(text: text, mode: mode, replacements: replacements)
+        case .yoozLight:
+            return await process(text: text, mode: mode, replacements: replacements)
         }
     }
 

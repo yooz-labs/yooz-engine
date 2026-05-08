@@ -130,6 +130,66 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(status.progress), 0.42, accuracy: 1e-9)
     }
 
+    /// SDK round-trip for the canonical picker shape (issue #97).
+    /// Pinning the wire keys catches an accidental rename on either
+    /// side that would cause silent picker breakage in apps.
+    func testTouchUpModelInfoCodableRoundTrip() throws {
+        let info = TouchUpModelInfo(
+            id: "yooz-light-v3",
+            displayName: "Yooz-Light",
+            description: "Fast proofreading (~200ms)",
+            tier: "light",
+            sizeBytes: 276 * 1024 * 1024,
+            isAvailable: true,
+            isCached: false,
+            isLoaded: false,
+            isActive: true
+        )
+        let encoded = try JSONEncoder().encode(info)
+        let decoded = try JSONDecoder().decode(TouchUpModelInfo.self, from: encoded)
+        XCTAssertEqual(decoded, info)
+    }
+
+    /// `availableModels()` response shape — `models` array plus the
+    /// `activeId` convenience pointer.
+    func testTouchUpModelsResponseDecoding() throws {
+        let json = """
+        {
+            "models": [
+                {
+                    "id": "yooz-light-v3",
+                    "displayName": "Yooz-Light",
+                    "description": "Fast",
+                    "tier": "light",
+                    "sizeBytes": 289406976,
+                    "isAvailable": true,
+                    "isCached": true,
+                    "isLoaded": true,
+                    "isActive": true
+                },
+                {
+                    "id": "yooz-quality-v3",
+                    "displayName": "Yooz-Quality",
+                    "description": "High quality",
+                    "tier": "quality",
+                    "sizeBytes": 444596224,
+                    "isAvailable": true,
+                    "isCached": false,
+                    "isLoaded": false,
+                    "isActive": false
+                }
+            ],
+            "activeId": "yooz-light-v3"
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(TouchUpModelsResponse.self, from: data)
+        XCTAssertEqual(response.models.count, 2)
+        XCTAssertEqual(response.activeId, "yooz-light-v3")
+        XCTAssertEqual(response.models.first?.id, "yooz-light-v3")
+        XCTAssertTrue(response.models.first?.isActive ?? false)
+    }
+
     func testSTTLanguageInfoDecoding() throws {
         let json = """
         {

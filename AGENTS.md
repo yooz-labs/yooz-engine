@@ -111,8 +111,74 @@ Fixed port: **19920** (localhost only).
 | WS | `/v1/stt/stream` | Real-time streaming STT |
 | POST | `/v1/llm/generate` | LLM text generation |
 | POST | `/v1/touchup` | Text cleanup pipeline |
+| GET | `/v1/touchup/models` | Picker: list TouchUp models with state |
+| POST | `/v1/touchup/model` | Picker: set active TouchUp model + preload |
 | POST | `/v1/grammar/check` | Rule-based grammar correction |
 | POST | `/v1/vad/detect` | Voice activity detection (501 on Whisper / Lite variants) |
+
+## Module model picker pattern
+
+This is the **canonical wiring shape** every module that exposes a model picker (TouchUp today, STT engine + TTS voice next) MUST follow. Get it right once and the SDK + UI layers in every consumer app (whisper, notes, voice, crisp, remi) become a template instead of a redesign per module.
+
+### Engine
+
+Two routes per module:
+
+```
+GET  /v1/<module>/models   → ModelsResponse { models: [ModelInfo], activeId: String }
+POST /v1/<module>/model    body { id: String, preload: Bool? } → ModelInfo (the new active row)
+```
+
+`ModelInfo` fields (all required, no module-specific extensions — keep the picker template generic):
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | String | Stable wire id; never rename without major SDK bump |
+| `displayName` | String | Picker-visible name |
+| `description` | String | One-line subtitle for picker UX |
+| `tier` | String | Coarse class label (`light` / `quality` / `premium`) |
+| `sizeBytes` | Int64? | Approximate on-disk size; `nil` for OS-provided backends |
+| `isAvailable` | Bool | Selectable on this system (gate Apple Intelligence on macOS 26+ here) |
+| `isCached` | Bool | Weights present on disk |
+| `isLoaded` | Bool | Resident in memory |
+| `isActive` | Bool | The module's primary entry point routes through this row |
+
+Engine state lives in the module's actor (e.g. `TouchUpEngine.activeModel`); the primary processing entry point (`/v1/touchup`) routes through the active model.
+
+### SDK
+
+Two methods per module client:
+
+```swift
+public func availableModels() async throws -> ModelsResponse
+@discardableResult
+public func setModel(id: String, preload: Bool = true) async throws -> ModelInfo
+```
+
+Wire types (`ModelInfo`, `ModelsResponse`, `SetModelRequest`) live in `Sources/YoozEngineClient/Types/<Module>Types.swift` so consumer apps only depend on the SDK module.
+
+### App
+
+```swift
+@StateObject private var picker = ModelPickerStore<TouchUpModelInfo>(
+    fetch: { try await client.touchUp.availableModels().models },
+    setActive: { id in try await client.touchUp.setModel(id: id, preload: true) }
+)
+```
+
+UI binds to `picker.options` and writes through `picker.select(id:)`; the store handles refresh + persistence to `SettingsManager.<module>Model`. The same store works for every module.
+
+### Adding a new picker
+
+1. Define `<Module>ModelSelection: String, Codable, Sendable, CaseIterable` in the module's directory (e.g. `STT/STTBackendSelection.swift`).
+2. Add `private(set) var activeModel: <Module>ModelSelection` to the module's actor.
+3. Implement `availableModels() -> [ModelInfo]` and `setActiveModel(_:preload:)` on the actor.
+4. Wire `GET /v1/<module>/models` and `POST /v1/<module>/model` in `APIServer`.
+5. Mirror `ModelInfo` / `ModelsResponse` / `SetModelRequest` in `Sources/YoozEngineClient/Types/<Module>Types.swift`.
+6. Add `availableModels()` + `setModel(id:preload:)` to `<Module>Client.swift`.
+7. Pin the wire id contract with a `<Module>SelectionTests` file (mirrors `STTLanguageHuggingFaceIDTests` shape).
+
+The TouchUp module is the reference implementation — copy from there.
 
 ## Dependencies
 

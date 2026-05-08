@@ -281,6 +281,89 @@ struct TouchUpServerResponse: ResponseCodable {
     let warnings: [String]?
 }
 
+// MARK: - TouchUp Picker (canonical module-picker pattern)
+//
+// Wire shape used by `GET /v1/touchup/models` and
+// `POST /v1/touchup/model`. The same shape (`models`, `activeId`,
+// `id/displayName/description/tier/sizeBytes/isAvailable/
+// isCached/isLoaded/isActive`) is the documented canon for every
+// future module picker (STT engine selection, TTS voice, etc.) so
+// SDK + UI code can be templated. See AGENTS.md "Module model
+// picker pattern" for the recipe.
+
+/// One model in the TouchUp picker. All fields are server-authoritative
+/// — the client treats this as a snapshot and re-fetches after a
+/// `setModel(...)` to learn the new active id and any cache/load
+/// changes the preload triggered.
+public struct TouchUpModelInfo: Codable, Sendable, Equatable, ResponseEncodable {
+    /// Stable wire id (e.g. `yooz-light-v3`). Matches
+    /// `TouchUpModelSelection.rawValue`.
+    public let id: String
+    /// Picker-visible name (e.g. "Yooz-Light").
+    public let displayName: String
+    /// One-line subtitle for picker UX (latency hint etc.).
+    public let description: String
+    /// Coarse tier label (`light` / `quality` / `premium`). UI
+    /// renders Pro badges or sort hints off this.
+    public let tier: String
+    /// Approximate on-disk size after first-run download. `nil` for
+    /// OS-provided backends (Apple Intelligence).
+    public let sizeBytes: Int64?
+    /// Whether this option is selectable on this system. False for
+    /// Apple Intelligence on pre-26 macOS or non-opted-in users.
+    public let isAvailable: Bool
+    /// Whether the weights are already on disk (no download needed).
+    public let isCached: Bool
+    /// Whether the model is currently resident in memory.
+    public let isLoaded: Bool
+    /// Whether `/v1/touchup` currently routes through this model.
+    public let isActive: Bool
+
+    public init(
+        id: String,
+        displayName: String,
+        description: String,
+        tier: String,
+        sizeBytes: Int64?,
+        isAvailable: Bool,
+        isCached: Bool,
+        isLoaded: Bool,
+        isActive: Bool
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.description = description
+        self.tier = tier
+        self.sizeBytes = sizeBytes
+        self.isAvailable = isAvailable
+        self.isCached = isCached
+        self.isLoaded = isLoaded
+        self.isActive = isActive
+    }
+}
+
+/// Response for `GET /v1/touchup/models`. `activeId` is the id of
+/// the entry where `isActive == true` — surfaced separately so a
+/// client that only cares about the current selection does not
+/// have to scan the array.
+public struct TouchUpModelsResponse: Codable, Sendable, ResponseCodable {
+    public let models: [TouchUpModelInfo]
+    public let activeId: String
+
+    public init(models: [TouchUpModelInfo], activeId: String) {
+        self.models = models
+        self.activeId = activeId
+    }
+}
+
+/// Request body for `POST /v1/touchup/model`. `preload` defaults
+/// to `true` server-side so a one-shot picker change is enough to
+/// avoid a cold-start on the next `/v1/touchup` call.
+struct TouchUpSetModelRequest: Decodable {
+    let id: String
+    let preload: Bool?
+}
+
 // MARK: - Grammar Types
 
 struct GrammarCheckServerRequest: Decodable {
