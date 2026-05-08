@@ -313,6 +313,8 @@ targets:
         product: Hummingbird
       - package: hummingbird-websocket
         product: HummingbirdWebSocket
+      - package: swift-huggingface
+        product: HuggingFace
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 

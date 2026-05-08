@@ -335,6 +335,7 @@ public actor ModuleEagerLoader {
     }
 
     private func loadVAD() async {
+        #if canImport(VADModule)
         setState(.vad, .loading)
         do {
             try await VADEngine.shared.load()
@@ -345,5 +346,11 @@ public actor ModuleEagerLoader {
             setState(.vad, .error, detail: msg)
             logger.error("VAD eager-load failed: \(msg, privacy: .public)")
         }
+        #else
+        // Variant doesn't bundle VAD (e.g. YoozEngineWhisper). The
+        // variant-gating pass already marked .vad as .unavailable;
+        // skip the load attempt so we don't fault the readiness map.
+        setState(.vad, .unavailable, detail: "VAD module not bundled")
+        #endif
     }
 }

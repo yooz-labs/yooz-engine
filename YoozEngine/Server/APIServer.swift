@@ -1338,61 +1338,15 @@ final class APIServer: ObservableObject {
             #endif
         }
 
-        // STT: Engine picker — current + available + capability bits.
-        // Unlike the other `/v1/stt/*` routes we don't gate on the `stt`
-        // module registry entry: a Lite build serves this endpoint with the
-        // `apple_stt` module, returning `available: ["apple_stt"]`.
-        router.get("/v1/stt/engine") { [self] _, _ -> Response in
-            let current = await currentSTTEngine
-            let available = APIServer.availableSTTEngines()
-            let payload = STTEngineServerResponse(
-                current: current,
-                available: available,
-                hasBuiltInVAD: current.hasBuiltInVAD
-            )
-            return try jsonResponse(payload)
-        }
-
-        // STT: Engine switch. Cancels any in-flight WebSocket stream, then
-        // updates `currentSTTEngine`. Returns 400 on an unknown engine, 501
-        // `module_not_bundled` when the target backend isn't linked in this
-        // variant.
-        router.post("/v1/stt/engine") { [self] request, context in
-            let body: STTEngineSwitchServerRequest
-            do {
-                body = try await request.decode(as: STTEngineSwitchServerRequest.self, context: context)
-            } catch {
-                return errorResponse(
-                    status: .badRequest,
-                    message: "Invalid request body: \(error.localizedDescription)",
-                    code: "invalid_request"
-                )
-            }
-            guard APIServer.availableSTTEngines().contains(body.engine) else {
-                let moduleName = (body.engine == .appleSTT) ? "apple_stt" : "stt"
-                return moduleNotBundled(moduleName)
-            }
-            // Mutations to `sttStreamCancel` and `currentSTTEngine` touch
-            // `@MainActor`-isolated state from this `@Sendable` handler,
-            // so the updates run inside `MainActor.run`.
-            await MainActor.run {
-                self.sttStreamCancel?()
-                self.sttStreamCancel = nil
-                self.currentSTTEngine = body.engine
-            }
-            let payload = STTEngineServerResponse(
-                current: body.engine,
-                available: APIServer.availableSTTEngines(),
-                hasBuiltInVAD: body.engine.hasBuiltInVAD
-            )
-            return try jsonResponse(payload)
-        }
-
         // STT: Backend picker (canonical pattern, second adopter
         // of #97). Same `models / activeId` shape as
         // `/v1/touchup/models` so consumer apps can template a
         // single ModelPickerStore<T> across pickers. STT-specific
-        // capability flags ride along as optional extensions.
+        // capability flags ride along as optional extensions. The
+        // legacy `STTEngineServerResponse` (current/available/
+        // hasBuiltInVAD) shape is intentionally dropped here — the
+        // capability bits live on `STTBackendInfo` so the SDK does
+        // not need a parallel codepath per shape.
         router.get("/v1/stt/engine") { [self] _, _ in
             let active = sttEngine.currentBackend
             let activeLoaded = await sttEngine.isCurrentBackendLoaded()
