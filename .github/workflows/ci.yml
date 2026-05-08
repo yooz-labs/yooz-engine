@@ -189,9 +189,30 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      # `MLXHuggingFaceMacros` (the `#huggingFaceTokenizerLoader` macro) is an
-      # external Swift macro. CLI / non-interactive xcodebuild needs
-      # `-skipMacroValidation` to bypass the per-machine trust prompt.
+      # mlx-swift's NAX (Neural Accelerator eXtension) Metal path lights
+      # up at runtime when both:
+      #   1. macOS 26.2+ is detected via `__builtin_available`
+      #   2. the GPU's architecture generation is >= 17 (M3 / M3 Pro+)
+      # GitHub-hosted `macos-26` runners satisfy both, so MLX requests
+      # JIT-compiled `steel_gemm_fused_nax_*` kernels that the bundled
+      # metallib was not built with — XCTest crashes immediately with
+      # `Unable to load kernel steel_gemm_fused_nax_...` (see #94).
+      #
+      # Defining `MLX_METAL_NO_NAX` forces `is_nax_available()` (in
+      # `Cmlx/mlx/mlx/backend/metal/device.h`) to return `false`, so MLX
+      # picks the standard Metal kernels that ARE compiled into the
+      # metallib. The xcodebuild-level `OTHER_CPLUSPLUSFLAGS` setting
+      # propagates as a default into the SwiftPM-built Cmlx target's
+      # C++ compile invocations.
+      #
+      # Local dev macs (currently macOS Sequoia / pre-26.2) hit
+      # `__builtin_available` = false and never enter the NAX path, so
+      # this flag is a no-op there.
+      #
+      # `MLXHuggingFaceMacros` (the `#huggingFaceTokenizerLoader` macro)
+      # is an external Swift macro. CLI / non-interactive xcodebuild
+      # needs `-skipMacroValidation` to bypass the per-machine trust
+      # prompt.
       - name: Build engine app
         run: |
           xcodebuild \
@@ -200,6 +221,7 @@ jobs:
             -configuration Debug \
             -skipMacroValidation \
             -destination 'platform=macOS' \
+            OTHER_CPLUSPLUSFLAGS='$(inherited) -DMLX_METAL_NO_NAX' \
             build
 
       - name: Run engine unit tests
@@ -210,4 +232,5 @@ jobs:
             -configuration Debug \
             -skipMacroValidation \
             -destination 'platform=macOS' \
+            OTHER_CPLUSPLUSFLAGS='$(inherited) -DMLX_METAL_NO_NAX' \
             test
