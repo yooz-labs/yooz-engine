@@ -11,6 +11,17 @@ Project-specific agent instructions. The ecosystem-wide rules live in `../AGENTS
 
 All AI modules are complete and synced. The engine is the source of truth for STT, LLM, TouchUp, Grammar, and VAD. The Rust `text-cleanup` source lives in this repo.
 
+## What's NOT in this repo
+
+This is the public engine surface (PolyForm Shield 1.0.0). It does **not** carry training material:
+
+- **Finetune recipes** (configs + scripts that produce the Yooz-Light / Yooz-Quality LLM weights) live in private `yooz-benchmark`. See `yooz-benchmark/finetune-pipeline/`.
+- **Per-issue research bundles** (e.g. Qwen3-ASR vs Parakeet TDT, LLM model selection) live in private `yooz-benchmark/research/issue-*/`.
+- **Gold-standard datasets** + finetune-ready splits live in private `yooz-benchmark/data/`.
+- **Tuned weights** ship openly on HuggingFace under `YoozLabs/...` (Apache 2.0).
+
+Rule of thumb: anything that reveals how an LLM weight was produced (training configs, fine-tune scripts, gold-standard data, per-issue research) is private. The engine that consumes the weight is public. The weight itself is open. (Engine-internal artifacts produced by build scripts, e.g. the Rust `text-cleanup` xcframework, are unrelated to this rule.)
+
 ## Architecture
 
 `YoozEngine.app` is a macOS menu bar service running a local API on `localhost:19920`. All Yooz apps (Whisper, Notes, Voice, Crisp, Remi) are thin clients that hit this API via the `YoozEngineClient` Swift Package.
