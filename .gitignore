@@ -10,8 +10,10 @@ DerivedData/
 build/
 
 # Swift Package Manager
-# .build is a symlink to /Volumes/S1/.../yooz-engine/.build on dev machines,
-# so the trailing-slash form does not match. Use the slashless form.
+# On machines that keep DerivedData off the boot drive, .build is a
+# symlink (e.g. -> /Volumes/S1/.../yooz-engine/.build), and the trailing-
+# slash form below does not match it. The slashless rule catches the
+# symlink; the trailing-slash rule catches a regular .build directory.
 .build
 .build/
 .swiftpm/

@@ -20,7 +20,7 @@ This is the public engine surface (PolyForm Shield 1.0.0). It does **not** carry
 - **Gold-standard datasets** + finetune-ready splits live in private `yooz-benchmark/data/`.
 - **Tuned weights** ship openly on HuggingFace under `YoozLabs/...` (Apache 2.0).
 
-Rule of thumb: anything that reveals how a weight was produced is private; the engine that consumes the weight is public; the weight itself is open.
+Rule of thumb: anything that reveals how an LLM weight was produced (training configs, fine-tune scripts, gold-standard data, per-issue research) is private. The engine that consumes the weight is public. The weight itself is open. (Engine-internal artifacts produced by build scripts, e.g. the Rust `text-cleanup` xcframework, are unrelated to this rule.)
 
 ## Architecture
 
