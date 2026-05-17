@@ -110,4 +110,19 @@ final class EngineConfigStreamingCadenceTests: XCTestCase {
             )
         }
     }
+
+    /// Empty string is treated as non-numeric and falls back to the
+    /// default. Pinned because the accessor's docstring explicitly
+    /// promises "unset, empty, or non-numeric values" map to the
+    /// default — a behaviour an integrator may rely on when shell
+    /// scripts inadvertently export an empty value.
+    func testEmptyValueReturnsDefault() {
+        withEnvVar("YOOZ_STT_PARTIAL_INTERVAL_SEC", value: "") {
+            XCTAssertEqual(
+                EngineConfig.streamingPartialIntervalSec,
+                EngineConfig.defaultStreamingPartialIntervalSec,
+                accuracy: 0.001
+            )
+        }
+    }
 }
