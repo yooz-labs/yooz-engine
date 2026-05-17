@@ -36,6 +36,8 @@ final class Qwen3ASRStreamingLifecycleTests: XCTestCase {
             }
         }
 
+        // Reserve a fresh port for this boot — see engine#122.
+        UniqueEnginePort.assignFreshPort()
         let server = APIServer()
         try await server.start()
         defer { Task { @MainActor in await server.stop() } }

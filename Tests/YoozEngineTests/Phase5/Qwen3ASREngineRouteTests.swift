@@ -27,6 +27,8 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
     private func withServer<T>(
         _ body: (APIServer) async throws -> T
     ) async throws -> T {
+        // Reserve a fresh port for this boot — see engine#122.
+        UniqueEnginePort.assignFreshPort()
         let server = APIServer()
         try await server.start()
         let result: T

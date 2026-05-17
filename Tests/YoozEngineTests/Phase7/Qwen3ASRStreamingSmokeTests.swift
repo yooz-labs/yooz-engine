@@ -355,6 +355,8 @@ final class Qwen3ASRStreamingSmokeTests: XCTestCase {
 
         await YoozSTTEngine.shared.setBackend(.qwen3ASRPreview)
 
+        // Reserve a fresh port for this boot — see engine#122.
+        UniqueEnginePort.assignFreshPort()
         let server = APIServer()
         try await server.start()
 
