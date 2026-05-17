@@ -110,19 +110,27 @@ final class LLMModuleTests: XCTestCase {
         )
     }
 
-    func testLLMModelTypeEmbeddedFlags() {
-        XCTAssertTrue(LLMModelType.yoozLight.isEmbedded,
-                      "Light model ships embedded in the app bundle")
-        XCTAssertFalse(LLMModelType.yoozQuality.isEmbedded,
-                       "Quality model is downloaded on demand")
+    func testLLMModelTypeHuggingFaceIDs() {
+        // Both tiers download from Hugging Face on first use (issue #77
+        // removed the embedded / GHCR fallback). Every model must have a
+        // non-empty HF identifier so the loader macro can resolve it.
+        XCTAssertFalse(LLMModelType.yoozLight.huggingFaceID.isEmpty,
+                       "Light tier needs an HF identifier; loader macro reads this")
+        XCTAssertFalse(LLMModelType.yoozQuality.huggingFaceID.isEmpty,
+                       "Quality tier needs an HF identifier; loader macro reads this")
+        XCTAssertNotEqual(
+            LLMModelType.yoozLight.huggingFaceID,
+            LLMModelType.yoozQuality.huggingFaceID,
+            "Light and Quality must resolve to different HF snapshots"
+        )
     }
 
     func testLLMModelTypeDisplayStrings() {
         // These power UI labels in Whisper's about panel and the engine menu.
         XCTAssertFalse(LLMModelType.yoozLight.displayName.isEmpty)
         XCTAssertFalse(LLMModelType.yoozLight.description.isEmpty)
-        XCTAssertFalse(LLMModelType.yoozLight.baseModelId.isEmpty)
-        XCTAssertFalse(LLMModelType.yoozLight.packageName.isEmpty)
+        XCTAssertFalse(LLMModelType.yoozQuality.displayName.isEmpty)
+        XCTAssertFalse(LLMModelType.yoozQuality.description.isEmpty)
     }
 
     // MARK: - TouchUpMode (always runs)
@@ -242,18 +250,6 @@ final class LLMModuleTests: XCTestCase {
         XCTAssertFalse(reported,
                        "FoundationModels framework not linked; should always report false")
         #endif
-    }
-
-    // MARK: - ModelDownloader (always runs; no network)
-
-    func testModelDownloaderIsConstructible() async {
-        // No network calls; just verifies the actor initializes and exposes
-        // the cached-model probe. Real downloads are covered by integration
-        // testing on model-release days.
-        let downloader = ModelDownloader()
-        let cached = await downloader.isModelCached(.yoozQuality)
-        XCTAssertTrue(cached == true || cached == false,
-                      "isModelCached must return a concrete Bool without throwing")
     }
 
     // MARK: - Model-dependent tests (gated by YOOZ_LLM_LOAD_MODELS env var)
