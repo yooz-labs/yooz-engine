@@ -86,6 +86,13 @@ final class APIServer: ObservableObject {
     static let crashedNotification = Notification.Name("live.yooz.engine.server.crashed")
     static let crashErrorKey = "error"
 
+    /// Shared formatter for `/v1/session/begin` timestamps. `ISO8601DateFormatter`
+    /// is thread-safe and the default options produce a UTC `Z`-suffixed
+    /// `yyyy-MM-ddTHH:mm:ssZ` string. Cached statically so each `begin` call
+    /// reuses one formatter instance instead of allocating + configuring a fresh
+    /// one per request.
+    static let sessionTimestampFormatter = ISO8601DateFormatter()
+
     /// Module teardown watchdog: if module unloads don't complete in this
     /// interval we log, cancel the task, and force the state to `.stopped`
     /// so the user isn't stuck in `.stopping` forever.
@@ -990,6 +997,44 @@ final class APIServer: ObservableObject {
                 headers: [.contentType: "application/json"],
                 body: .init(byteBuffer: ByteBuffer(data: data))
             )
+        }
+
+        // Session boundary (engine issue #114).
+        //
+        // Begin fires at recording start (whisper's `AppDelegate.startRecording`,
+        // in parallel with audio capture). End fires after paste completes
+        // (`AppDelegate.stopRecording`). Both routes are idempotent and both
+        // unconditionally drop per-recording state — KV caches, streaming
+        // buffers, anything tied to "the previous recording" — by fanning out
+        // `resetForNewSession()` to every `SessionResettable` module in the
+        // registry. Modules opt in by conforming; new modules ride this
+        // boundary with zero new endpoints or client wiring.
+        //
+        // Resets are cheap and weight-preserving by contract; they MUST NOT
+        // unload models. See `EngineCore/SessionResettable.swift`.
+        router.post("/v1/session/begin") { [self] _, _ in
+            let sessionId = UUID().uuidString
+            let ts = Self.sessionTimestampFormatter.string(from: Date())
+            let resettables = await ModuleRegistry.shared.allResettable()
+            for module in resettables {
+                await module.resetForNewSession()
+            }
+            logger.debug(
+                "Session begin: id=\(sessionId) fanout=\(resettables.count)"
+            )
+            return try jsonResponse(SessionBeginResponse(
+                sessionId: sessionId,
+                ts: ts
+            ))
+        }
+
+        router.post("/v1/session/end") { [self] _, _ in
+            let resettables = await ModuleRegistry.shared.allResettable()
+            for module in resettables {
+                await module.resetForNewSession()
+            }
+            logger.debug("Session end: fanout=\(resettables.count)")
+            return Response(status: .noContent)
         }
 
         // Models

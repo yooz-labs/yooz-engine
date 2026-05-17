@@ -11,7 +11,7 @@ import EngineCore
 /// though it bundles up to three backends (Yooz-Light, Yooz-Quality,
 /// Apple Intelligence). The module name stays `llm` since the public API
 /// and `/v1/llm/generate` + `/v1/touchup` endpoints both live here.
-extension TouchUpEngine: AIModule {
+extension TouchUpEngine: AIModule, SessionResettable {
     public static var name: String { "llm" }
 
     /// Mirrors `isPreloaded`. Async because `TouchUpEngine` is an actor and

@@ -55,6 +55,21 @@ struct ErrorResponse: ResponseCodable {
     let code: String
 }
 
+// MARK: - Session Types
+
+/// Response for `POST /v1/session/begin` (engine issue #114).
+///
+/// `sessionId` is a fresh UUID per call. Engine state itself doesn't pin to
+/// the value — `begin` is idempotent and unconditionally fans out
+/// `resetForNewSession()` to every `SessionResettable` module — but
+/// returning a UUID lets consumer apps tag their own logs / metrics so a
+/// recording can be correlated end-to-end across engine + client traces.
+/// `ts` is an ISO-8601 UTC timestamp captured server-side at fan-out start.
+struct SessionBeginResponse: ResponseCodable {
+    let sessionId: String
+    let ts: String
+}
+
 // MARK: - STT Types
 
 struct BatchSTTRequest: Decodable {

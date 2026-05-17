@@ -159,6 +159,22 @@ public actor AppleSTTEngine {
         isStreaming = false
     }
 
+    /// Per-recording-session reset (engine issue #114). Today's engine is
+    /// batch-only (`startStream` throws), so there is no streaming buffer to
+    /// drop. Conforming now means the route fan-out is wired; when the real
+    /// streaming path lands behind `startStream`, the implementer of that
+    /// path is expected to extend this method with recognition-task teardown
+    /// (cancelling the active `SFSpeechRecognitionTask`, dropping any
+    /// streaming-session state).
+    ///
+    /// Defensively flips `isStreaming` to `false` so a session boundary is
+    /// always a clean slate; `backend` + `isLoaded` are preserved because
+    /// "loaded" here means "we hold an authorized recognizer for a locale",
+    /// which is a long-lived capability, not per-recording state.
+    public func resetForNewSession() async {
+        isStreaming = false
+    }
+
     // MARK: - Batch
 
     /// Transcribe an in-memory audio buffer. Parity with
