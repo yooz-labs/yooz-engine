@@ -35,9 +35,24 @@ public enum EngineConfig {
     public static let portEnvVar = "YOOZ_ENGINE_PORT"
 
     public static var port: Int {
-        guard let raw = ProcessInfo.processInfo.environment[portEnvVar],
-              let parsed = Int(raw),
-              (1...65535).contains(parsed) else {
+        // Use `getenv()` rather than `ProcessInfo.processInfo.environment`
+        // so this accessor reads the libc env table directly. The
+        // YoozEngineTests suite mutates `YOOZ_ENGINE_PORT` via `setenv()`
+        // between cases (see `UniqueEnginePort`, yooz-engine#122) so each
+        // `APIServer` boot binds its own loopback port. `getenv()` is the
+        // matching read primitive for `setenv()` — same libc table, no
+        // intermediate `[String: String]` rebuild, no risk that a future
+        // Foundation cache layer (Darwin's `ProcessInfo.environment` has
+        // historically been live, but swift-corelibs-foundation snapshots)
+        // would silently freeze the value. Production callers see no
+        // behavior change: `YOOZ_ENGINE_PORT` is set once before launch
+        // via `NSWorkspace.OpenConfiguration.environment` and never
+        // mutated thereafter.
+        guard let rawPointer = getenv(portEnvVar) else {
+            return defaultPort
+        }
+        let raw = String(cString: rawPointer)
+        guard let parsed = Int(raw), (1...65535).contains(parsed) else {
             return defaultPort
         }
         return parsed

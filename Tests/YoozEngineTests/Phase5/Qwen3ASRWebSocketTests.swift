@@ -33,6 +33,8 @@ final class Qwen3ASRWebSocketTests: XCTestCase {
             }
         }
 
+        // Reserve a fresh port for this boot — see yooz-engine#122.
+        UniqueEnginePort.assignFreshPort()
         let server = APIServer()
         try await server.start()
         defer {
