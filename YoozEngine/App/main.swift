@@ -2,29 +2,43 @@
 // YoozEngine
 //
 // Process entry point. Branches between two app shapes before SwiftUI is
-// loaded:
+// loaded.
 //
-// * **Standalone (menu-bar) mode** — when neither the helper env var nor
-//   the helper argv flag is present, delegate to `YoozEngineApp.main()`.
-//   SwiftUI builds the `MenuBarExtra` scene, the user sees the brain
-//   icon, and `EngineSettingsView` is reachable via the standard
-//   Settings menu.
+// ## Two variant classes
 //
-// * **Helper mode** — when host apps (e.g. yooz-whisper) launch us with
-//   `YOOZ_ENGINE_HEADLESS=1` OR pass `--headless` on the command line,
-//   do **not** construct any SwiftUI scene. `MenuBarExtra` registers its
-//   `NSStatusItem` as soon as the SwiftUI scene graph is evaluated,
-//   which happens before any `NSApplicationDelegate` hook fires;
-//   flipping `setActivationPolicy(.prohibited)` afterwards leaves a
-//   ghost icon (issue #42). Bypassing SwiftUI entirely is the only
-//   reliable way to guarantee no menu-bar presence.
+// * **Embedded helper variants (`VARIANT_WHISPER`, `VARIANT_LITE`)** — built
+//   exclusively to be dropped into a host app's `Contents/Helpers/` and
+//   launched via `NSWorkspace.openApplication`. These targets have NO
+//   user-mode purpose; there is no scenario in which the menu-bar UI or
+//   Settings scene should ever surface. The helper invariant is therefore
+//   pinned at **compile time** (#128): `isHelperMode = true` unconditionally,
+//   the `YoozEngineApp` SwiftUI scene is never invoked, and the `MenuBarExtra`
+//   never has the chance to register an `NSStatusItem`.
 //
-//   Both signals are accepted because `NSWorkspace.OpenConfiguration.environment`
-//   is NOT reliably propagated to nested helper bundles on macOS 26
-//   (#117 / whisper#179), so host apps spawn us via
-//   `OpenConfiguration.arguments = ["--headless"]` instead. The env-var
-//   channel is preserved for shell exec, scripts, and test harnesses.
-//   `EngineConfig.isHelper` consults both sources.
+//   Why compile-time and not runtime: on macOS 26, LaunchServices strips
+//   both `OpenConfiguration.environment` AND `OpenConfiguration.arguments`
+//   from helper processes launched via `openApplication`. Verified empirically
+//   with `ps -E` and `lsappinfo info -only LSLaunchArguments`. There is no
+//   recoverable runtime channel by which the host can signal "be headless"
+//   through that API. Compile-time invariant is the correct architectural
+//   fix because it matches the actual truth: an embedded variant cannot
+//   meaningfully run in any other mode.
+//
+// * **Standalone variant (full `YoozEngine`)** — dev/diagnostic builds where
+//   double-clicking the `.app` should still produce a menu-bar icon and
+//   Settings scene. Helper mode is opt-in via the runtime signals from
+//   #117/#119:
+//
+//   - `YOOZ_ENGINE_HEADLESS=1` env var (works for direct shell exec,
+//     scripts, test harnesses, and any spawn API that propagates env).
+//   - `--headless` argv flag (works for any spawn that propagates argv).
+//
+//   Both runtime channels remain in `EngineConfig.isHelper` as forward-compat
+//   for any future host that wants to launch the full standalone build in
+//   helper mode (e.g. an integration harness, a developer running the engine
+//   manually via `open --args`, etc.).
+//
+// ## Helper bootstrap
 //
 // In helper mode we drive `NSApplication` directly: install the same
 // `EngineAppDelegate` (so the API server start/stop logic stays shared),
@@ -35,7 +49,19 @@
 import AppKit
 import EngineCore
 
-if EngineConfig.isHelper {
+#if VARIANT_WHISPER || VARIANT_LITE
+// Compile-time invariant for embedded helper variants. The `YoozEngineApp`
+// SwiftUI scene is never reachable from this build — `MenuBarExtra` cannot
+// register an `NSStatusItem` because the scene graph is never evaluated.
+// See file header for the LaunchServices-strips-env-and-argv rationale (#128).
+let isHelperMode = true
+#else
+// Standalone variant: respect the runtime helper signal so developers and
+// future hosts can still launch us headless when they need to.
+let isHelperMode = EngineConfig.isHelper
+#endif
+
+if isHelperMode {
     // The whole helper bootstrap is `@MainActor`-isolated:
     // `EngineAppDelegate` is `@MainActor`, and `NSApplication` APIs need
     // main-thread affinity. Top-level Swift code is not automatically
