@@ -11,7 +11,7 @@ import Foundation
 /// `EngineConfig.defaultPort` (19920) races the previous bind and the
 /// next test fails with `portInUse(pid: nil)` — the socket is held by
 /// the same xctest process but lsof doesn't see it as `LISTEN`.
-/// See engine#122.
+/// See yooz-engine#122.
 ///
 /// Instead of trying to make `stop()` synchronously release the
 /// kernel socket (a Hummingbird-internal property we can't guarantee
@@ -33,9 +33,11 @@ enum UniqueEnginePort {
     /// instantiating the server) in every XCTestCase that boots a
     /// real `APIServer`.
     ///
-    /// Wraps at 65000 back to `defaultPort + 1` — a single test run
-    /// will never produce 45000 unique tests, but the wrap keeps the
-    /// counter inside the user-port range.
+    /// Wraps after the 45000th assignment back to `defaultPort + 1`
+    /// (i.e. the sequence is 19921, 19922, ..., 64920, 19921, ...). A
+    /// single test run will never produce 45000 unique boots, but the
+    /// wrap keeps the counter inside the user-port range as a defense
+    /// against pathological loops.
     static func assignFreshPort() {
         let next = counter.next()
         let bounded = ((next - (EngineConfig.defaultPort + 1)) % 45000)
