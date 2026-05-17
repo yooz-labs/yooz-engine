@@ -19,6 +19,29 @@ import STTModule
 import VADModule
 #endif
 
+/// Request context used by the HTTP router. The only material difference
+/// from `BasicRequestContext` is the body-size limit: Hummingbird 2's
+/// default is 2 MiB, which is below the JSON-encoded size of medium-long
+/// audio chunks coming through `/v1/stt/batch`. Whisper sends Float
+/// sample arrays serialized to JSON; ~17 s of 16 kHz audio is already
+/// over 2 MiB, so the default rejected long recordings with 400
+/// `invalid_request` before the handler ever ran (engine #111,
+/// yooz-whisper #176). 64 MiB covers roughly 5 minutes of audio with
+/// headroom for the alignment-token response payload.
+///
+/// A binary wire format would shrink the payload ~5× and remove the
+/// JSON cost, but that's a coordinated protocol change deferred to a
+/// later epic. For now we raise the ceiling.
+struct YoozEngineRequestContext: RequestContext {
+    var coreContext: CoreRequestContextStorage
+
+    init(source: ApplicationRequestContextSource) {
+        self.coreContext = .init(source: source)
+    }
+
+    var maxUploadSize: Int { 64 * 1024 * 1024 }
+}
+
 @MainActor
 final class APIServer: ObservableObject {
     enum State: Equatable {
@@ -860,7 +883,7 @@ final class APIServer: ObservableObject {
     /// Build a router for testing without spinning up the full server
     /// task. Used by HTTP integration tests that exercise the route
     /// handlers via `Application.test(.router) { ... }`.
-    func makeTestRouter() -> Router<BasicRequestContext> {
+    func makeTestRouter() -> Router<YoozEngineRequestContext> {
         buildRouter()
     }
 
@@ -869,8 +892,8 @@ final class APIServer: ObservableObject {
         buildWebSocketRouter()
     }
 
-    private func buildRouter() -> Router<BasicRequestContext> {
-        let router = Router()
+    private func buildRouter() -> Router<YoozEngineRequestContext> {
+        let router = Router(context: YoozEngineRequestContext.self)
         #if canImport(STTModule)
         let sttEngine = YoozSTTEngine.shared
         // Hoist the metrics sink + preview fallback hook so they
