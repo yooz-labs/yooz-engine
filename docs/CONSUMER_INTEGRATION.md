@@ -155,6 +155,29 @@ Both STT and LLM models are pulled from HuggingFace on first use. Cache lands at
 
 For STT, `POST /v1/stt/load` accepts `allow_fetch: false` to fail fast on a cold cache. The engine surfaces download progress via `/v1/stt/status.progress` (a Double 0.0–1.0).
 
+## Streaming STT partial cadence
+
+The `/v1/stt/stream` WebSocket emits partial transcriptions at a tunable cadence. The engine accumulates audio across frames and only re-runs the encoder + decoder once every `YOOZ_STT_PARTIAL_INTERVAL_SEC` seconds of new audio (default `2.0`). This keeps the per-frame fast path cheap when the caller feeds many small (~64 ms) audio buffers, while still giving the user visible progress every couple of seconds.
+
+| Setting | Behaviour |
+|---|---|
+| `2.0` (default) | Balanced — partial roughly every two seconds. |
+| `0.5`–`1.0` | More visual feedback, more encode cycles. Suitable for quiet desktops where the user wants tight live preview. |
+| `5.0`+ | Less CPU, less feedback. Closer to "batch on chunk boundary" behaviour. |
+| `0` | Disable the throttle entirely — re-encode on every WebSocket frame. Useful for instrumentation only. |
+
+Set it in your helper-launch environment (alongside `YOOZ_ENGINE_HEADLESS` and `YOOZ_ENGINE_PORT`):
+
+```swift
+config.environment = [
+    "YOOZ_ENGINE_HEADLESS": "1",
+    "YOOZ_ENGINE_PORT": "19921",
+    "YOOZ_STT_PARTIAL_INTERVAL_SEC": "1.5",   // tune to taste
+]
+```
+
+The compiled default lives at `EngineConfig.defaultStreamingPartialIntervalSec`; the resolved (env-aware) value at `EngineConfig.streamingPartialIntervalSec`. Hosts that construct `StreamingTranscriber` directly can pass `partialEmissionInterval:` for per-session overrides.
+
 ## Per-app port isolation
 
 Free standalone apps coexist on a user's machine. Each app's embedded helper binds a different loopback port so they don't collide. The SDK constructor takes the port; the helper reads `YOOZ_ENGINE_PORT` from its environment.

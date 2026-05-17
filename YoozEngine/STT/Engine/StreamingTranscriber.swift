@@ -15,6 +15,14 @@ public final class StreamingTranscriber {
     /// Minimum mel frames before processing
     private let minMelFrames: Int
 
+    /// Minimum number of newly-buffered samples between successive
+    /// emissions, i.e. the partial-emission cadence floor. Once the
+    /// transcriber has emitted a partial, the next call is treated as a
+    /// cache hit (returning the prior `currentResult()`) until this many
+    /// additional samples have accumulated. Set to 0 to disable
+    /// throttling and re-encode on every call.
+    private let partialEmissionIntervalSamples: Int
+
     /// Context size for draft region
     private let contextSize: (left: Int, right: Int)
 
@@ -38,6 +46,13 @@ public final class StreamingTranscriber {
     /// Accumulated audio buffer
     private var audioBuffer: [Float] = []
 
+    /// `audioBuffer.count` at the time of the last successful encode
+    /// + decode pass. Used together with
+    /// `partialEmissionIntervalSamples` to throttle the per-frame
+    /// re-encode rate when the caller feeds audio in short
+    /// (~64 ms) frames.
+    private var lastEmittedBufferCount: Int = 0
+
     /// Finalized tokens (stable, won't change)
     private var finalizedTokens: [AlignedToken] = []
 
@@ -46,18 +61,38 @@ public final class StreamingTranscriber {
 
     // MARK: - Initialization
 
+    /// - Parameters:
+    ///   - model: Loaded Parakeet model.
+    ///   - contextSize: `(left, right)` encoder frames; `right` is the
+    ///     draft window size dropped from the finalized split.
+    ///   - minChunkDuration: Minimum audio duration (seconds) the
+    ///     accumulated buffer must reach before the first partial is
+    ///     emitted. Acts as a warm-up floor; once cleared, subsequent
+    ///     emissions are gated by `partialEmissionInterval` instead.
+    ///   - partialEmissionInterval: Minimum new audio (seconds) between
+    ///     successive partial emissions. Default `2.0` produces a
+    ///     ~2-second partial cadence regardless of how frequently the
+    ///     caller calls `addAudio`. Lower values (0.5–1.0) give more
+    ///     visual feedback at higher CPU cost; `0` disables the throttle
+    ///     and re-encodes on every call (legacy behaviour). See
+    ///     `EngineConfig.streamingPartialIntervalSec` for the
+    ///     process-wide default and the `YOOZ_STT_PARTIAL_INTERVAL_SEC`
+    ///     env-var override.
+    ///   - preprocessConfig: Optional override of the model's default
+    ///     preprocessor config (e.g. for `audioMode`).
     public init(
         model: ParakeetModel,
         contextSize: (Int, Int) = (24, 24),
         minChunkDuration: Float = 0.5,
+        partialEmissionInterval: Float = 2.0,
         preprocessConfig: PreprocessConfig? = nil
     ) {
         self.model = model
-        
+
         // Use override config if provided, otherwise use model's config
         let config = preprocessConfig ?? model.config.preprocessor
         self.preprocessor = AudioPreprocessor(config: config)
-        
+
         self.sampleRate = config.sampleRate
         self.subsamplingFactor = model.config.encoder.subsamplingFactor
         self.hopLength = config.hopLength
@@ -65,6 +100,14 @@ public final class StreamingTranscriber {
 
         // Minimum mel frames = minChunkDuration seconds worth
         self.minMelFrames = Int(minChunkDuration * Float(sampleRate) / Float(hopLength))
+
+        // Cadence floor in samples. Clamp negatives to `0` so a negative
+        // interval collapses onto the documented `0` opt-out (gate
+        // disabled, re-encode on every call) instead of relying on the
+        // `> 0` check in `addAudio` to absorb the surprise. Keeps the
+        // contract symmetric: anything <= 0 means "no throttle".
+        let intervalSamples = Int(max(0, partialEmissionInterval) * Float(sampleRate))
+        self.partialEmissionIntervalSamples = intervalSamples
     }
 
     // MARK: - Public Methods
@@ -75,6 +118,23 @@ public final class StreamingTranscriber {
         let startTime = CFAbsoluteTimeGetCurrent()
         // Accumulate audio
         audioBuffer.append(contentsOf: samples)
+
+        // Cadence throttle (engine #135). When the caller feeds audio
+        // in short frames (e.g. 1024 samples / ~64 ms from an
+        // `AVAudioEngine` tap), the buffer-accumulation pattern in the
+        // rest of this method would otherwise re-encode the entire
+        // accumulated buffer on every call. The throttle keeps the
+        // per-frame fast path cheap (just an `append`) and gates the
+        // mel + encode + decode pass to once per
+        // `partialEmissionIntervalSamples`. `lastEmittedBufferCount`
+        // starts at `0`, so the first call still pays the encode cost
+        // as soon as `minMelFrames` is reached, regardless of the
+        // interval; only subsequent emissions are throttled.
+        if partialEmissionIntervalSamples > 0
+            && lastEmittedBufferCount > 0
+            && audioBuffer.count - lastEmittedBufferCount < partialEmissionIntervalSamples {
+            return currentResult()
+        }
 
         // Align to hop length
         let alignedLength = (audioBuffer.count / hopLength) * hopLength
@@ -136,6 +196,11 @@ public final class StreamingTranscriber {
             }
         }
 
+        // Mark this emission point so the cadence throttle suppresses
+        // re-encodes until another `partialEmissionIntervalSamples`
+        // worth of audio has been appended.
+        lastEmittedBufferCount = audioBuffer.count
+
         let result = currentResult()
         let encodeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         // Cadence telemetry (engine #118). `.debug` so production users
@@ -181,6 +246,7 @@ public final class StreamingTranscriber {
         audioBuffer = []
         finalizedTokens = []
         draftTokens = []
+        lastEmittedBufferCount = 0
     }
 
     // MARK: - Private Methods
