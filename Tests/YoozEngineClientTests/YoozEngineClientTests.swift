@@ -20,12 +20,42 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(client.helperLaunchEnvironment[YoozEngineClient.portEnvVar], "19921")
     }
 
+    /// The argv channel is the reliable headless signal on macOS 26
+    /// (`OpenConfiguration.arguments` IS propagated by LaunchServices,
+    /// while `OpenConfiguration.environment` is NOT). Pin the flag
+    /// spelling so the SDK and the engine-side detector
+    /// (`EngineConfig.helperModeArg`) cannot drift apart silently.
+    func testHelperLaunchArgumentsCarryHeadlessFlag() {
+        let client = YoozEngineClient(port: 19921)
+        XCTAssertEqual(client.helperLaunchArguments, [YoozEngineClient.helperModeArg])
+        XCTAssertEqual(YoozEngineClient.helperModeArg, "--headless")
+    }
+
     func testBundledHelperLaunchConfigurationCanCreateNewInstance() {
         let client = YoozEngineClient(port: 19921)
         let config = client.helperOpenConfiguration(createsNewInstance: true)
         XCTAssertFalse(config.activates)
         XCTAssertTrue(config.createsNewApplicationInstance)
         XCTAssertEqual(config.environment[YoozEngineClient.portEnvVar], "19921")
+    }
+
+    /// `helperOpenConfiguration` must populate BOTH channels — the
+    /// env-var channel for backward compat with engine builds that
+    /// pre-date the argv path, and the argv channel for the reliable
+    /// macOS 26 launch path. Verifies the belt-and-suspenders contract
+    /// the engine's `EngineConfig.isHelperMode` expects (#117).
+    func testHelperOpenConfigurationPopulatesBothHeadlessChannels() {
+        let client = YoozEngineClient(port: 19921)
+        let config = client.helperOpenConfiguration(createsNewInstance: true)
+        XCTAssertEqual(
+            config.environment[YoozEngineClient.headlessEnvVar],
+            "1",
+            "env channel kept for backward compat with engine builds pre-#117"
+        )
+        XCTAssertTrue(
+            config.arguments.contains(YoozEngineClient.helperModeArg),
+            "argv channel is the reliable headless signal on macOS 26 (#117)"
+        )
     }
     #endif
 
