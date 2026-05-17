@@ -101,10 +101,11 @@ public final class StreamingTranscriber {
         // Minimum mel frames = minChunkDuration seconds worth
         self.minMelFrames = Int(minChunkDuration * Float(sampleRate) / Float(hopLength))
 
-        // Cadence floor in samples. A negative value would risk turning
-        // the gate into an "always-skip"; clamp at zero so callers can
-        // explicitly opt out via `0` without surprising behaviour at
-        // edge inputs.
+        // Cadence floor in samples. Clamp negatives to `0` so a negative
+        // interval collapses onto the documented `0` opt-out (gate
+        // disabled, re-encode on every call) instead of relying on the
+        // `> 0` check in `addAudio` to absorb the surprise. Keeps the
+        // contract symmetric: anything <= 0 means "no throttle".
         let intervalSamples = Int(max(0, partialEmissionInterval) * Float(sampleRate))
         self.partialEmissionIntervalSamples = intervalSamples
     }
