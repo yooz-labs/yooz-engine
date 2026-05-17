@@ -22,6 +22,14 @@ public final class YoozEngineClient: Sendable {
     private let engineBundleID = "live.yooz.engine"
     static let headlessEnvVar = "YOOZ_ENGINE_HEADLESS"
     static let portEnvVar = "YOOZ_ENGINE_PORT"
+    /// Command-line flag the helper accepts as a second signal to enter
+    /// headless mode. Must stay in sync with `EngineConfig.helperModeArg`
+    /// (engine-side). The argv channel is the reliable path when launching
+    /// via `NSWorkspace.openApplication`: `OpenConfiguration.arguments` is
+    /// propagated by LaunchServices, while `OpenConfiguration.environment`
+    /// is NOT reliably propagated to nested helper bundles on macOS 26
+    /// (engine#117 / whisper#179).
+    static let helperModeArg = "--headless"
 
     /// Structured log channel for lifecycle events (connect, launch,
     /// stale-engine recovery). Uses OSLog so Console.app can filter by
@@ -367,6 +375,17 @@ public final class YoozEngineClient: Sendable {
         ]
     }
 
+    /// Argv vector passed to the helper through
+    /// `NSWorkspace.OpenConfiguration.arguments`. Carries `--headless` as
+    /// the reliable headless signal on macOS 26, where the env-var channel
+    /// is not propagated to nested helper bundles by LaunchServices
+    /// (engine#117 / whisper#179). Belt-and-suspenders with
+    /// `helperLaunchEnvironment` — the engine treats either channel as
+    /// sufficient (`EngineConfig.isHelperMode`).
+    var helperLaunchArguments: [String] {
+        [Self.helperModeArg]
+    }
+
     func helperOpenConfiguration(createsNewInstance: Bool) -> NSWorkspace.OpenConfiguration {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
@@ -374,13 +393,23 @@ public final class YoozEngineClient: Sendable {
         // Run the helper as a headless service: skip the menu-bar
         // status item + Settings scene so the host app's UI is the
         // only surface the user sees. `EngineConfig.isHelper` reads
-        // this var at startup and forces `.prohibited` activation
-        // policy. Harmless on engine builds that don't honor it.
+        // both env and argv channels at startup and forces `.prohibited`
+        // activation policy when either signals headless.
+        //
+        // Both channels are populated because `OpenConfiguration.environment`
+        // is NOT reliably propagated to nested helper bundles on macOS 26
+        // (engine#117 / whisper#179) — the argv channel is the reliable
+        // one. The env channel is preserved for backward compat with
+        // engine builds that pre-date the argv path.
         //
         // Port isolation uses the same launch-time contract: a host app
         // with `YoozEngineClient(port:)` launches its bundled helper with
         // `YOOZ_ENGINE_PORT` so each app binds its own loopback port.
+        // Port has no argv equivalent yet; if env is dropped the helper
+        // falls back to the default port, which is acceptable for now
+        // because the SDK and helper share the same default.
         config.environment = helperLaunchEnvironment
+        config.arguments = helperLaunchArguments
         return config
     }
 
