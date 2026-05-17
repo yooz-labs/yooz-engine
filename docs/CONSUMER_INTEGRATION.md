@@ -15,7 +15,7 @@ try await client.connect()
 let result = await client.touchUp.touchUp(text: "um yeah", mode: .standard)
 ```
 
-That's the happy path. The SDK auto-discovers a bundled helper under `<host>.app/Contents/Helpers/` (preferred), or falls back to a LaunchServices lookup for a standalone Yooz Engine.app (legacy). It launches the helper headless (`YOOZ_ENGINE_HEADLESS=1`) so your host app's menu-bar UI stays clean.
+That's the happy path. The SDK auto-discovers a bundled helper under `<host>.app/Contents/Helpers/` (preferred), or falls back to a LaunchServices lookup for a standalone Yooz Engine.app (legacy). It launches the helper headless (`--headless` argv flag plus `YOOZ_ENGINE_HEADLESS=1` env var, see "Helper-mode signal" below) so your host app's menu-bar UI stays clean.
 
 ## Variant selection
 
@@ -71,7 +71,7 @@ See `scripts/build-whisper-helper.sh` (engine) and `scripts/embed-engine-helper.
 The SDK's `connect()` does this:
 
 1. Probe `/v1/health` on `127.0.0.1:19920`. If 200 → done, attach to existing engine.
-2. If TCP refused → look for a bundled helper at `<host>.app/Contents/Helpers/Yooz Engine*.app`. If found, launch it via `NSWorkspace.openApplication(at:configuration:)` with `YOOZ_ENGINE_HEADLESS=1`. Poll `/v1/health` for up to 10s.
+2. If TCP refused → look for a bundled helper at `<host>.app/Contents/Helpers/Yooz Engine*.app`. If found, launch it via `NSWorkspace.openApplication(at:configuration:)` with `--headless` in `OpenConfiguration.arguments` and `YOOZ_ENGINE_HEADLESS=1` in `OpenConfiguration.environment` (see "Helper-mode signal"). Poll `/v1/health` for up to 10s.
 3. If no bundled helper → look up `live.yooz.engine` via LaunchServices. Same launch path. (Legacy / dev-only.)
 4. If TCP accepted but `/v1/health` doesn't respond → stale engine. Throws `YoozEngineError.portHeldByStaleEngine` unless `YOOZ_ENGINE_AUTO_RECOVER=1` is set, in which case the SDK kills the holder and relaunches.
 
@@ -175,15 +175,28 @@ When integrating a new app, pick the next free port and document it in your app'
 let client = YoozEngineClient(host: "127.0.0.1", port: 19921)  // crisp
 ```
 
-```yaml
-# Helper launch — pass via NSWorkspace.OpenConfiguration.environment
+```swift
+// Helper launch — populate BOTH channels for reliable headless mode.
+// The SDK's `helperOpenConfiguration` already does this for you; the
+// snippet below is only relevant if you build your own launcher
+// (e.g. yooz-whisper's `EngineHelperController`).
+config.arguments = ["--headless"]                          // reliable on macOS 26
 config.environment = [
-  "YOOZ_ENGINE_HEADLESS": "1",
-  "YOOZ_ENGINE_PORT": "19921",
+    "YOOZ_ENGINE_HEADLESS": "1",                          // backward compat
+    "YOOZ_ENGINE_PORT": "19921",
 ]
 ```
 
 Helpers are loopback-only by design (`127.0.0.1`). CORS / origin checks ensure browser pages can't poke a local helper from a malicious tab.
+
+## Helper-mode signal (env + argv)
+
+The engine enters headless mode (no menu-bar icon, no Settings scene) when EITHER of two signals is present:
+
+1. **`--headless` command-line argument** (reliable on macOS 26). Passed through `NSWorkspace.OpenConfiguration.arguments`; LaunchServices propagates this to the spawned helper.
+2. **`YOOZ_ENGINE_HEADLESS=1` environment variable** (backward compat). Passed through `NSWorkspace.OpenConfiguration.environment` — but LaunchServices does NOT reliably propagate the env dict to nested helper bundles on macOS 26 (engine#117 / whisper#179). Kept for direct shell exec, scripts, and test harnesses.
+
+The SDK's `helperOpenConfiguration` populates both for belt-and-suspenders. The engine's `EngineConfig.isHelperMode(environment:arguments:)` ORs the two channels, so either alone is sufficient. If you build a custom launcher (instead of using the SDK auto-launch path), make sure you set BOTH on `OpenConfiguration` to stay safe on macOS 26.
 
 ## Two co-existing distribution models
 
