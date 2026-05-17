@@ -505,6 +505,7 @@ schemes:
       targets:
         YoozEngine: all
         YoozEngineTests: [test]
+        LLMModuleTests: [test]
     test:
       config: Debug
       gatherCoverageData: false
@@ -516,6 +517,13 @@ schemes:
         # default scheme so a regression in helper suppression surfaces
         # in the standard CI sweep rather than at integration time.
         - EngineCoreTests
+        # LLMModuleTests covers `parseProofreadResponse` /
+        # `parseValidateResponse` defensive parsing (#113 placeholder echo
+        # guard, #134 markdown fence + multi-object recovery). These are
+        # pure string-in / tuple-out tests with no model dependency, so
+        # they belong in the standard CI sweep rather than the integration
+        # plan.
+        - LLMModuleTests
     run:
       config: Debug
     archive:
