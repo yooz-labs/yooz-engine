@@ -42,18 +42,20 @@ func parseProofreadResponse(_ response: String, fallback: String) -> (text: Stri
 
     // Try direct parse
     if let data = trimmed.data(using: .utf8),
-       let decoded = try? JSONDecoder().decode(ProofreadResponse.self, from: data) {
+       let decoded = try? JSONDecoder().decode(ProofreadResponse.self, from: data),
+       !isPlaceholderEcho(decoded.result) {
         return (decoded.result, true)
     }
 
     // Try to find JSON in the response (model may add extra text)
     if let jsonText = extractJSON(from: trimmed),
        let data = jsonText.data(using: .utf8),
-       let decoded = try? JSONDecoder().decode(ProofreadResponse.self, from: data) {
+       let decoded = try? JSONDecoder().decode(ProofreadResponse.self, from: data),
+       !isPlaceholderEcho(decoded.result) {
         return (decoded.result, true)
     }
 
-    // Parsing failed
+    // Parsing failed (or model echoed the prompt template verbatim).
     logger.warning("Failed to parse proofread response. Preview: \(trimmed.prefix(200))")
     return (fallback, false)
 }
@@ -75,7 +77,8 @@ func parseValidateResponse(
 
     // Try direct parse
     if let data = trimmed.data(using: .utf8),
-       let decoded = try? JSONDecoder().decode(ValidateResponse.self, from: data) {
+       let decoded = try? JSONDecoder().decode(ValidateResponse.self, from: data),
+       !isPlaceholderEcho(decoded.result) {
         let keep = normalizeKeepDecisions(decoded.keep, expected: numReplacements)
         return (decoded.result, keep, true)
     }
@@ -83,14 +86,28 @@ func parseValidateResponse(
     // Try to find JSON in the response
     if let jsonText = extractJSON(from: trimmed),
        let data = jsonText.data(using: .utf8),
-       let decoded = try? JSONDecoder().decode(ValidateResponse.self, from: data) {
+       let decoded = try? JSONDecoder().decode(ValidateResponse.self, from: data),
+       !isPlaceholderEcho(decoded.result) {
         let keep = normalizeKeepDecisions(decoded.keep, expected: numReplacements)
         return (decoded.result, keep, true)
     }
 
-    // Parsing failed - log and return safe defaults (revert all)
+    // Parsing failed (or model echoed the prompt template verbatim).
     logger.warning("Failed to parse validation response, reverting all. Preview: \(trimmed.prefix(200))")
     return (fallback, defaultKeep, false)
+}
+
+/// Detect when a model has echoed the prompt template's placeholder string
+/// verbatim instead of actually processing the input. The Light and Quality
+/// prompts in `YoozPrompts` end with
+/// `Always respond with {"result": "corrected text"}.` as a shape example,
+/// and small models occasionally copy that literally
+/// (engine #113 / yooz-whisper #182). Without this guard
+/// `parseProofreadResponse` reports success and the user sees the
+/// placeholder pasted.
+private func isPlaceholderEcho(_ result: String) -> Bool {
+    let normalized = result.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return normalized == YoozPrompts.resultPlaceholder.lowercased()
 }
 
 // MARK: - Helper Functions
