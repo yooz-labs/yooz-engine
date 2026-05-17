@@ -161,10 +161,11 @@ public actor AppleSTTEngine {
 
     /// Per-recording-session reset (engine issue #114). Today's engine is
     /// batch-only (`startStream` throws), so there is no streaming buffer to
-    /// drop. We still conform: when the real streaming path lands behind
-    /// `startStream`, recognition-task teardown hooks in here and the
-    /// `/v1/session/begin` + `/v1/session/end` fan-out keeps working with
-    /// zero new wiring.
+    /// drop. Conforming now means the route fan-out is wired; when the real
+    /// streaming path lands behind `startStream`, the implementer of that
+    /// path is expected to extend this method with recognition-task teardown
+    /// (cancelling the active `SFSpeechRecognitionTask`, dropping any
+    /// streaming-session state).
     ///
     /// Defensively flips `isStreaming` to `false` so a session boundary is
     /// always a clean slate; `backend` + `isLoaded` are preserved because

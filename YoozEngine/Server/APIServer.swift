@@ -58,6 +58,13 @@ final class APIServer: ObservableObject {
     static let crashedNotification = Notification.Name("live.yooz.engine.server.crashed")
     static let crashErrorKey = "error"
 
+    /// Shared formatter for `/v1/session/begin` timestamps. `ISO8601DateFormatter`
+    /// is thread-safe and the default options produce a UTC `Z`-suffixed
+    /// `yyyy-MM-ddTHH:mm:ssZ` string. Cached statically so each `begin` call
+    /// reuses one formatter instance instead of allocating + configuring a fresh
+    /// one per request.
+    static let sessionTimestampFormatter = ISO8601DateFormatter()
+
     /// Module teardown watchdog: if module unloads don't complete in this
     /// interval we log, cancel the task, and force the state to `.stopped`
     /// so the user isn't stuck in `.stopping` forever.
@@ -979,7 +986,7 @@ final class APIServer: ObservableObject {
         // unload models. See `EngineCore/SessionResettable.swift`.
         router.post("/v1/session/begin") { [self] _, _ in
             let sessionId = UUID().uuidString
-            let ts = ISO8601DateFormatter().string(from: Date())
+            let ts = Self.sessionTimestampFormatter.string(from: Date())
             let resettables = await ModuleRegistry.shared.allResettable()
             for module in resettables {
                 await module.resetForNewSession()
