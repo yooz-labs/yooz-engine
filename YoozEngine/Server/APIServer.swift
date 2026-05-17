@@ -2313,7 +2313,11 @@ final class APIServer: ObservableObject {
 
                 case .binary(var buffer):
                     let byteCount = buffer.readableBytes
-                    cadenceLogger.info("ws frame in bytes=\(byteCount)")
+                    // Cadence telemetry (engine #118). `.debug` to avoid
+                    // per-frame log spam in production; elevate via
+                    // `log config --subsystem live.yooz.engine
+                    //  --mode level:debug` when investigating.
+                    cadenceLogger.debug("ws frame in bytes=\(byteCount, privacy: .public)")
                     // Reject obviously-malformed frames early. The
                     // protocol expects a multiple of `Float32`-sized
                     // bytes; partial-sample frames are dropped with a
@@ -2406,7 +2410,12 @@ final class APIServer: ObservableObject {
                         finalized: result.finalized,
                         draft: result.draft
                     )
-                    cadenceLogger.info("ws result out type=\(wsResult.type, privacy: .public)")
+                    // Cadence telemetry (engine #118). `text_len` lets a
+                    // reviewer correlate this outbound line with the
+                    // matching StreamingTranscriber frame log; `type` is
+                    // always "partial" at this site so it would carry no
+                    // information on its own.
+                    cadenceLogger.debug("ws result out type=\(wsResult.type, privacy: .public) text_len=\(wsResult.text.count, privacy: .public)")
                     await sendResult(wsResult)
                 }
             }

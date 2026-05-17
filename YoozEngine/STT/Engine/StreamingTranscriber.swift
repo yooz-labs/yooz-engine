@@ -138,7 +138,13 @@ public final class StreamingTranscriber {
 
         let result = currentResult()
         let encodeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-        logger.info("frame samples=\(samples.count) buffer=\(self.audioBuffer.count) encode_ms=\(encodeMs, format: .fixed(precision: 2)) text_len=\(result.text.count) finalized_len=\(result.finalized.count) draft_len=\(result.draft.count)")
+        // Cadence telemetry (engine #118). `.debug` so production users
+        // don't accumulate per-frame log records on disk; elevate with
+        // `log config --subsystem live.yooz.engine --mode level:debug`
+        // when investigating. Numeric fields marked `.public` for
+        // consistency with the rest of the codebase and to ensure they
+        // survive log archive redaction.
+        logger.debug("frame samples=\(samples.count, privacy: .public) buffer=\(self.audioBuffer.count, privacy: .public) encode_ms=\(encodeMs, format: .fixed(precision: 2), privacy: .public) text_len=\(result.text.count, privacy: .public) finalized_len=\(result.finalized.count, privacy: .public) draft_len=\(result.draft.count, privacy: .public)")
         return result
     }
 
