@@ -12,12 +12,15 @@ import LLMModule
 #endif
 import Logging
 import NIOCore
+import os
 #if canImport(STTModule)
 import STTModule
 #endif
 #if canImport(VADModule)
 import VADModule
 #endif
+
+private let cadenceLogger = os.Logger(subsystem: "live.yooz.engine", category: "stt-cadence")
 
 /// Request context used by the HTTP router. The only material difference
 /// from `BasicRequestContext` is the body-size limit: Hummingbird 2's
@@ -66,7 +69,7 @@ final class APIServer: ObservableObject {
 
     private var app: (any ApplicationProtocol)?
     private var serverTask: Task<Void, any Error>?
-    let logger = Logger(label: "live.yooz.engine.server")
+    let logger = Logging.Logger(label: "live.yooz.engine.server")
 
     /// Active STT backend selection. Defaulted lazily from the bundled modules
     /// when the server starts: full/whisper → `.parakeet`, lite → `.appleSTT`.
@@ -308,7 +311,7 @@ final class APIServer: ObservableObject {
     /// `static` + `nonisolated` so `Task.detached` in `stop()` can call
     /// it without capturing the MainActor-isolated instance. Logger is
     /// `Sendable` (swift-log) and is the only state required.
-    nonisolated private static func performTeardown(logger: Logger) async {
+    nonisolated private static func performTeardown(logger: Logging.Logger) async {
         // Stop the MLX STT engine to free GPU memory
         #if canImport(STTModule)
         YoozSTTEngine.shared.stop()
@@ -2015,7 +2018,7 @@ final class APIServer: ObservableObject {
 
     private func buildWebSocketRouter() -> Router<BasicWebSocketRequestContext> {
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
-        let sttLogger = Logger(label: "live.yooz.engine.stt.stream")
+        let sttLogger = Logging.Logger(label: "live.yooz.engine.stt.stream")
         #if canImport(STTModule)
         // One sink instance per server lifetime — file handle stays
         // owned by the actor. Per-request sinks would race on the
@@ -2310,6 +2313,11 @@ final class APIServer: ObservableObject {
 
                 case .binary(var buffer):
                     let byteCount = buffer.readableBytes
+                    // Cadence telemetry (engine #118). `.debug` to avoid
+                    // per-frame log spam in production; elevate via
+                    // `log config --subsystem live.yooz.engine
+                    //  --mode level:debug` when investigating.
+                    cadenceLogger.debug("ws frame in bytes=\(byteCount, privacy: .public)")
                     // Reject obviously-malformed frames early. The
                     // protocol expects a multiple of `Float32`-sized
                     // bytes; partial-sample frames are dropped with a
@@ -2396,12 +2404,19 @@ final class APIServer: ObservableObject {
 
                     let result = transcriber.addAudio(samples: samples)
 
-                    await sendResult(WSSTTResult(
+                    let wsResult = WSSTTResult(
                         type: "partial",
                         text: result.text,
                         finalized: result.finalized,
                         draft: result.draft
-                    ))
+                    )
+                    // Cadence telemetry (engine #118). `text_len` lets a
+                    // reviewer correlate this outbound line with the
+                    // matching StreamingTranscriber frame log; `type` is
+                    // always "partial" at this site so it would carry no
+                    // information on its own.
+                    cadenceLogger.debug("ws result out type=\(wsResult.type, privacy: .public) text_len=\(wsResult.text.count, privacy: .public)")
+                    await sendResult(wsResult)
                 }
             }
             } catch is CancellationError {

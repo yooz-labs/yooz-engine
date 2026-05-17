@@ -2,6 +2,9 @@
 
 import Foundation
 import MLX
+import os
+
+private let logger = Logger(subsystem: "live.yooz.engine", category: "stt-cadence")
 
 /// Streaming transcriber - accumulates audio and transcribes
 /// Note: Real-time streaming preview is a work in progress. Currently uses batch mode.
@@ -69,6 +72,7 @@ public final class StreamingTranscriber {
     /// Add audio samples and get current transcription
     /// Uses batch mode for accuracy (streaming preview disabled for now)
     public func addAudio(samples: [Float]) -> ParakeetResult {
+        let startTime = CFAbsoluteTimeGetCurrent()
         // Accumulate audio
         audioBuffer.append(contentsOf: samples)
 
@@ -132,7 +136,25 @@ public final class StreamingTranscriber {
             }
         }
 
-        return currentResult()
+        let result = currentResult()
+        let encodeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        // Cadence telemetry (engine #118). `.debug` so production users
+        // don't accumulate per-frame log records on disk; elevate with
+        // `log config --subsystem live.yooz.engine --mode level:debug`
+        // when investigating. Numeric fields marked `.public` for
+        // consistency with the rest of the codebase and to ensure they
+        // survive log archive redaction.
+        logger.debug(
+            """
+            frame samples=\(samples.count, privacy: .public) \
+            buffer=\(self.audioBuffer.count, privacy: .public) \
+            encode_ms=\(encodeMs, format: .fixed(precision: 2), privacy: .public) \
+            text_len=\(result.text.count, privacy: .public) \
+            finalized_len=\(result.finalized.count, privacy: .public) \
+            draft_len=\(result.draft.count, privacy: .public)
+            """
+        )
+        return result
     }
 
     /// Finalize transcription
