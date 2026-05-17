@@ -56,15 +56,63 @@ public enum EngineConfig {
     /// menu-bar UI and Settings scene, but still starts the API server and
     /// writes to the same OSLog subsystem. This contract is consumed by
     /// `YoozEngineApp` and `EngineAppDelegate`; host apps (e.g. yooz-whisper's
-    /// `EngineHelperController`) must pass the variable through
+    /// `EngineHelperController`) pass the variable through
     /// `NSWorkspace.OpenConfiguration.environment` when spawning the helper.
+    ///
+    /// Note: `NSWorkspace.OpenConfiguration.environment` is NOT reliably
+    /// propagated to nested helper bundles on macOS 26 (LaunchServices
+    /// quirk verified in yooz-whisper#179, this repo #117). The env-var
+    /// channel is kept for backward compat with direct shell exec, scripts,
+    /// and test harnesses that set the environment. Host apps launching
+    /// the helper via `NSWorkspace.openApplication` must additionally pass
+    /// `--headless` through `OpenConfiguration.arguments`, which
+    /// LaunchServices DOES preserve. See `helperModeArg`.
     public static let headlessEnvVar = "YOOZ_ENGINE_HEADLESS"
 
-    /// `true` when the engine process was launched with
-    /// `YOOZ_ENGINE_HEADLESS=1`. Used to gate menu-bar/Settings UI, modal
-    /// alerts, and any other host-app-inappropriate behaviour.
+    /// Command-line argument that flips the engine into helper mode. This
+    /// is the reliable channel for `NSWorkspace.openApplication` launches:
+    /// `OpenConfiguration.arguments` IS propagated by LaunchServices, while
+    /// `OpenConfiguration.environment` is not (#117). Host apps should pass
+    /// both `--headless` (argv) and `YOOZ_ENGINE_HEADLESS=1` (env) so the
+    /// helper enters headless mode regardless of which channel survives.
+    public static let helperModeArg = "--headless"
+
+    /// `true` when the engine process should run as a background helper
+    /// (no menu-bar icon, no Settings scene). Helper mode is signaled
+    /// from two channels:
+    ///
+    /// 1. Env var `YOOZ_ENGINE_HEADLESS=1` (preserved for direct shell
+    ///    exec / scripts / test harnesses that set the environment).
+    /// 2. Command-line argument `--headless` (the reliable channel when
+    ///    the process is spawned via `NSWorkspace.openApplication`).
+    ///
+    /// Either source alone is sufficient. Used to gate menu-bar/Settings
+    /// UI, modal alerts, and any other host-app-inappropriate behaviour.
     public static var isHelper: Bool {
-        ProcessInfo.processInfo.environment[headlessEnvVar] == "1"
+        isHelperMode(
+            environment: ProcessInfo.processInfo.environment,
+            arguments: CommandLine.arguments
+        )
+    }
+
+    /// Pure predicate that decides helper mode from a given environment
+    /// and argument vector. Extracted so unit tests can drive both
+    /// channels without mutating process-global state (`CommandLine.arguments`
+    /// is read-only at the language level). The runtime accessor
+    /// `isHelper` simply binds this to the live process. Public so
+    /// callers that already have an environment dictionary in hand (e.g.
+    /// future spawn helpers, integration tests) can reuse the contract.
+    public static func isHelperMode(
+        environment: [String: String],
+        arguments: [String]
+    ) -> Bool {
+        if environment[headlessEnvVar] == "1" {
+            return true
+        }
+        if arguments.contains(helperModeArg) {
+            return true
+        }
+        return false
     }
 
     /// `~/Library/Application Support/YoozEngine/Models` — long-lived model

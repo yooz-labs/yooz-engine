@@ -4,19 +4,27 @@
 // Process entry point. Branches between two app shapes before SwiftUI is
 // loaded:
 //
-// * **Standalone (menu-bar) mode** — when `YOOZ_ENGINE_HEADLESS` is unset,
-//   delegate to `YoozEngineApp.main()`. SwiftUI builds the `MenuBarExtra`
-//   scene, the user sees the brain icon, and `EngineSettingsView` is
-//   reachable via the standard Settings menu.
+// * **Standalone (menu-bar) mode** — when neither the helper env var nor
+//   the helper argv flag is present, delegate to `YoozEngineApp.main()`.
+//   SwiftUI builds the `MenuBarExtra` scene, the user sees the brain
+//   icon, and `EngineSettingsView` is reachable via the standard
+//   Settings menu.
 //
 // * **Helper mode** — when host apps (e.g. yooz-whisper) launch us with
-//   `YOOZ_ENGINE_HEADLESS=1`, do **not** construct any SwiftUI scene.
-//   `MenuBarExtra` registers its `NSStatusItem` as soon as the SwiftUI
-//   scene graph is evaluated, which happens before any
-//   `NSApplicationDelegate` hook fires; flipping
-//   `setActivationPolicy(.prohibited)` afterwards leaves a ghost icon
-//   (issue #42). Bypassing SwiftUI entirely is the only reliable way to
-//   guarantee no menu-bar presence.
+//   `YOOZ_ENGINE_HEADLESS=1` OR pass `--headless` on the command line,
+//   do **not** construct any SwiftUI scene. `MenuBarExtra` registers its
+//   `NSStatusItem` as soon as the SwiftUI scene graph is evaluated,
+//   which happens before any `NSApplicationDelegate` hook fires;
+//   flipping `setActivationPolicy(.prohibited)` afterwards leaves a
+//   ghost icon (issue #42). Bypassing SwiftUI entirely is the only
+//   reliable way to guarantee no menu-bar presence.
+//
+//   Both signals are accepted because `NSWorkspace.OpenConfiguration.environment`
+//   is NOT reliably propagated to nested helper bundles on macOS 26
+//   (#117 / whisper#179), so host apps spawn us via
+//   `OpenConfiguration.arguments = ["--headless"]` instead. The env-var
+//   channel is preserved for shell exec, scripts, and test harnesses.
+//   `EngineConfig.isHelper` consults both sources.
 //
 // In helper mode we drive `NSApplication` directly: install the same
 // `EngineAppDelegate` (so the API server start/stop logic stays shared),
