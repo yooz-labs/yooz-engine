@@ -64,7 +64,7 @@ final class ModulesEndpointTests: XCTestCase {
             // flag, but the wire format is fixed.
             XCTAssertNotNil(
                 BuildVariant(rawValue: decoded.variant),
-                "variant `\(decoded.variant)` should decode as an BuildVariant"
+                "variant `\(decoded.variant)` should decode as a BuildVariant"
             )
 
             // Version matches the engine config.
