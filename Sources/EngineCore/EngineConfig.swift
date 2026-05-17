@@ -184,6 +184,45 @@ public enum EngineConfig {
         return true
     }
 
+    // MARK: - STT streaming cadence
+
+    /// Default minimum interval (seconds) between successive streaming
+    /// partial emissions from `StreamingTranscriber`. Host apps that
+    /// don't override the value in `StreamingTranscriber.init(...)`
+    /// inherit this. `2.0` gives users a partial roughly every two
+    /// seconds during continuous speech — substantially more
+    /// responsive than the prior "process every WS frame" behaviour
+    /// (effective ~5 s when the upstream chunks are large) without
+    /// burning encode cycles on every 64 ms audio buffer.
+    ///
+    /// Override at runtime via `YOOZ_STT_PARTIAL_INTERVAL_SEC`. Values
+    /// below `0.1` are clamped up (preventing accidental no-throttle
+    /// configs that would re-encode on every frame); `0` is honored
+    /// as an explicit "disable throttle" opt-out. Non-numeric values
+    /// fall back to the compiled default.
+    public static let defaultStreamingPartialIntervalSec: Float = 2.0
+
+    /// Resolved STT partial-emission cadence in seconds. Reads
+    /// `YOOZ_STT_PARTIAL_INTERVAL_SEC` via `getenv` (matching the rest
+    /// of this enum's env-var pattern). Returns
+    /// `defaultStreamingPartialIntervalSec` on unset, empty, or
+    /// non-numeric values. `0` is honored as a literal "disable" opt-out;
+    /// positive values below `0.1` are clamped to `0.1` so a typo can't
+    /// accidentally turn the throttle off.
+    public static var streamingPartialIntervalSec: Float {
+        guard let rawPointer = getenv("YOOZ_STT_PARTIAL_INTERVAL_SEC") else {
+            return defaultStreamingPartialIntervalSec
+        }
+        let raw = String(cString: rawPointer)
+        guard let parsed = Float(raw), parsed >= 0 else {
+            return defaultStreamingPartialIntervalSec
+        }
+        if parsed == 0 {
+            return 0
+        }
+        return max(0.1, parsed)
+    }
+
     /// Default KV cache compression mode for new MLX LLM backends.
     ///
     /// Resolution order (highest priority first):
