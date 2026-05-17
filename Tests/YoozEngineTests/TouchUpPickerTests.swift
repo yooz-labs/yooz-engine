@@ -10,6 +10,8 @@
 // into every consumer app.
 
 import XCTest
+import EngineCore
+@testable import LLMModule
 @testable import YoozEngine
 
 final class TouchUpPickerTests: XCTestCase {

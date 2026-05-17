@@ -3,6 +3,8 @@
 import Foundation
 import XCTest
 
+import EngineCore
+@testable import STTModule
 @testable import YoozEngine
 
 /// Phase 5 — end-to-end smoke test for `/v1/stt/batch` with the

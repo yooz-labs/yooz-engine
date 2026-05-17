@@ -3,6 +3,7 @@
 import Foundation
 import XCTest
 
+import EngineCore
 @testable import YoozEngine
 
 /// Phase 8 — `/v1/modules` endpoint + the `detail` field on
@@ -62,8 +63,8 @@ final class ModulesEndpointTests: XCTestCase {
             // pin to "full" because tests may run under any variant
             // flag, but the wire format is fixed.
             XCTAssertNotNil(
-                EngineVariant(rawValue: decoded.variant),
-                "variant `\(decoded.variant)` should decode as an EngineVariant"
+                BuildVariant(rawValue: decoded.variant),
+                "variant `\(decoded.variant)` should decode as an BuildVariant"
             )
 
             // Version matches the engine config.

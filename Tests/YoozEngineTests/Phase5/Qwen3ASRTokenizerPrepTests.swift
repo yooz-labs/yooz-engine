@@ -3,6 +3,7 @@
 import Foundation
 import XCTest
 
+@testable import STTModule
 @testable import YoozEngine
 
 /// Phase 5 — `Qwen3ASRTokenizerPrep` idempotency + missing-input

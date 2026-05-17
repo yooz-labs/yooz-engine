@@ -22,6 +22,8 @@
 // rebase that drops Phase 2 quality numbers without needing the model.
 
 import XCTest
+import EngineCore
+@testable import LLMModule
 @testable import YoozEngine
 
 final class KVCompressionTests: XCTestCase {

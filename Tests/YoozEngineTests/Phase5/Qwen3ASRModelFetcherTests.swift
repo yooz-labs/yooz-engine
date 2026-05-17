@@ -4,6 +4,7 @@ import CryptoKit
 import Foundation
 import XCTest
 
+@testable import STTModule
 @testable import YoozEngine
 
 /// Phase 5 — `Qwen3ASRModelFetcher` against an injected

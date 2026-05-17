@@ -82,10 +82,11 @@ public actor TouchUpEngine {
 
     // MARK: - Initialization
 
-    /// Private to preserve the `.shared` singleton contract used across the
-    /// engine. Tests that need to inspect a fresh instance should do so via
-    /// the shared actor.
-    private init(bundleIdentifier: String = "live.yooz.engine") {
+    /// Internal init for `.shared` plus `@testable` access from
+    /// `LLMModule` consumers. Production code must go through `.shared` so
+    /// the singleton contract holds; tests that need a fresh instance
+    /// construct one directly under `@testable import LLMModule`.
+    init(bundleIdentifier: String = "live.yooz.engine") {
         self.bundleIdentifier = bundleIdentifier
     }
 

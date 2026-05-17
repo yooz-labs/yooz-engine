@@ -384,10 +384,24 @@ targets:
       # Explicit module deps let tests `import` modules directly instead of
       # relying on transitive framework search paths from the app target.
       # ModulesEndpointTests uses real singletons (GrammarEngine, VADEngine)
-      # without mocks, per yooz-engine policy.
+      # without mocks, per yooz-engine policy. STTModule + LLMModule +
+      # AppleSTTModule are required for Phase5/Phase6/Qwen3ASR tests that
+      # reference STT-side types (STTBackendID, STTBackendMetrics,
+      # Qwen3ASRPipeline, PreviewModelFetcherAdapter, etc.) which live
+      # outside the YoozEngine app target's source list.
       - target: EngineCore
       - target: GrammarModule
       - target: VADModule
+      - target: STTModule
+      - target: LLMModule
+      - target: AppleSTTModule
+      # Tests link Tokenizers + HuggingFace directly because the
+      # Qwen3ASR/Phase5 suites reach into Tokenizer + Hub APIs that the
+      # framework targets re-export only transitively.
+      - package: swift-transformers
+        product: Tokenizers
+      - package: swift-huggingface
+        product: HuggingFace
 
   EngineCoreTests:
     type: bundle.unit-test

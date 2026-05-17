@@ -12,6 +12,7 @@ import Qwen3ASRMelFrontend
 #endif
 
 #if canImport(YoozEngine)
+@testable import STTModule
 @testable import YoozEngine
 #elseif canImport(Qwen3ASR)
 @testable import Qwen3ASR
