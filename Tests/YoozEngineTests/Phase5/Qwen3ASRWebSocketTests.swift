@@ -3,6 +3,8 @@
 import Foundation
 import XCTest
 
+import EngineCore
+@testable import STTModule
 @testable import YoozEngine
 
 /// Phase 5 placeholder — under Phase 5 this file asserted that the WS

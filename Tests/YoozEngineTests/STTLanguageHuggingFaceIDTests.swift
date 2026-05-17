@@ -9,6 +9,7 @@
 // `/v1/stt/load`; these tests turn that into a build-time failure.
 
 import XCTest
+@testable import STTModule
 @testable import YoozEngine
 
 final class STTLanguageHuggingFaceIDTests: XCTestCase {

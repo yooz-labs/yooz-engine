@@ -3,6 +3,8 @@
 import Foundation
 import XCTest
 
+import EngineCore
+@testable import STTModule
 @testable import YoozEngine
 
 /// Phase 5 — `/v1/stt/engine` GET + POST and qwen3-aware routing on

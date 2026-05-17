@@ -3,6 +3,7 @@
 import Foundation
 import XCTest
 
+import EngineCore
 @testable import YoozEngine
 
 /// Phase 8 — variant-aware module eager-load (issue #43). The loader
@@ -161,17 +162,17 @@ final class ModuleEagerLoaderTests: XCTestCase {
 
     // MARK: - Variant flag table
 
-    func testEngineVariantIncludesGates() {
-        XCTAssertTrue(EngineVariant.full.includesMLXSTT)
-        XCTAssertTrue(EngineVariant.whisper.includesMLXSTT)
-        XCTAssertFalse(EngineVariant.lite.includesMLXSTT)
+    func testBuildVariantIncludesGates() {
+        XCTAssertTrue(BuildVariant.full.includesMLXSTT)
+        XCTAssertTrue(BuildVariant.whisper.includesMLXSTT)
+        XCTAssertFalse(BuildVariant.lite.includesMLXSTT)
 
-        XCTAssertTrue(EngineVariant.full.includesVAD)
-        XCTAssertFalse(EngineVariant.whisper.includesVAD)
-        XCTAssertFalse(EngineVariant.lite.includesVAD)
+        XCTAssertTrue(BuildVariant.full.includesVAD)
+        XCTAssertFalse(BuildVariant.whisper.includesVAD)
+        XCTAssertFalse(BuildVariant.lite.includesVAD)
 
         // LLM + Grammar are universal today.
-        for variant: EngineVariant in [.full, .whisper, .lite] {
+        for variant: BuildVariant in [.full, .whisper, .lite] {
             XCTAssertTrue(variant.includesLLM, "\(variant) should include LLM")
             XCTAssertTrue(
                 variant.includesGrammar, "\(variant) should include Grammar"
@@ -226,7 +227,7 @@ final class ModuleEagerLoaderTests: XCTestCase {
         let variant = EngineConfig.variant
         XCTAssertTrue(
             [.full, .whisper, .lite].contains(variant),
-            "EngineConfig.variant should be a known EngineVariant; got \(variant)"
+            "EngineConfig.variant should be a known BuildVariant; got \(variant)"
         )
     }
 

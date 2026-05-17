@@ -12,6 +12,7 @@
 // These tests pin the contract.
 
 import XCTest
+import EngineCore
 @testable import YoozEngine
 
 final class EngineConfigHelperModeTests: XCTestCase {

@@ -3,6 +3,7 @@
 import Foundation
 import XCTest
 
+@testable import STTModule
 @testable import YoozEngine
 
 /// Phase 6 — exhaustive classification tests for `HardwareClass`.

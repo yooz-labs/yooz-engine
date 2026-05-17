@@ -3,6 +3,8 @@
 import Foundation
 import XCTest
 
+import EngineCore
+@testable import STTModule
 @testable import YoozEngine
 
 /// WS lifecycle coverage that does NOT require the live Qwen3-ASR

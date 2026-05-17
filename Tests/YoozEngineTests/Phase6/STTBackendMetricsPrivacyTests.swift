@@ -3,6 +3,8 @@
 import Foundation
 import XCTest
 
+import EngineCore
+@testable import STTModule
 @testable import YoozEngine
 
 /// Phase 6 — privacy invariants for `STTBackendMetrics`.
