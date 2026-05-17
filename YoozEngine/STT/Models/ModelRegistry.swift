@@ -1,5 +1,6 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 import MLX
 
@@ -212,7 +213,10 @@ final class ParakeetModelAdapter: STTModel, @unchecked Sendable {
     }
 
     func createStreamingSession() -> STTStreamingSession {
-        let transcriber = StreamingTranscriber(model: underlyingModel)
+        let transcriber = StreamingTranscriber(
+            model: underlyingModel,
+            partialEmissionInterval: EngineConfig.streamingPartialIntervalSec
+        )
         return StreamingSessionAdapter(transcriber: transcriber)
     }
 }

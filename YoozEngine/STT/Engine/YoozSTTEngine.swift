@@ -324,6 +324,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         streamingContext = StreamingTranscriber(
             model: model,
+            partialEmissionInterval: EngineConfig.streamingPartialIntervalSec,
             preprocessConfig: config
         )
 
@@ -421,7 +422,10 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         // Auto-start stream if needed
         if streamingContext == nil {
             NSLog("YoozSTTEngine: Auto-starting stream")
-            streamingContext = StreamingTranscriber(model: model!)
+            streamingContext = StreamingTranscriber(
+                model: model!,
+                partialEmissionInterval: EngineConfig.streamingPartialIntervalSec
+            )
             DispatchQueue.main.async {
                 self.isStreaming = true
             }
@@ -525,6 +529,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         return StreamingTranscriber(
             model: model,
+            partialEmissionInterval: EngineConfig.streamingPartialIntervalSec,
             preprocessConfig: config
         )
     }
