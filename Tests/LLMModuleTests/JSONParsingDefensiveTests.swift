@@ -142,6 +142,38 @@ final class JSONParsingDefensiveTests: XCTestCase {
         XCTAssertTrue(success)
     }
 
+    func testParseProofreadHandlesNestedJSONObjects() {
+        // ProofreadResponse only decodes the top-level `result`, but the
+        // candidate scanner must still walk past any nested object/array
+        // braces (e.g. model occasionally adds a `meta` sub-object) without
+        // closing the outer candidate early.
+        let response = "{\"result\": \"Hello.\", \"meta\": {\"nested\": true}}"
+        let (text, success) = parseProofreadResponse(response, fallback: "fallback")
+        XCTAssertEqual(text, "Hello.")
+        XCTAssertTrue(success)
+    }
+
+    func testParseProofreadHandlesEscapedQuotesInResult() {
+        // Backslash-escaped quotes inside the result string must not exit
+        // the in-string state, otherwise the next `{` or `}` in the prose
+        // would be counted toward brace depth.
+        let response = "{\"result\": \"he said \\\"hi\\\" today.\"}"
+        let (text, success) = parseProofreadResponse(response, fallback: "fallback")
+        XCTAssertEqual(text, "he said \"hi\" today.")
+        XCTAssertTrue(success)
+    }
+
+    func testParseProofreadLeavesFenceUntouchedWhenOpenerHasNoNewline() {
+        // Opening ``` with no newline before the body is treated as a
+        // non-paired fence; the original input is returned to
+        // `extractJSONCandidates`, which still recovers the object via
+        // balanced-brace scanning.
+        let response = "```{\"result\": \"Hello.\"}```"
+        let (text, success) = parseProofreadResponse(response, fallback: "fallback")
+        XCTAssertEqual(text, "Hello.")
+        XCTAssertTrue(success)
+    }
+
     // MARK: - Validate path coverage
 
     func testParseValidateStripsMarkdownFence() {

@@ -131,10 +131,15 @@ private func isPlaceholderEcho(_ result: String) -> Bool {
 
 /// Strip a single leading and trailing markdown code fence (```json ... ```
 /// or ``` ... ```) if both are present. Models occasionally wrap their JSON
-/// output in a fenced block on long inputs (engine #134); the bare-`{`
-/// heuristic in `extractJSONCandidates` then trips on the backticks if extra
-/// prose lives outside the fence. If no fully-paired fence is found the
-/// original string is returned unchanged.
+/// output in a fenced block on long inputs (engine #134). Without stripping,
+/// the direct `JSONDecoder` decode path fails because of the backticks, and
+/// `extractJSONCandidates` is forced to scan past fence noise to find the
+/// object. Stripping the fence first keeps the direct-decode path working
+/// on the well-formed case and narrows the surface that the candidate
+/// scanner has to recover from. If no fully-paired fence is found (e.g. an
+/// opening fence with no newline before the body, or only one ``` in the
+/// string) the original input is returned unchanged so downstream parsing
+/// is unaffected.
 private func stripMarkdownFence(_ text: String) -> String {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmed.hasPrefix("```") else { return text }
