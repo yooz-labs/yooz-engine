@@ -35,9 +35,18 @@ public enum EngineConfig {
     public static let portEnvVar = "YOOZ_ENGINE_PORT"
 
     public static var port: Int {
-        guard let raw = ProcessInfo.processInfo.environment[portEnvVar],
-              let parsed = Int(raw),
-              (1...65535).contains(parsed) else {
+        // Use `getenv()` rather than `ProcessInfo.processInfo.environment`
+        // because the latter returns a one-shot snapshot of the process
+        // environment and does not reflect later `setenv()` calls. Tests
+        // bump `YOOZ_ENGINE_PORT` between cases to avoid the bind-race
+        // documented in engine#122; a snapshot would silently freeze the
+        // value at the first read and every "fresh" port assignment
+        // would be ignored.
+        guard let rawPointer = getenv(portEnvVar) else {
+            return defaultPort
+        }
+        let raw = String(cString: rawPointer)
+        guard let parsed = Int(raw), (1...65535).contains(parsed) else {
             return defaultPort
         }
         return parsed
