@@ -33,13 +33,18 @@ import VADModule
 /// JSON cost, but that's a coordinated protocol change deferred to a
 /// later epic. For now we raise the ceiling.
 struct YoozEngineRequestContext: RequestContext {
+    /// Per-request upload ceiling, in bytes. Exposed as a constant so
+    /// tests and clients can reason about the limit without hard-coding
+    /// the number. See the type doc for the audio-duration rationale.
+    static let maxUploadBytes: Int = 64 * 1024 * 1024
+
     var coreContext: CoreRequestContextStorage
 
     init(source: ApplicationRequestContextSource) {
         self.coreContext = .init(source: source)
     }
 
-    var maxUploadSize: Int { 64 * 1024 * 1024 }
+    var maxUploadSize: Int { Self.maxUploadBytes }
 }
 
 @MainActor
