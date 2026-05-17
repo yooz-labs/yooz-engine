@@ -157,6 +157,24 @@ public actor TouchUpEngine {
         }
     }
 
+    /// Per-recording-session reset (engine issue #114). Drops cached LLM
+    /// state on every backend the engine owns so the next recording starts
+    /// cold. Idempotent — fans out even to backends whose models aren't
+    /// loaded yet (their `resetForNewSession()` is a cheap no-op then). Does
+    /// NOT unload weights; this is a per-recording boundary, not a teardown.
+    ///
+    /// `foundationModelsBackend` already creates a fresh `LanguageModelSession`
+    /// for each call (see comment on the property), so it has no per-session
+    /// state to drop here.
+    public func resetForNewSession() async {
+        if let light = lightModel {
+            await light.resetForNewSession()
+        }
+        if let quality = qualityModel {
+            await quality.resetForNewSession()
+        }
+    }
+
     /// Unload all models from memory.
     public func unload() async {
         if let light = lightModel {

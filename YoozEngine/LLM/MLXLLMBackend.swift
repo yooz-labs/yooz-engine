@@ -653,3 +653,16 @@ extension MLXLLMBackend {
         )
     }
 }
+
+// MARK: - SessionResettable
+
+/// Per-recording-session reset boundary (engine issue #114). Drops the
+/// cached system-prompt KV state so the next recording starts cold,
+/// preventing recording N's context from leaking into recording N+1's
+/// touch-up output. Idempotent and weight-preserving — `unload()` is a
+/// separate operation that throws away the model container.
+extension MLXLLMBackend: SessionResettable {
+    func resetForNewSession() async {
+        clearSession()
+    }
+}

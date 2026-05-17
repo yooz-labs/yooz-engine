@@ -11,7 +11,7 @@ import Foundation
 /// The registered name is `apple_stt`, distinct from the MLX `stt` module so
 /// both can coexist in full/whisper variants and be routed by engine type in
 /// `/v1/stt/engine`. Lite variants register only this module.
-extension AppleSTTEngine: AIModule {
+extension AppleSTTEngine: AIModule, SessionResettable {
     public static var name: String { "apple_stt" }
 
     /// Detailed status for `/v1/modules`.

@@ -964,6 +964,44 @@ final class APIServer: ObservableObject {
             )
         }
 
+        // Session boundary (engine issue #114).
+        //
+        // Begin fires at recording start (whisper's `AppDelegate.startRecording`,
+        // in parallel with audio capture). End fires after paste completes
+        // (`AppDelegate.stopRecording`). Both routes are idempotent and both
+        // unconditionally drop per-recording state — KV caches, streaming
+        // buffers, anything tied to "the previous recording" — by fanning out
+        // `resetForNewSession()` to every `SessionResettable` module in the
+        // registry. Modules opt in by conforming; new modules ride this
+        // boundary with zero new endpoints or client wiring.
+        //
+        // Resets are cheap and weight-preserving by contract; they MUST NOT
+        // unload models. See `EngineCore/SessionResettable.swift`.
+        router.post("/v1/session/begin") { [self] _, _ in
+            let sessionId = UUID().uuidString
+            let ts = ISO8601DateFormatter().string(from: Date())
+            let resettables = await ModuleRegistry.shared.allResettable()
+            for module in resettables {
+                await module.resetForNewSession()
+            }
+            logger.debug(
+                "Session begin: id=\(sessionId) fanout=\(resettables.count)"
+            )
+            return try jsonResponse(SessionBeginResponse(
+                sessionId: sessionId,
+                ts: ts
+            ))
+        }
+
+        router.post("/v1/session/end") { [self] _, _ in
+            let resettables = await ModuleRegistry.shared.allResettable()
+            for module in resettables {
+                await module.resetForNewSession()
+            }
+            logger.debug("Session end: fanout=\(resettables.count)")
+            return Response(status: .noContent)
+        }
+
         // Models
         router.get("/v1/models") { _, _ in
             var models: [ModelInfo] = []

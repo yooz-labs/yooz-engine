@@ -43,4 +43,18 @@ public actor ModuleRegistry {
     public func all() -> [any AIModule] {
         modules.values.sorted { type(of: $0).name < type(of: $1).name }
     }
+
+    /// All registered modules that participate in the per-recording-session
+    /// reset boundary (engine issue #114). Sorted by module name for stable
+    /// fan-out order in `/v1/session/begin` and `/v1/session/end`.
+    ///
+    /// A module opts in by conforming to `SessionResettable`; the registry
+    /// is the single source of truth for which modules are currently active,
+    /// so the session-reset fan-out automatically picks up new modules with
+    /// zero wiring per model.
+    public func allResettable() -> [any SessionResettable] {
+        modules.values
+            .sorted { type(of: $0).name < type(of: $1).name }
+            .compactMap { $0 as? any SessionResettable }
+    }
 }
