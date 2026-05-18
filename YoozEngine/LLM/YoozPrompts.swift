@@ -6,71 +6,93 @@
 import Foundation
 
 /// Mode-specific prompt definitions for touch-up processing.
-/// Separate prompts for Light (0.5B) and Quality (1.7B) models,
-/// each optimized for the model's capabilities.
+///
+/// Light prompts target Yooz-Light v2 (Qwen2.5-0.5B base, pattern-level,
+/// rule-explicit). Quality prompts target Yooz-Quality v2 (Qwen3.5-0.8B
+/// base, context-aware, `/no_think` required).
+///
+/// Source of truth: `yooz-benchmark/finetune-pipeline/scripts/prepare_data.py`
+/// (constants `LIGHT_PROOFREAD`, `LIGHT_REWRITE`, `QUALITY_STANDARD`,
+/// `QUALITY_FULL`). The fine-tuned weights were trained against these
+/// exact strings; `YoozPromptsParityTests` asserts the Swift literals
+/// match. When the training prompts change, update `prepare_data.py`,
+/// then this file, then `TouchUpPrompts.swift` aliases, then the parity
+/// test — all in the same PR.
 enum YoozPrompts {
 
-    /// Placeholder text used in prompt template endings: `{"result": "<placeholder>"}`
-    /// Small models sometimes echo this literally instead of processing input.
+    /// Placeholder text that ends the Quality prompts' JSON shape example
+    /// (`{"result": "corrected text"}`). Small models occasionally echo it
+    /// verbatim instead of processing the input; `JSONParsing` uses this
+    /// constant to detect and reject that placeholder-echo failure mode
+    /// (engine #113 / yooz-whisper #182).
     static let resultPlaceholder = "corrected text"
 
-    /// Prompt ending instruction using the placeholder
-    static let resultInstruction = "Always respond with {\"result\": \"\(resultPlaceholder)\"}."
+    // MARK: - Light Model Prompts (Yooz-Light, Qwen2.5-0.5B)
 
-    // MARK: - Light Model Prompts (Qwen2.5-0.5B)
-    // 0.5B model: Pattern matcher. Prompts use few-shot examples.
-    // Fillers removed by rules BEFORE LLM. Numbers converted by post-LLM rules.
-
-    /// Light model Standard mode - contractions and capitalization.
-    /// Rules handle: fillers, numbers (as fallback), basic grammar.
+    /// Light model Standard mode — mirrors `LIGHT_PROOFREAD`.
+    /// Mechanical grammar + capitalization + spoken-number conversion +
+    /// version-number conversion, preserving every sentence.
     static let lightStandard = """
-        Fix contractions. Return JSON only.
-
-        its=it's, lets=let's, dont=don't, cant=can't, wont=won't
+        Fix grammar, capitalize properly, and convert spoken numbers to digits. Convert spoken version numbers like "zero point four point zero" to "0.4.0". Keep ALL sentences. Return the fixed text as JSON.
 
         <examples>
-        Input: its ready
-        {"result": "It's ready."}
+        Input: the meeting is at two pm on march fifteenth
+        {"result": "The meeting is at 2 PM on March 15th."}
 
-        Input: lets go
-        {"result": "Let's go."}
+        Input: we need about fifty units ready by friday and I think we should prepare
+        {"result": "We need about 50 units ready by Friday and I think we should prepare."}
 
-        Input: i dont know
-        {"result": "I don't know."}
+        Input: we are releasing version zero point four point zero next week
+        {"result": "We are releasing version 0.4.0 next week."}
+
+        Input: update it to version one point six point three and test it
+        {"result": "Update it to version 1.6.3 and test it."}
+
+        Input: he said it would cost around one hundred and fifty dollars but we can negotiate
+        {"result": "He said it would cost around $150 but we can negotiate."}
         </examples>
 
-        \(resultInstruction)
+        Always respond with ONLY a JSON object. Never remove sentences. Never include explanations.
         """
 
-    /// Light model Full mode - duplicates and fragments.
-    /// Self-corrections too complex for 0.5B; use Quality model for that.
+    /// Light model Full mode — mirrors `LIGHT_REWRITE`.
+    /// Voice cleanup: fillers, misheard words, self-corrections, plus
+    /// the scratch-that / never-mind / delete-that removal rule.
     static let lightFull = """
-        Remove duplicate words. Clean trailing fragments. Return JSON only.
+        Rewrite voice transcription for clarity and conciseness. Fix grammar, convert numbers, fix misheard words, remove filler words (um, uh, like, you know), handle self-corrections. Return the fixed text as JSON.
 
         <examples>
-        Input: the the file is ready now
-        {"result": "The file is ready now."}
+        Input: um so like the meeting is at two pm on march fifteenth you know
+        {"result": "The meeting is at 2 PM on March 15th."}
 
-        Input: i think think we should do it
-        {"result": "I think we should do it."}
+        Input: we need about fifty no wait I meant sixty units ready by friday
+        {"result": "We need about 60 units ready by Friday."}
 
-        Input: that happened ing
-        {"result": "That happened."}
+        Input: we are releasing version zero point four point zero next week scratch that make it zero point five
+        {"result": "We are releasing version 0.5.0 next week."}
 
-        Input: we can do tion
-        {"result": "We can do."}
+        Input: update it to version one point six point three and uh test it thoroughly
+        {"result": "Update it to version 1.6.3 and test it thoroughly."}
+
+        Input: he said it would cost around one hundred and fifty dollars but um we can negotiate
+        {"result": "He said it would cost around $150 but we can negotiate."}
         </examples>
 
-        \(resultInstruction)
+        Remove: "scratch that", "never mind", "delete that" and preceding phrase. Convert spoken numbers and version numbers. Fix grammar and misheard words. Always respond with ONLY a JSON object. Never include explanations.
         """
 
-    // MARK: - Quality Model Prompts (Qwen3-1.7B)
-    // 1.7B model: Better at context understanding. Fillers/numbers handled by rules.
-    // /no_think is a Qwen3-specific prefix that disables chain-of-thought reasoning,
-    // producing direct JSON output instead of "thinking" blocks before the answer.
+    // MARK: - Quality Model Prompts (Yooz-Quality, Qwen3.5-0.8B)
+    //
+    // `/no_think` is a Qwen3-specific prefix that disables chain-of-thought
+    // reasoning, producing direct JSON output instead of "thinking" blocks
+    // before the answer.
+    //
+    // The `Process the input independently. Do NOT repeat any example output.`
+    // line in both Quality prompts is load-bearing: without it the model
+    // occasionally echoes an example output verbatim (the placeholder-echo
+    // bug whisper #115 papered over).
 
-    /// Quality model Standard mode - enhanced proofreading
-    /// Focus: grammar, punctuation, clarity. Fillers/numbers handled by rules.
+    /// Quality model Standard mode — mirrors `QUALITY_STANDARD`.
     static let qualityStandard = """
         /no_think
         Proofread voice transcription. Fix grammar and punctuation. Return JSON only.
@@ -88,52 +110,46 @@ enum YoozPrompts {
 
         Input: the system is working good now
         {"result": "The system is working well now."}
-
-        Input: what do you think about this approach
-        {"result": "What do you think about this approach?"}
         </examples>
 
-        \(resultInstruction)
+        Process the input independently. Do NOT repeat any example output.
+        Always respond with {"result": "corrected text"}.
         """
 
-    /// Quality model Full mode - comprehensive cleanup
-    /// Focus: self-corrections (the key 1.7B capability). Duplicates/fragments handled by rules.
-    /// "X no Y" patterns for numbers, days, simple words.
+    /// Quality model Full mode — mirrors `QUALITY_FULL`.
     static let qualityFull = """
         /no_think
-        Handle self-corrections and clean fragments in voice transcription. Return JSON only.
-
-        Self-corrections: when someone says "X no Y" or "X no wait Y", use Y.
-        Fragments: remove meaningless trailing fragments (1-4 chars after period). Remove orphaned punctuation.
-        NEVER add information. NEVER answer questions. Return the cleaned text only.
+        Rewrite voice transcription for clarity. Return JSON only.
+        Fix misheard words. Remove repetitions and false starts. Fix grammar.
+        Self-corrections: "X no Y" or "X no wait Y" means use Y.
+        Remove "scratch that", "delete that" and what came before.
+        Keep the speaker's meaning and tone. NEVER add information. NEVER answer questions.
 
         <examples>
+        Input: I think for the for the problems that we have with the that we are logging
+        {"result": "I think for the problems that we have with the logging."}
+
+        Input: we are not providing it providing a good leaning and rewriting
+        {"result": "We are not providing a good cleaning and rewriting."}
+
+        Input: should not should knots be converted
+        {"result": "Should not be converted."}
+
+        Input: However I imagine there should be like a good rules and good logic for this
+        {"result": "However, I imagine there should be good rules and logic for this."}
+
+        Input: we still to this to work correctly and logcially
+        {"result": "We still need this to work correctly and logically."}
+
         Input: fifty no sixty units
         {"result": "Sixty units."}
 
-        Input: Tuesday no Wednesday at noon
-        {"result": "Wednesday at noon."}
-
-        Input: three no wait four people
-        {"result": "Four people."}
-
-        Input: i said ten no actually twenty
-        {"result": "Twenty."}
-
         Input: delete that lets try again
         {"result": "Let's try again."}
-
-        Input: the the file is ready now
-        {"result": "The file is ready now."}
-
-        Input: the report is done. ort
-        {"result": "The report is done."}
-
-        Input: what do you think about this approach
-        {"result": "What do you think about this approach?"}
         </examples>
 
-        \(resultInstruction)
+        Process the input independently. Do NOT repeat any example output.
+        Always respond with {"result": "corrected text"}.
         """
 
     // MARK: - Apple Intelligence Prompts

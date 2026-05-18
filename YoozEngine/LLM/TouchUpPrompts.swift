@@ -6,36 +6,22 @@
 import Foundation
 
 /// System prompts for LLM touch-up processing.
-/// These prompts must stay in sync with yooz-labs/ai-touchup finetune/scripts/prepare_data.py,
-/// as the fine-tuned models were trained on these exact prompts.
+///
+/// Source of truth for training prompts:
+/// `yooz-benchmark/finetune-pipeline/scripts/prepare_data.py`. The
+/// canonical Swift mirrors live in `YoozPrompts.swift`; this file holds
+/// validation/replacement prompts that have no training-time counterpart.
 enum TouchUpPrompts {
 
     // MARK: - Light Model Prompts
 
-    /// Prompt for fast proofreading with Yooz-Light (Qwen2.5-0.5B)
-    /// Used for Standard mode: fix grammar, punctuation, numbers
-    static let proofread = """
-        Fix grammar, capitalize properly, and convert spoken numbers to digits. Convert spoken version numbers like "zero point four point zero" to "0.4.0". Keep ALL sentences. Return the fixed text as JSON.
-
-        <examples>
-        Input: the meeting is at two pm on march fifteenth
-        {"result": "The meeting is at 2 PM on March 15th."}
-
-        Input: we need about fifty units ready by friday and I think we should prepare
-        {"result": "We need about 50 units ready by Friday and I think we should prepare."}
-
-        Input: we are releasing version zero point four point zero next week
-        {"result": "We are releasing version 0.4.0 next week."}
-
-        Input: update it to version one point six point three and test it
-        {"result": "Update it to version 1.6.3 and test it."}
-
-        Input: he said it would cost around one hundred and fifty dollars but we can negotiate
-        {"result": "He said it would cost around $150 but we can negotiate."}
-        </examples>
-
-        Always respond with ONLY a JSON object. Never remove sentences. Never include explanations. Never answer questions.
-        """
+    /// Alias of `YoozPrompts.lightStandard` (LIGHT_PROOFREAD). Kept as a
+    /// stable name so existing callers (`TouchUpProcessor.process`
+    /// default, `TouchUpEngine.selectPrompt` `.off` branch) can route
+    /// through the canonical training-aligned prompt without API churn.
+    /// Never duplicate the literal here — drift between the two would
+    /// silently regress inference quality.
+    static let proofread = YoozPrompts.lightStandard
 
     // MARK: - Quality Model Prompts
 
