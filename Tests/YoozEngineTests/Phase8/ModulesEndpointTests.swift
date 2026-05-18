@@ -15,6 +15,11 @@ import EngineCore
 /// process inherited (the `shared` actor from prior tests in the same
 /// xctest invocation may have run kickoff). The assertions therefore
 /// only check wire shape, not specific module states.
+///
+/// Wire shape is the canonical `EngineCore.ModulesResponse`
+/// (`engineVersion` / `buildVariant` / `modules: [ModuleManifest]`),
+/// which yooz-whisper's About panel already consumes
+/// (`AboutEngineInfoModel.transform`). See yooz-engine#133.
 final class ModulesEndpointTests: XCTestCase {
 
     @MainActor
@@ -58,28 +63,45 @@ final class ModulesEndpointTests: XCTestCase {
             XCTAssertEqual(http.statusCode, 200)
 
             let decoded = try JSONDecoder().decode(
-                ModulesResponseV1.self, from: body
+                ModulesResponse.self, from: body
             )
 
-            // Variant must be one of the known rawValues. We can't
+            // buildVariant must decode as a known BuildVariant. We can't
             // pin to "full" because tests may run under any variant
             // flag, but the wire format is fixed.
             XCTAssertNotNil(
-                BuildVariant(rawValue: decoded.variant),
-                "variant `\(decoded.variant)` should decode as a BuildVariant"
+                BuildVariant(rawValue: decoded.buildVariant),
+                "buildVariant `\(decoded.buildVariant)` should decode as a BuildVariant"
             )
 
-            // Version matches the engine config.
-            XCTAssertEqual(decoded.version, EngineConfig.version)
-
-            // Every ModuleID should appear in the map (the loader
-            // seeds them all in `init`). TTS is always present, even
-            // though it's `unavailable` until Phase 7.
-            for id in ModuleID.allCases {
-                XCTAssertNotNil(
-                    decoded.modules[id.rawValue],
-                    "module `\(id.rawValue)` should appear in /v1/modules response"
+            // engineVersion matches the engine config under the unified-
+            // versioning scheme (each manifest's `version` is identical).
+            XCTAssertEqual(decoded.engineVersion, EngineConfig.version)
+            for manifest in decoded.modules {
+                XCTAssertEqual(
+                    manifest.version, EngineConfig.version,
+                    "module `\(manifest.name)` version must match engineVersion"
                 )
+            }
+
+            // The registry populates modules variant-aware; we don't
+            // assert a specific set here (variant gating is covered by
+            // ModuleEagerLoaderTests + ModuleNotBundledTests). Just
+            // verify the wire shape: names are non-empty and sorted.
+            //
+            // Sort comes from `ModuleRegistry.all()` (which sorts by
+            // `type(of:).name`); the encoder's `.sortedKeys` is a
+            // separate concern that sorts JSON object keys, not array
+            // elements. Both invariants must hold for the response to
+            // be byte-deterministic, but this assertion only covers
+            // the array-order half.
+            let names = decoded.modules.map(\.name)
+            XCTAssertEqual(
+                names, names.sorted(),
+                "ModuleRegistry.all() must return modules sorted by name"
+            )
+            for name in names {
+                XCTAssertFalse(name.isEmpty, "module name should not be empty")
             }
         }
     }
@@ -102,6 +124,19 @@ final class ModulesEndpointTests: XCTestCase {
                     "module `\(id.rawValue)` should appear in /v1/health.modules.detail"
                 )
             }
+
+            // TTS isn't shipped on any variant today (Phase 7 work) but
+            // `ModuleEagerLoader` unconditionally seeds it as
+            // `.unavailable` so thin clients render a neutral tag rather
+            // than a red dot. Asserting the exact state here (not just
+            // presence) is the contract the whisper About panel reads
+            // through /v1/health; /v1/modules drops TTS entirely since
+            // it isn't registered with `ModuleRegistry`. See
+            // yooz-engine#133.
+            XCTAssertEqual(
+                decoded.modules.detail["tts"]?.state, .unavailable,
+                "TTS must report `.unavailable` under /v1/health until Phase 7 ships"
+            )
 
             // The legacy bool fields should agree with the detail
             // map: bool=true iff state==ready.
@@ -131,18 +166,24 @@ final class ModulesEndpointTests: XCTestCase {
     }
 
     @MainActor
-    func testTTSAlwaysUnavailable() async throws {
-        // TTS isn't shipped on any variant today (Phase 7 work). The
-        // wire shape MUST consistently report `unavailable` so thin
-        // clients don't render TTS as red on any variant.
+    func testTTSNotSurfacedUntilPhase7() async throws {
+        // TTS isn't shipped on any variant today (Phase 7 work). It is
+        // absent from `ModuleRegistry` (`EngineAppDelegate.registerModules`
+        // skips it) but `ModuleEagerLoader` still seeds it as
+        // `.unavailable` so `/v1/health.modules.detail` carries a row.
+        // The two endpoints therefore disagree on TTS by design:
+        // `/v1/modules` drops it (this test); `/v1/health.modules.detail`
+        // shows it as `.unavailable` (asserted in
+        // `testHealthDetailFieldShape`). Thin clients render absent
+        // modules as "not available" rather than a red dot.
         try await withServer { _ in
             let (_, body) = try await get("/v1/modules")
             let decoded = try JSONDecoder().decode(
-                ModulesResponseV1.self, from: body
+                ModulesResponse.self, from: body
             )
-            XCTAssertEqual(
-                decoded.modules["tts"]?.state, .unavailable,
-                "TTS should always be `unavailable` until Phase 7 ships"
+            XCTAssertFalse(
+                decoded.modules.contains(where: { $0.name == "tts" }),
+                "TTS must not appear in /v1/modules until Phase 7 ships"
             )
         }
     }
