@@ -15,6 +15,11 @@ import EngineCore
 /// process inherited (the `shared` actor from prior tests in the same
 /// xctest invocation may have run kickoff). The assertions therefore
 /// only check wire shape, not specific module states.
+///
+/// Wire shape is the canonical `EngineCore.ModulesResponse`
+/// (`engineVersion` / `buildVariant` / `modules: [ModuleManifest]`),
+/// which yooz-whisper's About panel already consumes
+/// (`AboutEngineInfoModel.transform`). See yooz-engine#133.
 final class ModulesEndpointTests: XCTestCase {
 
     @MainActor
@@ -58,28 +63,38 @@ final class ModulesEndpointTests: XCTestCase {
             XCTAssertEqual(http.statusCode, 200)
 
             let decoded = try JSONDecoder().decode(
-                ModulesResponseV1.self, from: body
+                ModulesResponse.self, from: body
             )
 
-            // Variant must be one of the known rawValues. We can't
+            // buildVariant must decode as a known BuildVariant. We can't
             // pin to "full" because tests may run under any variant
             // flag, but the wire format is fixed.
             XCTAssertNotNil(
-                BuildVariant(rawValue: decoded.variant),
-                "variant `\(decoded.variant)` should decode as a BuildVariant"
+                BuildVariant(rawValue: decoded.buildVariant),
+                "buildVariant `\(decoded.buildVariant)` should decode as a BuildVariant"
             )
 
-            // Version matches the engine config.
-            XCTAssertEqual(decoded.version, EngineConfig.version)
-
-            // Every ModuleID should appear in the map (the loader
-            // seeds them all in `init`). TTS is always present, even
-            // though it's `unavailable` until Phase 7.
-            for id in ModuleID.allCases {
-                XCTAssertNotNil(
-                    decoded.modules[id.rawValue],
-                    "module `\(id.rawValue)` should appear in /v1/modules response"
+            // engineVersion matches the engine config under the unified-
+            // versioning scheme (each manifest's `version` is identical).
+            XCTAssertEqual(decoded.engineVersion, EngineConfig.version)
+            for manifest in decoded.modules {
+                XCTAssertEqual(
+                    manifest.version, EngineConfig.version,
+                    "module `\(manifest.name)` version must match engineVersion"
                 )
+            }
+
+            // The registry populates modules variant-aware; we don't
+            // assert a specific set here (variant gating is covered by
+            // ModuleEagerLoaderTests + ModuleNotBundledTests). Just
+            // verify the wire shape: names are non-empty and sorted.
+            let names = decoded.modules.map(\.name)
+            XCTAssertEqual(
+                names, names.sorted(),
+                "engine emits modules sorted by name for deterministic output"
+            )
+            for name in names {
+                XCTAssertFalse(name.isEmpty, "module name should not be empty")
             }
         }
     }
@@ -131,18 +146,22 @@ final class ModulesEndpointTests: XCTestCase {
     }
 
     @MainActor
-    func testTTSAlwaysUnavailable() async throws {
-        // TTS isn't shipped on any variant today (Phase 7 work). The
-        // wire shape MUST consistently report `unavailable` so thin
-        // clients don't render TTS as red on any variant.
+    func testTTSNotSurfacedUntilPhase7() async throws {
+        // TTS isn't shipped on any variant today (Phase 7 work). It is
+        // not registered with `ModuleRegistry`, so it should simply be
+        // absent from `/v1/modules` regardless of variant — thin
+        // clients render absent modules as "not available" rather than
+        // a red dot. The richer readiness state (where TTS is
+        // `unavailable`) is exposed under `/v1/health.modules.detail`
+        // and asserted in `testHealthDetailFieldShape`.
         try await withServer { _ in
             let (_, body) = try await get("/v1/modules")
             let decoded = try JSONDecoder().decode(
-                ModulesResponseV1.self, from: body
+                ModulesResponse.self, from: body
             )
-            XCTAssertEqual(
-                decoded.modules["tts"]?.state, .unavailable,
-                "TTS should always be `unavailable` until Phase 7 ships"
+            XCTAssertFalse(
+                decoded.modules.contains(where: { $0.name == "tts" }),
+                "TTS must not appear in /v1/modules until Phase 7 ships"
             )
         }
     }

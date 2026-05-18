@@ -28,17 +28,6 @@ struct EngineModules: Codable {
     let detail: ModuleDetailMap
 }
 
-/// Response for `GET /v1/modules`. Reports the active build variant
-/// plus the same per-module readiness map exposed under
-/// `/v1/health.modules.detail`. Useful for clients that want a
-/// purpose-built endpoint for their "Engine status" UI without
-/// having to filter the health-check fields.
-struct ModulesResponseV1: ResponseCodable {
-    let variant: String
-    let version: String
-    let modules: ModuleDetailMap
-}
-
 struct ModelsResponse: ResponseCodable {
     let models: [ModelInfo]
 }
