@@ -77,8 +77,8 @@ final class LLMModuleTests: XCTestCase {
     // MARK: - LLMModelType (always runs)
 
     func testLLMModelTypeRawValues() {
-        XCTAssertEqual(LLMModelType.yoozLight.rawValue, "yooz-light-v3")
-        XCTAssertEqual(LLMModelType.yoozQuality.rawValue, "yooz-quality-v3")
+        XCTAssertEqual(LLMModelType.yoozLight.rawValue, "yooz-light-v2")
+        XCTAssertEqual(LLMModelType.yoozQuality.rawValue, "yooz-quality-v2")
     }
 
     func testLLMModelTypeAllCases() {
@@ -92,8 +92,8 @@ final class LLMModuleTests: XCTestCase {
     }
 
     func testLLMModelTypeInitFromRawValue() {
-        XCTAssertEqual(LLMModelType(rawValue: "yooz-light-v3"), .yoozLight)
-        XCTAssertEqual(LLMModelType(rawValue: "yooz-quality-v3"), .yoozQuality)
+        XCTAssertEqual(LLMModelType(rawValue: "yooz-light-v2"), .yoozLight)
+        XCTAssertEqual(LLMModelType(rawValue: "yooz-quality-v2"), .yoozQuality)
         XCTAssertNil(LLMModelType(rawValue: "bogus-model"),
                      "init(rawValue:) must return nil for unknown model names")
     }
@@ -112,16 +112,16 @@ final class LLMModuleTests: XCTestCase {
 
     func testLLMModelTypeHuggingFaceIDs() {
         // Both tiers download from Hugging Face on first use (issue #77
-        // removed the embedded / GHCR fallback). Every model must have a
-        // non-empty HF identifier so the loader macro can resolve it.
-        XCTAssertFalse(LLMModelType.yoozLight.huggingFaceID.isEmpty,
-                       "Light tier needs an HF identifier; loader macro reads this")
-        XCTAssertFalse(LLMModelType.yoozQuality.huggingFaceID.isEmpty,
-                       "Quality tier needs an HF identifier; loader macro reads this")
-        XCTAssertNotEqual(
+        // removed the embedded / GHCR fallback). Pin the exact v2 LoRA
+        // identifiers so a stray rename to an unfinetuned base reads as
+        // a CI failure rather than silent quality regression.
+        XCTAssertEqual(
             LLMModelType.yoozLight.huggingFaceID,
+            "YoozLabs/Yooz-Light-v2-Qwen2.5-0.5B-LoRA"
+        )
+        XCTAssertEqual(
             LLMModelType.yoozQuality.huggingFaceID,
-            "Light and Quality must resolve to different HF snapshots"
+            "YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA"
         )
     }
 
@@ -266,5 +266,36 @@ final class LLMModuleTests: XCTestCase {
         let health = await engine.healthCheck()
         XCTAssertTrue(health.loaded)
         XCTAssertEqual(health.detail["light_loaded"], "true")
+
+        let result = await engine.process(text: "hello world", mode: .light)
+        XCTAssertNotEqual(result.modelUsed.rawValue, "regex-only",
+                          "Light v2 must be used for light mode once loaded; got \(result.modelUsed)")
+        XCTAssertFalse(result.text.isEmpty,
+                       "Light v2 must produce non-empty output for a valid input")
+    }
+
+    /// Regression guard for engine #92: the Yooz-Quality v2 LoRA must load
+    /// cleanly through `MLXLLMBackend`. The historical failure was
+    /// `Unhandled keys [lora_a, lora_b] in QuantizedLinear` thrown when
+    /// mlx-swift-lm's loader auto-applied an `adapters/` directory on top
+    /// of already-fused weights. If that adapter-pollution regresses on
+    /// HF, this test fails at load time.
+    func testPreloadLoadsQualityModelV2() async throws {
+        try XCTSkipUnless(shouldLoadRealModels,
+                          "Set YOOZ_LLM_LOAD_MODELS=1 to exercise the Quality v2 load path")
+
+        let engine = TouchUpEngine.shared
+        try await engine.preload(loadQuality: true)
+        let qualityLoaded = await engine.isQualityModelLoaded
+        XCTAssertTrue(qualityLoaded, "preload(loadQuality: true) must load Yooz-Quality v2")
+
+        let health = await engine.healthCheck()
+        XCTAssertEqual(health.detail["quality_loaded"], "true")
+
+        let result = await engine.process(text: "hello world", mode: .standard)
+        XCTAssertNotEqual(result.modelUsed.rawValue, "regex-only",
+                          "Quality v2 must be used for standard mode once loaded; got \(result.modelUsed)")
+        XCTAssertFalse(result.text.isEmpty,
+                       "Quality v2 must produce non-empty output for a valid input")
     }
 }

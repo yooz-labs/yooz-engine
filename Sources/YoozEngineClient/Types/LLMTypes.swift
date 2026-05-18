@@ -33,7 +33,7 @@ public struct LLMGenerateResponse: Codable, Sendable {
 /// `latencyHintMs` are optional so future backends (Apple Intelligence,
 /// remote) can omit them without breaking decoders. `id` is the stable
 /// wire value (`LLMModelType.rawValue` on the server side, e.g.
-/// `"yooz-light-v3"`); `displayName` is user-facing ("Yooz-Light").
+/// `"yooz-light-v2"`); `displayName` is user-facing ("Yooz-Light").
 public struct LLMModelInfo: Codable, Sendable, Equatable {
     public let id: String
     public let displayName: String
@@ -73,7 +73,7 @@ public struct LLMModelsResponse: Codable, Sendable, Equatable {
 
 /// Request body for `POST /v1/llm/model`, `/v1/llm/preload`, and
 /// `/v1/llm/unload`. Wire contract: a single JSON object with a `model`
-/// key holding the model id (e.g. `"yooz-light-v3"`).
+/// key holding the model id (e.g. `"yooz-light-v2"`).
 public struct LLMModelSelection: Codable, Sendable, Equatable {
     public let model: String
 

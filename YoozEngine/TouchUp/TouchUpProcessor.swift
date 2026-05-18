@@ -23,8 +23,8 @@ public enum TouchUpProcessor {
 
     /// Which model was used for processing.
     public enum ModelUsed: String, Sendable {
-        case light = "yooz-light-v3"
-        case quality = "yooz-quality-v3"
+        case light = "yooz-light-v2"
+        case quality = "yooz-quality-v2"
         case foundationModels = "foundation-models"
         case regexOnly = "regex-only"
         case fallbackRegex = "fallback-regex"

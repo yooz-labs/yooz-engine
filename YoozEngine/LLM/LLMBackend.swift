@@ -22,12 +22,10 @@ import Foundation
 /// `public` because `APIServer` (a different target on the modular
 /// build) consumes this enum directly via the picker routes.
 public enum LLMModelType: String, CaseIterable, Sendable {
-    /// Fast proofread tier. Currently unfinetuned base — see issue #91 for
-    /// the planned `Yooz-Light v2` LoRA on the gold_standard_v3 corpus.
-    case yoozLight = "yooz-light-v3"
-    /// High-quality proofread tier. Fine-tuned LoRA fused into the base
-    /// (Qwen3.5-0.8B-MLX-4bit).
-    case yoozQuality = "yooz-quality-v3"
+    /// Fast proofread tier. Yooz-Light v2 LoRA on Qwen2.5-0.5B base.
+    case yoozLight = "yooz-light-v2"
+    /// High-quality proofread tier. Yooz-Quality v2 LoRA on Qwen3.5-0.8B base.
+    case yoozQuality = "yooz-quality-v2"
 
     public var displayName: String {
         switch self {
@@ -67,22 +65,12 @@ public enum LLMModelType: String, CaseIterable, Sendable {
     public var huggingFaceID: String {
         switch self {
         case .yoozLight:
-            // Stock Qwen2.5-0.5B-Instruct 4-bit MLX. No fine-tune yet
-            // (tracked by #91). Wired here so the engine builds out of
-            // the box and consumers can switch to the fine-tuned LoRA
-            // by changing this single string when Light v2 ships on HF.
-            return "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+            return "YoozLabs/Yooz-Light-v2-Qwen2.5-0.5B-LoRA"
         case .yoozQuality:
-            // TEMPORARY: stock Qwen3.5-0.8B base. The fine-tuned
-            // checkpoint at `YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA`
-            // ships an `adapters/` subdirectory alongside the fused
-            // `model.safetensors`. mlx-swift-lm's loader auto-applies
-            // the adapter on top of the already-fused weights, which
-            // throws `Unhandled keys [lora_a, lora_b] in QuantizedLinear`.
-            // Switch this to `YoozLabs/Yooz-Quality-v3-...` once the v3
-            // sweep winner (issue #82) is republished without the
-            // adapter pollution (tracking issue #92).
-            return "mlx-community/Qwen3.5-0.8B-MLX-4bit"
+            // v2 publishes fused weights only; the adapter-pollution loader
+            // crash history is regression-guarded by
+            // `testPreloadLoadsQualityModelV2`.
+            return "YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA"
         }
     }
 }

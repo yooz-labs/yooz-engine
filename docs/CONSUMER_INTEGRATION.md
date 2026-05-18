@@ -105,7 +105,7 @@ let cleaned = await client.touchUp.touchUp(text: "...", mode: .standard)
 
 // TouchUp model picker (canonical pattern)
 let models = try await client.touchUp.availableModels()  // TouchUpModelsResponse
-try await client.touchUp.setModel(id: "yooz-quality-v3", preload: true)
+try await client.touchUp.setModel(id: "yooz-quality-v2", preload: true)
 
 // Grammar
 let result = try await client.grammar.check(text: "...")
