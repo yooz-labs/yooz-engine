@@ -266,6 +266,12 @@ final class LLMModuleTests: XCTestCase {
         let health = await engine.healthCheck()
         XCTAssertTrue(health.loaded)
         XCTAssertEqual(health.detail["light_loaded"], "true")
+
+        let result = await engine.process(text: "hello world", mode: .light)
+        XCTAssertNotEqual(result.modelUsed.rawValue, "regex-only",
+                          "Light v2 must be used for light mode once loaded; got \(result.modelUsed)")
+        XCTAssertFalse(result.text.isEmpty,
+                       "Light v2 must produce non-empty output for a valid input")
     }
 
     /// Regression guard for engine #92: the Yooz-Quality v2 LoRA must load

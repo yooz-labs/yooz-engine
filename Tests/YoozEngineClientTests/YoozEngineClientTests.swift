@@ -734,7 +734,7 @@ final class YoozEngineClientTests: XCTestCase {
           "current": "yooz-light-v2",
           "available": [
             {"id":"yooz-light-v2","displayName":"Yooz-Light","sizeBytes":289406976,"loaded":true,"latencyHintMs":200},
-            {"id":"yooz-quality-v2","displayName":"Yooz-Quality","sizeBytes":1087963136,"loaded":false,"latencyHintMs":490}
+            {"id":"yooz-quality-v2","displayName":"Yooz-Quality","sizeBytes":444596224,"loaded":false,"latencyHintMs":490}
           ]
         }
         """

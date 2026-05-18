@@ -22,11 +22,9 @@ import Foundation
 /// `public` because `APIServer` (a different target on the modular
 /// build) consumes this enum directly via the picker routes.
 public enum LLMModelType: String, CaseIterable, Sendable {
-    /// Fast proofread tier. Yooz-Light v2 LoRA on Qwen2.5-0.5B base,
-    /// fine-tuned on the gold_standard_v3 corpus.
+    /// Fast proofread tier. Yooz-Light v2 LoRA on Qwen2.5-0.5B base.
     case yoozLight = "yooz-light-v2"
-    /// High-quality proofread tier. Yooz-Quality v2 LoRA on Qwen3.5-0.8B
-    /// base, fine-tuned on the gold_standard_v3 corpus.
+    /// High-quality proofread tier. Yooz-Quality v2 LoRA on Qwen3.5-0.8B base.
     case yoozQuality = "yooz-quality-v2"
 
     public var displayName: String {
@@ -69,6 +67,9 @@ public enum LLMModelType: String, CaseIterable, Sendable {
         case .yoozLight:
             return "YoozLabs/Yooz-Light-v2-Qwen2.5-0.5B-LoRA"
         case .yoozQuality:
+            // v2 publishes fused weights only; the adapter-pollution loader
+            // crash history is regression-guarded by
+            // `testPreloadLoadsQualityModelV2`.
             return "YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA"
         }
     }
