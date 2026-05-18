@@ -161,6 +161,19 @@ struct STTLoadRequest: Decodable {
     let allowFetch: Bool?
 }
 
+struct LLMStatusResponse: ResponseCodable {
+    /// True if the active LLM tier (or any tier) has finished loading.
+    let loaded: Bool
+    /// Wire id of the preferred LLM model
+    /// (e.g. `"yooz-light-v2"`).
+    let modelId: String?
+    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
+    /// download for the preferred LLM tier. `nil` when no download
+    /// is in flight (idle or already loaded). Mirrors
+    /// `STTStatusResponse.progress` shape.
+    let progress: Double?
+}
+
 struct STTStatusResponse: ResponseCodable {
     let loaded: Bool
     let language: String?

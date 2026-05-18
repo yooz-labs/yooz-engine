@@ -197,6 +197,26 @@ final class LLMModuleTests: XCTestCase {
         XCTAssertFalse(fmLoaded, "Foundation Models should not be loaded before preload()")
     }
 
+    /// Before any preload, the backend instances don't exist yet, so
+    /// `downloadProgress(for:)` returns nil for both tiers. After a
+    /// successful preload the model is loaded and the progress would be
+    /// 1.0 (covered by the env-gated `testPreloadLoadsLightModel`
+    /// inference assertion). This unit test pins the pre-preload nil
+    /// contract that `/v1/llm/status` consumes.
+    func testDownloadProgressBeforePreloadIsNil() async throws {
+        let engine = TouchUpEngine.shared
+        let preloaded = await engine.isPreloaded
+        try XCTSkipIf(preloaded,
+                      "shared engine already preloaded; cannot assert default state")
+
+        let lightProgress = await engine.downloadProgress(for: .yoozLight)
+        let qualityProgress = await engine.downloadProgress(for: .yoozQuality)
+        XCTAssertNil(lightProgress,
+                     "Light backend not instantiated yet -> /v1/llm/status returns nil progress")
+        XCTAssertNil(qualityProgress,
+                     "Quality backend not instantiated yet -> /v1/llm/status returns nil progress")
+    }
+
     // MARK: - TouchUpEngine.processRegexOnly (always runs)
 
     func testProcessRegexOnlyAppliesVoiceCommands() {

@@ -80,6 +80,24 @@ public actor TouchUpEngine {
         }
     }
 
+    /// Active HuggingFace download fraction for the given LLM tier, in
+    /// [0.0, 1.0]. Returns 0 before a load starts, ticks up while
+    /// `MLXLLMBackend.load()` streams the snapshot, and stays at 1.0
+    /// after a successful load until `unload` resets it. Returns nil
+    /// when the backend instance for that tier hasn't been instantiated
+    /// yet (e.g. quality has never been requested). Used by
+    /// `/v1/llm/status` and the consumer-side progress banner.
+    public func downloadProgress(for modelType: LLMModelType) async -> Double? {
+        switch modelType {
+        case .yoozLight:
+            guard let model = lightModel else { return nil }
+            return await model.downloadProgress
+        case .yoozQuality:
+            guard let model = qualityModel else { return nil }
+            return await model.downloadProgress
+        }
+    }
+
     // MARK: - Initialization
 
     /// Internal init for `.shared` plus `@testable` access from

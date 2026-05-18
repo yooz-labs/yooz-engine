@@ -1160,6 +1160,60 @@ final class APIServer: ObservableObject {
             return try jsonResponse(response)
         }
 
+        // Status + HF download progress for the picker's active LLM
+        // tier. Mirrors `/v1/stt/status` so the consumer-side progress
+        // banner can poll either endpoint with the same shape.
+        //
+        // `progress` is nil when:
+        // - the active tier is already loaded (no download to track), or
+        // - the active tier is Apple Intelligence (no HF download), or
+        // - the backend has not yet been instantiated and no progress
+        //   has been observed.
+        // Otherwise `progress` is the live fraction the
+        // `loadModelContainer` callback last reported (including 1.0
+        // when the snapshot has finished streaming but `isLoaded`
+        // hasn't flipped yet — consumers treat that as "almost done").
+        router.get("/v1/llm/status") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
+            let engine = TouchUpEngine.shared
+            // `activeModel` is what the picker (`POST /v1/touchup/model`)
+            // mutates; `preferredModel` only tracks `POST /v1/llm/model`.
+            // Reading the active selection ensures the banner follows
+            // the user's pick across picker swaps.
+            let active = await engine.activeModel
+            let loaded: Bool
+            let progress: Double?
+            switch active {
+            case .yoozLight:
+                loaded = await engine.isLightModelLoaded
+                if loaded {
+                    progress = nil
+                } else {
+                    let fraction = await engine.downloadProgress(for: .yoozLight) ?? 0
+                    progress = fraction > 0 ? fraction : nil
+                }
+            case .yoozQuality:
+                loaded = await engine.isQualityModelLoaded
+                if loaded {
+                    progress = nil
+                } else {
+                    let fraction = await engine.downloadProgress(for: .yoozQuality) ?? 0
+                    progress = fraction > 0 ? fraction : nil
+                }
+            case .foundationModels:
+                loaded = await engine.isFoundationModelsLoaded
+                progress = nil
+            }
+            let payload = LLMStatusResponse(
+                loaded: loaded,
+                modelId: active.rawValue,
+                progress: progress
+            )
+            return try jsonResponse(payload)
+        }
+
         router.post("/v1/llm/model") { [self] request, context in
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")
