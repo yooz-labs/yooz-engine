@@ -102,8 +102,8 @@ final class TouchUpPickerRouteTests: XCTestCase {
             let (_, body) = try await get("/v1/touchup/models")
             let decoded = try JSONDecoder().decode(TouchUpModelsResponse.self, from: body)
             let byID = Dictionary(uniqueKeysWithValues: decoded.models.map { ($0.id, $0) })
-            XCTAssertEqual(byID["yooz-light-v3"]?.tier, .light)
-            XCTAssertEqual(byID["yooz-quality-v3"]?.tier, .quality)
+            XCTAssertEqual(byID["yooz-light-v2"]?.tier, .light)
+            XCTAssertEqual(byID["yooz-quality-v2"]?.tier, .quality)
             XCTAssertEqual(byID["foundation-models"]?.tier, .premium)
         }
     }
@@ -172,12 +172,12 @@ final class TouchUpPickerRouteTests: XCTestCase {
         try await resetEngineState()
         try await withServer { _ in
             let body = try JSONEncoder().encode(
-                TouchUpSetModelRequest(id: "yooz-light-v3", preload: false)
+                TouchUpSetModelRequest(id: "yooz-light-v2", preload: false)
             )
             let (http, payload) = try await post("/v1/touchup/model", body: body)
             XCTAssertEqual(http.statusCode, 200)
             let decoded = try JSONDecoder().decode(TouchUpModelInfo.self, from: payload)
-            XCTAssertEqual(decoded.id, "yooz-light-v3")
+            XCTAssertEqual(decoded.id, "yooz-light-v2")
             XCTAssertTrue(decoded.isActive)
             XCTAssertEqual(decoded.tier, .light)
         }

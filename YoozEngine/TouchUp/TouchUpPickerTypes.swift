@@ -16,7 +16,7 @@ import Foundation
 /// and is kept in sync via the `TouchUpModelInfoBoundaryTests`
 /// encode/decode round-trip.
 public struct TouchUpModelInfo: Codable, Sendable, Equatable {
-    /// Stable wire id (e.g. `yooz-light-v3`). Matches
+    /// Stable wire id (e.g. `yooz-light-v2`). Matches
     /// `TouchUpModelSelection.rawValue`.
     public let id: String
     /// Picker-visible name (e.g. "Yooz-Light").

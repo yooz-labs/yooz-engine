@@ -344,7 +344,7 @@ final class YoozEngineClientTests: XCTestCase {
     /// side that would cause silent picker breakage in apps.
     func testTouchUpModelInfoCodableRoundTrip() throws {
         let info = TouchUpModelInfo(
-            id: "yooz-light-v3",
+            id: "yooz-light-v2",
             displayName: "Yooz-Light",
             description: "Fast proofreading (~200ms)",
             tier: .light,
@@ -369,7 +369,7 @@ final class YoozEngineClientTests: XCTestCase {
         {
             "models": [
                 {
-                    "id": "yooz-light-v3",
+                    "id": "yooz-light-v2",
                     "displayName": "Yooz-Light",
                     "description": "Fast",
                     "tier": "light",
@@ -378,7 +378,7 @@ final class YoozEngineClientTests: XCTestCase {
                     "isActive": true
                 },
                 {
-                    "id": "yooz-quality-v3",
+                    "id": "yooz-quality-v2",
                     "displayName": "Yooz-Quality",
                     "description": "High quality",
                     "tier": "quality",
@@ -387,14 +387,14 @@ final class YoozEngineClientTests: XCTestCase {
                     "isActive": false
                 }
             ],
-            "activeId": "yooz-light-v3"
+            "activeId": "yooz-light-v2"
         }
         """
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(TouchUpModelsResponse.self, from: data)
         XCTAssertEqual(response.models.count, 2)
-        XCTAssertEqual(response.activeId, "yooz-light-v3")
-        XCTAssertEqual(response.models.first?.id, "yooz-light-v3")
+        XCTAssertEqual(response.activeId, "yooz-light-v2")
+        XCTAssertEqual(response.models.first?.id, "yooz-light-v2")
         XCTAssertEqual(response.models.first?.loadState, .loaded)
         XCTAssertTrue(response.models.first?.isActive ?? false)
     }
@@ -615,13 +615,13 @@ final class YoozEngineClientTests: XCTestCase {
     func testLLMGenerateRequestEncoding() throws {
         let request = LLMGenerateRequest(
             prompt: "hello",
-            model: "yooz-light-v3",
+            model: "yooz-light-v2",
             systemPrompt: "Fix grammar"
         )
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(LLMGenerateRequest.self, from: data)
         XCTAssertEqual(decoded.prompt, "hello")
-        XCTAssertEqual(decoded.model, "yooz-light-v3")
+        XCTAssertEqual(decoded.model, "yooz-light-v2")
         XCTAssertEqual(decoded.systemPrompt, "Fix grammar")
     }
 
@@ -638,7 +638,7 @@ final class YoozEngineClientTests: XCTestCase {
         let json = """
         {
             "text": "Hello, world!",
-            "model": "yooz-light-v3",
+            "model": "yooz-light-v2",
             "tokensGenerated": 5,
             "processingTimeMs": 120
         }
@@ -646,14 +646,14 @@ final class YoozEngineClientTests: XCTestCase {
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
         XCTAssertEqual(response.text, "Hello, world!")
-        XCTAssertEqual(response.model, "yooz-light-v3")
+        XCTAssertEqual(response.model, "yooz-light-v2")
         XCTAssertEqual(response.tokensGenerated, 5)
         XCTAssertEqual(response.processingTimeMs, 120)
     }
 
     func testLLMGenerateResponseMinimal() throws {
         let json = """
-        {"text": "result", "model": "yooz-quality-v3"}
+        {"text": "result", "model": "yooz-quality-v2"}
         """
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(LLMGenerateResponse.self, from: data)
@@ -669,7 +669,7 @@ final class YoozEngineClientTests: XCTestCase {
         // whisper dropdown binds against. Equality on the Codable
         // Equatable conformance guards against silent field drift.
         let info = LLMModelInfo(
-            id: "yooz-light-v3",
+            id: "yooz-light-v2",
             displayName: "Yooz-Light",
             sizeBytes: 276 * 1024 * 1024,
             loaded: true,
@@ -702,17 +702,17 @@ final class YoozEngineClientTests: XCTestCase {
         // whisper's AI > Touch-up Model dropdown to populate options
         // and highlight the selected entry.
         let response = LLMModelsResponse(
-            current: "yooz-light-v3",
+            current: "yooz-light-v2",
             available: [
                 LLMModelInfo(
-                    id: "yooz-light-v3",
+                    id: "yooz-light-v2",
                     displayName: "Yooz-Light",
                     sizeBytes: 289_406_976,
                     loaded: true,
                     latencyHintMs: 200
                 ),
                 LLMModelInfo(
-                    id: "yooz-quality-v3",
+                    id: "yooz-quality-v2",
                     displayName: "Yooz-Quality",
                     sizeBytes: 1_087_963_136,
                     loaded: false,
@@ -731,20 +731,20 @@ final class YoozEngineClientTests: XCTestCase {
         // caught by this test rather than by whisper in production.
         let json = """
         {
-          "current": "yooz-light-v3",
+          "current": "yooz-light-v2",
           "available": [
-            {"id":"yooz-light-v3","displayName":"Yooz-Light","sizeBytes":289406976,"loaded":true,"latencyHintMs":200},
-            {"id":"yooz-quality-v3","displayName":"Yooz-Quality","sizeBytes":1087963136,"loaded":false,"latencyHintMs":490}
+            {"id":"yooz-light-v2","displayName":"Yooz-Light","sizeBytes":289406976,"loaded":true,"latencyHintMs":200},
+            {"id":"yooz-quality-v2","displayName":"Yooz-Quality","sizeBytes":1087963136,"loaded":false,"latencyHintMs":490}
           ]
         }
         """
         let data = json.data(using: .utf8)!
         let response = try JSONDecoder().decode(LLMModelsResponse.self, from: data)
-        XCTAssertEqual(response.current, "yooz-light-v3")
+        XCTAssertEqual(response.current, "yooz-light-v2")
         XCTAssertEqual(response.available.count, 2)
-        XCTAssertEqual(response.available[0].id, "yooz-light-v3")
+        XCTAssertEqual(response.available[0].id, "yooz-light-v2")
         XCTAssertTrue(response.available[0].loaded)
-        XCTAssertEqual(response.available[1].id, "yooz-quality-v3")
+        XCTAssertEqual(response.available[1].id, "yooz-quality-v2")
         XCTAssertFalse(response.available[1].loaded)
     }
 
@@ -753,10 +753,10 @@ final class YoozEngineClientTests: XCTestCase {
         // request body; verify the on-the-wire shape is exactly
         // `{"model": "..."}` so a server-side decoder change breaks
         // here instead of in whisper traffic.
-        let selection = LLMModelSelection(model: "yooz-quality-v3")
+        let selection = LLMModelSelection(model: "yooz-quality-v2")
         let data = try JSONEncoder().encode(selection)
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        XCTAssertEqual(json["model"] as? String, "yooz-quality-v3")
+        XCTAssertEqual(json["model"] as? String, "yooz-quality-v2")
         XCTAssertEqual(json.count, 1, "selection body must carry only the model key")
     }
 

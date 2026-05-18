@@ -96,7 +96,7 @@ public typealias TouchUpModelLoadState = ModelLoadState
 /// to learn the new active id and any cache/load changes the
 /// preload triggered.
 public struct TouchUpModelInfo: Codable, Sendable, Equatable {
-    /// Stable wire id (e.g. `"yooz-light-v3"`).
+    /// Stable wire id (e.g. `"yooz-light-v2"`).
     public let id: String
     /// Picker-visible name (e.g. "Yooz-Light").
     public let displayName: String

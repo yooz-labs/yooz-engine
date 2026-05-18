@@ -15,8 +15,8 @@ import Foundation
 /// the consumer SDK depends on.
 ///
 /// Stable wire ids (do not rename without bumping a major SDK):
-/// - `yooz-light-v3` — `LLMModelType.yoozLight`
-/// - `yooz-quality-v3` — `LLMModelType.yoozQuality`
+/// - `yooz-light-v2` — `LLMModelType.yoozLight`
+/// - `yooz-quality-v2` — `LLMModelType.yoozQuality`
 /// - `foundation-models` — `FoundationModelsBackend` (macOS 26+ only)
 ///
 /// All picker UX strings (display name, description, tier, size)
@@ -25,8 +25,8 @@ import Foundation
 /// engine-side `LLMModelType` stays headless so a backend rename
 /// cannot silently change picker text.
 public enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
-    case yoozLight = "yooz-light-v3"
-    case yoozQuality = "yooz-quality-v3"
+    case yoozLight = "yooz-light-v2"
+    case yoozQuality = "yooz-quality-v2"
     case foundationModels = "foundation-models"
 
     /// Picker-visible name surfaced in consumer UIs.
