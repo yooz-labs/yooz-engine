@@ -366,6 +366,20 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertNil(status.progress)
     }
 
+    /// Forward-compat: older / minimal server builds may omit `progress`
+    /// and `modelId` entirely (not just send `null`). Decoder must not
+    /// throw on the missing keys.
+    func testLLMStatusDecodingOmittedFieldsAreNil() throws {
+        let json = """
+        {"loaded": false}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(LLMStatus.self, from: data)
+        XCTAssertFalse(status.loaded)
+        XCTAssertNil(status.modelId)
+        XCTAssertNil(status.progress)
+    }
+
     /// Round-trip so the encoder produces a body the server's
     /// decoder accepts (e.g. for future client-side preview tooling).
     func testLLMStatusCodableRoundTrip() throws {
