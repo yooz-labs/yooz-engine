@@ -81,3 +81,25 @@ public struct LLMModelSelection: Codable, Sendable, Equatable {
         self.model = model
     }
 }
+
+/// Response body for `GET /v1/llm/status`. Shape parity with
+/// `STTStatus` so consumer apps can template a single progress-banner
+/// view-model over both endpoints. `progress` is non-nil only while
+/// `MLXLLMBackend.load()` is streaming the HuggingFace snapshot; once
+/// the load completes (or the engine is idle), the server omits the
+/// fraction and the banner can hide.
+public struct LLMStatus: Codable, Sendable, Equatable {
+    public let loaded: Bool
+    /// Wire id of the preferred LLM model
+    /// (`LLMModelType.rawValue`, e.g. `"yooz-light-v2"`).
+    public let modelId: String?
+    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
+    /// download. `nil` when no download is in flight.
+    public let progress: Double?
+
+    public init(loaded: Bool, modelId: String?, progress: Double?) {
+        self.loaded = loaded
+        self.modelId = modelId
+        self.progress = progress
+    }
+}

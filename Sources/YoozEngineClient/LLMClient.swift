@@ -25,4 +25,12 @@ public struct LLMClient: Sendable {
         let response = try await generate(request)
         return response.text
     }
+
+    /// Status + HF download progress for the preferred LLM tier.
+    /// Whisper polls this during the first-run cold-cache pull to render
+    /// a progress banner. Shape parity with `STTClient.status()`.
+    public func status() async throws -> LLMStatus {
+        let data = try await engine.get("/v1/llm/status")
+        return try JSONDecoder().decode(LLMStatus.self, from: data)
+    }
 }

@@ -1160,6 +1160,42 @@ final class APIServer: ObservableObject {
             return try jsonResponse(response)
         }
 
+        // Status + HF download progress for the preferred LLM tier.
+        // Mirrors `/v1/stt/status` so the consumer-side progress banner
+        // can poll either endpoint with the same shape. `progress` is
+        // nil when no download is in flight (idle / already loaded);
+        // otherwise it ticks 0 -> 1.0 as `MLXLLMBackend.load()` streams
+        // the snapshot.
+        router.get("/v1/llm/status") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
+            let engine = TouchUpEngine.shared
+            let preferred = await engine.preferredModel
+            let isPreferredLoaded: Bool
+            switch preferred {
+            case .yoozLight:
+                isPreferredLoaded = await engine.isLightModelLoaded
+            case .yoozQuality:
+                isPreferredLoaded = await engine.isQualityModelLoaded
+            }
+            let progress: Double?
+            if isPreferredLoaded {
+                progress = nil
+            } else if let fraction = await engine.downloadProgress(for: preferred),
+                      fraction > 0 && fraction < 1.0 {
+                progress = fraction
+            } else {
+                progress = nil
+            }
+            let payload = LLMStatusResponse(
+                loaded: isPreferredLoaded,
+                modelId: preferred.rawValue,
+                progress: progress
+            )
+            return try jsonResponse(payload)
+        }
+
         router.post("/v1/llm/model") { [self] request, context in
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")

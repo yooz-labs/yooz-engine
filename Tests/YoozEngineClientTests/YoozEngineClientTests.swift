@@ -339,6 +339,46 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(status.progress), 0.42, accuracy: 1e-9)
     }
 
+    // MARK: - LLMStatus (engine #124)
+
+    /// Locked decode for the canonical `/v1/llm/status` wire shape so the
+    /// SDK can't silently drift from the server's `LLMStatusResponse`.
+    /// Whisper's download-progress banner reads `progress` directly.
+    func testLLMStatusDecoding() throws {
+        let json = """
+        {"loaded": false, "modelId": "yooz-light-v2", "progress": 0.42}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(LLMStatus.self, from: data)
+        XCTAssertFalse(status.loaded)
+        XCTAssertEqual(status.modelId, "yooz-light-v2")
+        XCTAssertEqual(try XCTUnwrap(status.progress), 0.42, accuracy: 1e-9)
+    }
+
+    /// Idle / already-loaded shape: server omits `progress`, banner hides.
+    func testLLMStatusDecodingOmittedProgressIsNil() throws {
+        let json = """
+        {"loaded": true, "modelId": "yooz-light-v2", "progress": null}
+        """
+        let data = json.data(using: .utf8)!
+        let status = try JSONDecoder().decode(LLMStatus.self, from: data)
+        XCTAssertTrue(status.loaded)
+        XCTAssertNil(status.progress)
+    }
+
+    /// Round-trip so the encoder produces a body the server's
+    /// decoder accepts (e.g. for future client-side preview tooling).
+    func testLLMStatusCodableRoundTrip() throws {
+        let original = LLMStatus(
+            loaded: false,
+            modelId: "yooz-quality-v2",
+            progress: 0.73
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(LLMStatus.self, from: data)
+        XCTAssertEqual(decoded, original)
+    }
+
     /// SDK round-trip for the canonical picker shape (issue #97).
     /// Pinning the wire keys catches an accidental rename on either
     /// side that would cause silent picker breakage in apps.
