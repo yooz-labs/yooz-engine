@@ -7,12 +7,17 @@ import Foundation
 
 /// Mode-specific prompt definitions for touch-up processing.
 ///
+/// Light prompts target Yooz-Light v2 (Qwen2.5-0.5B base, pattern-level,
+/// rule-explicit). Quality prompts target Yooz-Quality v2 (Qwen3.5-0.8B
+/// base, context-aware, `/no_think` required).
+///
 /// Source of truth: `yooz-benchmark/finetune-pipeline/scripts/prepare_data.py`
 /// (constants `LIGHT_PROOFREAD`, `LIGHT_REWRITE`, `QUALITY_STANDARD`,
 /// `QUALITY_FULL`). The fine-tuned weights were trained against these
-/// exact strings; the parity test in `YoozPromptsParityTest.swift`
-/// asserts the Swift literals match. Update both sides together if
-/// the training prompts change.
+/// exact strings; `YoozPromptsParityTests` asserts the Swift literals
+/// match. When the training prompts change, update `prepare_data.py`,
+/// then this file, then `TouchUpPrompts.swift` aliases, then the parity
+/// test — all in the same PR.
 enum YoozPrompts {
 
     /// Placeholder text that ends the Quality prompts' JSON shape example
@@ -22,7 +27,7 @@ enum YoozPrompts {
     /// (engine #113 / yooz-whisper #182).
     static let resultPlaceholder = "corrected text"
 
-    // MARK: - Light Model Prompts (Yooz-Light v2, Qwen2.5-0.5B LoRA)
+    // MARK: - Light Model Prompts (Yooz-Light, Qwen2.5-0.5B)
 
     /// Light model Standard mode — mirrors `LIGHT_PROOFREAD`.
     /// Mechanical grammar + capitalization + spoken-number conversion +
@@ -76,7 +81,7 @@ enum YoozPrompts {
         Remove: "scratch that", "never mind", "delete that" and preceding phrase. Convert spoken numbers and version numbers. Fix grammar and misheard words. Always respond with ONLY a JSON object. Never include explanations.
         """
 
-    // MARK: - Quality Model Prompts (Yooz-Quality v2, Qwen3.5-0.8B LoRA)
+    // MARK: - Quality Model Prompts (Yooz-Quality, Qwen3.5-0.8B)
     //
     // `/no_think` is a Qwen3-specific prefix that disables chain-of-thought
     // reasoning, producing direct JSON output instead of "thinking" blocks
