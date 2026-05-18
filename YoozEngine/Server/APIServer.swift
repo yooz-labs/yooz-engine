@@ -2103,11 +2103,19 @@ final class APIServer: ObservableObject {
 
                 sttLogger.info("STT WebSocket client connected (apple_stt)")
 
+                // Abort signal — set by `POST /v1/stt/engine` switching
+                // away from apple_stt. We already emitted "Stream
+                // cancelled" before exiting the loop; the post-loop
+                // finalize block must skip emission of a redundant
+                // empty `final` after the explicit error frame.
+                var abortedDuringLoop = false
+
                 do {
                 for try await message in inbound.messages(maxSize: 10 * 1024 * 1024) {
                     if abort.flag {
                         await sendError("Stream cancelled: STT engine was switched")
                         appleBuffer.removeAll(keepingCapacity: false)
+                        abortedDuringLoop = true
                         break
                     }
                     switch message {
@@ -2248,7 +2256,17 @@ final class APIServer: ObservableObject {
                     return
                 }
 
-                // Clean close (or abort break-out): finalize the buffered audio.
+                // Abort path: we already emitted "Stream cancelled" before
+                // breaking out; don't follow it with a redundant empty
+                // `final` frame. The client treats the error as terminal.
+                if abortedDuringLoop {
+                    appleBuffer.removeAll(keepingCapacity: false)
+                    sttLogger.info("STT WebSocket client disconnected (apple_stt, aborted)")
+                    await MainActor.run { [weak self] in self?.sttStreamCancel = nil }
+                    return
+                }
+
+                // Clean close: finalize the buffered audio.
                 if appleConfigured && !appleBuffer.isEmpty {
                     do {
                         let text = try await AppleSTTEngine.shared.batchTranscribe(

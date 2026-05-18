@@ -82,7 +82,9 @@ final class AppleSTTStreamingWSTests: XCTestCase {
     func testConfigUnauthorizedReturnsModelLoadFailed() async throws {
         // If speech recognition IS authorized on this host the engine
         // will load successfully and this test won't exercise the
-        // failure branch — skip rather than misreport.
+        // failure branch — skip rather than misreport. Check BEFORE
+        // booting the server so an authorized host doesn't pay the
+        // setup cost just to skip.
         try XCTSkipIf(
             AppleSTTEngine.authorizationStatus == .authorized,
             "host is authorized for speech recognition; skipping unauth path"
@@ -146,6 +148,10 @@ final class AppleSTTStreamingWSTests: XCTestCase {
                 text.contains("not a multiple of Float32"),
                 "Expected typed error for odd-byte frame, got: \(text)"
             )
+            XCTAssertTrue(
+                text.contains("\"code\":\"invalid_audio_frame\""),
+                "Expected typed code, got: \(text)"
+            )
 
             // Connection must survive; next malformed text frame should
             // also produce a typed error rather than a crash.
@@ -155,6 +161,136 @@ final class AppleSTTStreamingWSTests: XCTestCase {
             XCTAssertTrue(
                 nextText.contains("Invalid message format"),
                 "Connection must survive malformed audio; got: \(nextText)"
+            )
+            XCTAssertTrue(
+                nextText.contains("\"code\":\"invalid_message_format\""),
+                "Expected typed code, got: \(nextText)"
+            )
+        }
+    }
+
+    /// A `text` frame that isn't valid JSON must return a typed
+    /// `invalid_message_format` error frame on its own — not just as a
+    /// follow-up after another error. Pins the text-parse branch
+    /// independently of the binary-error path.
+    @MainActor
+    func testMalformedConfigReturnsInvalidMessageFormat() async throws {
+        try await withAppleSTTServer { _ in
+            let task = try Self.openWS()
+            defer { task.cancel(with: .normalClosure, reason: nil) }
+
+            try await task.send(.string("definitely not json"))
+            let frame = try await task.receive()
+            let text = Self.extractText(from: frame)
+            XCTAssertTrue(
+                text.contains("Invalid message format"),
+                "Expected typed error for non-JSON text, got: \(text)"
+            )
+            XCTAssertTrue(
+                text.contains("\"code\":\"invalid_message_format\""),
+                "Expected typed code, got: \(text)"
+            )
+        }
+    }
+
+    /// Audio frames sent before any `config` must be ignored silently.
+    /// The post-close `final` must be empty because the session was
+    /// never started — `batchTranscribe` must not be called on stray
+    /// pre-config samples.
+    @MainActor
+    func testAudioBeforeConfigIsIgnoredAndFinalIsEmpty() async throws {
+        try await withAppleSTTServer { _ in
+            let task = try Self.openWS()
+
+            // Send one valid Float32 sample (4 bytes) before any config.
+            // The handler's `guard appleConfigured` should drop it.
+            let oneFloat = Data(count: MemoryLayout<Float>.size)
+            try await task.send(.data(oneFloat))
+
+            // The server should not respond to the pre-config audio.
+            // Close and expect a single empty `final` frame from the
+            // post-loop "no audio" branch.
+            let receiver = Task { () -> String? in
+                while true {
+                    do {
+                        let msg = try await task.receive()
+                        let txt = Self.extractText(from: msg)
+                        if txt.contains("\"final\"") { return txt }
+                        // ignore stray frames
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)  // 100 ms drain window
+            task.cancel(with: .normalClosure, reason: nil)
+            let finalText = await receiver.value
+            XCTAssertNotNil(finalText, "Expected a final frame on close")
+            XCTAssertTrue(
+                finalText?.contains("\"text\":\"\"") ?? false,
+                "Pre-config audio must yield empty final, got: \(finalText ?? "nil")"
+            )
+        }
+    }
+
+    /// Switching the engine via `POST /v1/stt/engine` while the WS is
+    /// open must cause the handler to emit a typed cancellation error
+    /// frame and stop accepting audio. Covers the `abort.flag` path.
+    /// No speech-recognition auth needed — the abort fires before
+    /// `start(language:)`.
+    @MainActor
+    func testAbortMidStreamViaEngineSwitch() async throws {
+        try await withAppleSTTServer { _ in
+            let task = try Self.openWS()
+            defer { task.cancel(with: .normalClosure, reason: nil) }
+
+            // Drain incoming frames so the receive loop captures the
+            // cancellation error frame whenever it arrives.
+            let receiver = Task { () -> String? in
+                while true {
+                    do {
+                        let msg = try await task.receive()
+                        let txt = Self.extractText(from: msg)
+                        if txt.contains("Stream cancelled") { return txt }
+                        // ignore other frames (ready/partial/error)
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+
+            // Trigger the abort: re-POST /v1/stt/engine. The handler
+            // installs sttStreamCancel, which flips the AbortBox; the
+            // WS loop checks abort.flag on its next iteration.
+            let url = URL(
+                string: "http://\(EngineConfig.host):\(EngineConfig.port)/v1/stt/engine"
+            )!
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = #"{"id":"apple_stt"}"#.data(using: .utf8)
+            _ = try await URLSession.shared.data(for: request)
+
+            // Send a follow-up frame so the loop wakes up and observes
+            // the abort flag. The handler emits the typed error frame
+            // and breaks.
+            try await task.send(.string(#"{"type":"config","language":"en"}"#))
+
+            // Wait at most 3 s for the cancellation frame.
+            let cancelled = await withTaskGroup(of: String?.self) { group in
+                group.addTask { await receiver.value }
+                group.addTask {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    return nil
+                }
+                let result = await group.next() ?? nil
+                group.cancelAll()
+                return result
+            }
+            XCTAssertNotNil(cancelled, "Expected cancellation error frame")
+            XCTAssertTrue(
+                cancelled?.contains("Stream cancelled") ?? false,
+                "Expected 'Stream cancelled' in error frame, got: \(cancelled ?? "nil")"
             )
         }
     }
@@ -192,34 +328,42 @@ final class AppleSTTStreamingWSTests: XCTestCase {
                 "Ready frame should echo language code, got: \(readyText)"
             )
 
-            // Close without sending audio. Server-side close handling
-            // should emit a single `final` frame with empty text.
-            //
-            // URLSessionWebSocketTask doesn't expose a clean half-close
-            // — `cancel(with:reason:)` sends the close frame but the
-            // server may already have written the `final` frame before
-            // we drain. Receive with a short timeout to catch it.
-            let finalReceived = expectation(description: "final frame received")
-            Task {
+            // Start the receiver BEFORE closing the socket so we don't
+            // race the server's `final` write against `task.cancel(...)`
+            // tearing down the underlying connection. URLSessionWebSocketTask
+            // delivers buffered frames on a serial queue, so as long as
+            // the receiver is awaiting before close, the `final` arrives.
+            let receiver = Task { () -> String? in
                 while true {
                     do {
                         let msg = try await task.receive()
                         let txt = Self.extractText(from: msg)
-                        if txt.contains("\"final\"") {
-                            XCTAssertTrue(
-                                txt.contains("\"text\":\"\""),
-                                "Empty audio should yield empty final text, got: \(txt)"
-                            )
-                            finalReceived.fulfill()
-                            break
-                        }
+                        if txt.contains("\"final\"") { return txt }
+                        // ignore partials/warnings that may interleave
                     } catch {
-                        break
+                        return nil
                     }
                 }
             }
+            // Yield to let the receiver start awaiting.
+            try await Task.sleep(nanoseconds: 50_000_000)
             task.cancel(with: .normalClosure, reason: nil)
-            await fulfillment(of: [finalReceived], timeout: 5.0)
+
+            let finalText = await withTaskGroup(of: String?.self) { group in
+                group.addTask { await receiver.value }
+                group.addTask {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    return nil
+                }
+                let result = await group.next() ?? nil
+                group.cancelAll()
+                return result
+            }
+            XCTAssertNotNil(finalText, "Expected a final frame on close")
+            XCTAssertTrue(
+                finalText?.contains("\"text\":\"\"") ?? false,
+                "Empty audio should yield empty final text, got: \(finalText ?? "nil")"
+            )
         }
     }
 
