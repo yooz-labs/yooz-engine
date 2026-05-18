@@ -88,10 +88,17 @@ final class ModulesEndpointTests: XCTestCase {
             // assert a specific set here (variant gating is covered by
             // ModuleEagerLoaderTests + ModuleNotBundledTests). Just
             // verify the wire shape: names are non-empty and sorted.
+            //
+            // Sort comes from `ModuleRegistry.all()` (which sorts by
+            // `type(of:).name`); the encoder's `.sortedKeys` is a
+            // separate concern that sorts JSON object keys, not array
+            // elements. Both invariants must hold for the response to
+            // be byte-deterministic, but this assertion only covers
+            // the array-order half.
             let names = decoded.modules.map(\.name)
             XCTAssertEqual(
                 names, names.sorted(),
-                "engine emits modules sorted by name for deterministic output"
+                "ModuleRegistry.all() must return modules sorted by name"
             )
             for name in names {
                 XCTAssertFalse(name.isEmpty, "module name should not be empty")
@@ -117,6 +124,19 @@ final class ModulesEndpointTests: XCTestCase {
                     "module `\(id.rawValue)` should appear in /v1/health.modules.detail"
                 )
             }
+
+            // TTS isn't shipped on any variant today (Phase 7 work) but
+            // `ModuleEagerLoader` unconditionally seeds it as
+            // `.unavailable` so thin clients render a neutral tag rather
+            // than a red dot. Asserting the exact state here (not just
+            // presence) is the contract the whisper About panel reads
+            // through /v1/health; /v1/modules drops TTS entirely since
+            // it isn't registered with `ModuleRegistry`. See
+            // yooz-engine#133.
+            XCTAssertEqual(
+                decoded.modules.detail["tts"]?.state, .unavailable,
+                "TTS must report `.unavailable` under /v1/health until Phase 7 ships"
+            )
 
             // The legacy bool fields should agree with the detail
             // map: bool=true iff state==ready.
@@ -148,12 +168,14 @@ final class ModulesEndpointTests: XCTestCase {
     @MainActor
     func testTTSNotSurfacedUntilPhase7() async throws {
         // TTS isn't shipped on any variant today (Phase 7 work). It is
-        // not registered with `ModuleRegistry`, so it should simply be
-        // absent from `/v1/modules` regardless of variant — thin
-        // clients render absent modules as "not available" rather than
-        // a red dot. The richer readiness state (where TTS is
-        // `unavailable`) is exposed under `/v1/health.modules.detail`
-        // and asserted in `testHealthDetailFieldShape`.
+        // absent from `ModuleRegistry` (`EngineAppDelegate.registerModules`
+        // skips it) but `ModuleEagerLoader` still seeds it as
+        // `.unavailable` so `/v1/health.modules.detail` carries a row.
+        // The two endpoints therefore disagree on TTS by design:
+        // `/v1/modules` drops it (this test); `/v1/health.modules.detail`
+        // shows it as `.unavailable` (asserted in
+        // `testHealthDetailFieldShape`). Thin clients render absent
+        // modules as "not available" rather than a red dot.
         try await withServer { _ in
             let (_, body) = try await get("/v1/modules")
             let decoded = try JSONDecoder().decode(
