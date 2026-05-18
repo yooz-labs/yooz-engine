@@ -2124,13 +2124,241 @@ final class APIServer: ObservableObject {
                 self?.sttStreamCancel = { abort.flag = true }
             }
 
-            // Apple STT streaming is not implemented yet; return an explicit
-            // error so clients fail fast instead of waiting on dropped audio.
+            #if canImport(AppleSTTModule)
+            // Apple STT streaming — Option A (batch-on-close, engine#123):
+            // accept the WS handshake, buffer Float32 frames in memory, and
+            // emit a single final WSSTTResult by running the buffered audio
+            // through AppleSTTEngine.batchTranscribe(samples:) when the client
+            // closes the stream (or aborts via setEngineType). Partial frames
+            // carry empty text — clients show no preview during recording,
+            // but `endSession()` receives the full transcript on close.
+            //
+            // A real partial-result path (SFSpeechAudioBufferRecognitionRequest /
+            // SpeechAnalyzer on macOS 26+) can land later behind the same WS
+            // contract without reshaping this code: partial frames would just
+            // start arriving with non-empty text where today they carry "".
             if active == .appleSTT {
-                await sendError("Streaming STT is not implemented for Apple STT; use /v1/stt/batch")
+                func sendAppleResult(_ result: WSSTTResult) async {
+                    do {
+                        let json = try encoder.encode(result)
+                        guard let jsonStr = String(data: json, encoding: .utf8) else {
+                            sttLogger.error("Failed to convert encoded result to UTF-8 string")
+                            return
+                        }
+                        try await outbound.write(.text(jsonStr))
+                    } catch {
+                        sttLogger.error("Failed to send STT result: \(error)")
+                    }
+                }
+
+                var appleConfigured = false
+                var appleBuffer: [Float] = []
+                appleBuffer.reserveCapacity(16_000 * 30)  // ~30 s typical recording
+
+                sttLogger.info("STT WebSocket client connected (apple_stt)")
+
+                // Abort signal — set by `POST /v1/stt/engine` switching
+                // away from apple_stt. We already emitted "Stream
+                // cancelled" before exiting the loop; the post-loop
+                // finalize block must skip emission of a redundant
+                // empty `final` after the explicit error frame.
+                var abortedDuringLoop = false
+
+                do {
+                for try await message in inbound.messages(maxSize: 10 * 1024 * 1024) {
+                    if abort.flag {
+                        await sendError("Stream cancelled: STT engine was switched")
+                        appleBuffer.removeAll(keepingCapacity: false)
+                        abortedDuringLoop = true
+                        break
+                    }
+                    switch message {
+                    case .text(let text):
+                        let config: WSSTTConfig
+                        do {
+                            guard let data = text.data(using: .utf8) else {
+                                sttLogger.warning("Received non-UTF8 text message")
+                                continue
+                            }
+                            config = try JSONDecoder().decode(WSSTTConfig.self, from: data)
+                        } catch {
+                            sttLogger.warning("Invalid text message: \(error)")
+                            await sendError(
+                                "Invalid message format",
+                                code: .invalidMessageFormat
+                            )
+                            continue
+                        }
+
+                        if config.type == "config" {
+                            let languageCode = config.language ?? "en"
+                            guard let language = STTLanguage.fromCode(languageCode) else {
+                                await sendError(
+                                    "Unknown language: \(languageCode)",
+                                    code: .unknownLanguage
+                                )
+                                continue
+                            }
+                            guard language.isImplemented else {
+                                await sendError(
+                                    "Language not implemented: \(language.displayName)",
+                                    code: .languageNotImplemented
+                                )
+                                continue
+                            }
+                            guard let appleLanguage = AppleSTTLanguage.from(
+                                rawCode: languageCode
+                            ) else {
+                                await sendError(
+                                    "Language not supported by apple_stt: "
+                                        + language.displayName,
+                                    code: .languageNotSupportedByBackend
+                                )
+                                continue
+                            }
+                            do {
+                                try await AppleSTTEngine.shared.start(
+                                    language: appleLanguage
+                                )
+                            } catch {
+                                await sendError(
+                                    "Failed to load Apple STT engine: "
+                                        + error.localizedDescription,
+                                    code: .modelLoadFailed
+                                )
+                                continue
+                            }
+                            appleConfigured = true
+                            // Each `config` resets the transcript — mirrors
+                            // the qwen3 session-reset semantics.
+                            appleBuffer.removeAll(keepingCapacity: true)
+
+                            do {
+                                let ready = try encoder.encode(
+                                    WSSTTReady(type: "ready", language: languageCode)
+                                )
+                                if let readyStr = String(data: ready, encoding: .utf8) {
+                                    try await outbound.write(.text(readyStr))
+                                }
+                            } catch {
+                                sttLogger.error("Failed to send ready message: \(error)")
+                            }
+                            sttLogger.info(
+                                "STT stream configured: language=\(languageCode), backend=apple_stt"
+                            )
+                        }
+
+                    case .binary(var buffer):
+                        let byteCount = buffer.readableBytes
+                        cadenceLogger.debug("ws frame in bytes=\(byteCount, privacy: .public)")
+                        if byteCount % MemoryLayout<Float>.size != 0 {
+                            await sendError(
+                                "Audio frame byte count (\(byteCount)) is not a "
+                                    + "multiple of Float32 size; expected raw "
+                                    + "Float32 PCM at 16 kHz mono.",
+                                code: .invalidAudioFrame
+                            )
+                            continue
+                        }
+                        let sampleCount = byteCount / MemoryLayout<Float>.size
+                        guard sampleCount > 0 else { continue }
+
+                        let samples: [Float] = buffer.withUnsafeReadableBytes { ptr in
+                            [Float](unsafeUninitializedCapacity: sampleCount) { dest, initializedCount in
+                                _ = UnsafeMutableRawBufferPointer(dest).copyBytes(
+                                    from: UnsafeRawBufferPointer(ptr).prefix(sampleCount * MemoryLayout<Float>.size)
+                                )
+                                initializedCount = sampleCount
+                            }
+                        }
+
+                        guard appleConfigured else {
+                            sttLogger.warning("Audio received before config message (apple_stt)")
+                            continue
+                        }
+
+                        appleBuffer.append(contentsOf: samples)
+
+                        // Heartbeat partial — the batch backend can't emit
+                        // intermediate text without running the recognizer
+                        // per frame. Matches the qwen3 path's empty-partial
+                        // contract so clients see the route is alive.
+                        await sendAppleResult(WSSTTResult(
+                            type: "partial",
+                            text: "",
+                            finalized: "",
+                            draft: ""
+                        ))
+                    }
+                }
+                } catch is CancellationError {
+                    sttLogger.info("STT WebSocket cancelled (apple_stt)")
+                    appleBuffer.removeAll(keepingCapacity: false)
+                    await MainActor.run { [weak self] in self?.sttStreamCancel = nil }
+                    throw CancellationError()
+                } catch {
+                    sttLogger.error(
+                        "STT WebSocket loop threw (apple_stt): \(String(describing: error))"
+                    )
+                    await sendError(
+                        "Stream aborted: \(error.localizedDescription)",
+                        code: .streamAborted
+                    )
+                    appleBuffer.removeAll(keepingCapacity: false)
+                    sttLogger.info("STT WebSocket client disconnected (apple_stt, error)")
+                    await MainActor.run { [weak self] in self?.sttStreamCancel = nil }
+                    return
+                }
+
+                // Abort path: we already emitted "Stream cancelled" before
+                // breaking out; don't follow it with a redundant empty
+                // `final` frame. The client treats the error as terminal.
+                if abortedDuringLoop {
+                    appleBuffer.removeAll(keepingCapacity: false)
+                    sttLogger.info("STT WebSocket client disconnected (apple_stt, aborted)")
+                    await MainActor.run { [weak self] in self?.sttStreamCancel = nil }
+                    return
+                }
+
+                // Clean close: finalize the buffered audio.
+                if appleConfigured && !appleBuffer.isEmpty {
+                    do {
+                        let text = try await AppleSTTEngine.shared.batchTranscribe(
+                            samples: appleBuffer
+                        )
+                        await sendAppleResult(WSSTTResult(
+                            type: "final",
+                            text: text,
+                            finalized: text,
+                            draft: ""
+                        ))
+                    } catch {
+                        sttLogger.error(
+                            "Apple STT batch failed: \(error.localizedDescription)"
+                        )
+                        await sendError(
+                            "Apple STT batch failed: \(error.localizedDescription)",
+                            code: .finalizeFailed
+                        )
+                    }
+                } else {
+                    // Client closed without sending audio (or without config).
+                    // Emit an empty final for protocol symmetry — matches the
+                    // qwen3 `.empty` branch so consumers can treat silent
+                    // sessions uniformly.
+                    await sendAppleResult(WSSTTResult(
+                        type: "final",
+                        text: "",
+                        finalized: "",
+                        draft: ""
+                    ))
+                }
+                appleBuffer.removeAll(keepingCapacity: false)
+                sttLogger.info("STT WebSocket client disconnected (apple_stt)")
                 await MainActor.run { [weak self] in self?.sttStreamCancel = nil }
                 return
             }
+            #endif
 
             #if canImport(STTModule)
             let sttEngine = YoozSTTEngine.shared
