@@ -36,6 +36,28 @@ public actor TouchUpEngine {
     /// Bundle identifier for model loading
     private let bundleIdentifier: String
 
+    /// Per-tier lifecycle state (engine#125). Drives the `state`
+    /// field on `/v1/llm/status` for the picker's active model.
+    /// Transitions per tier:
+    ///   .idle → .loading (enqueueLoad starts)
+    ///   .loading → .ready (preloadModel succeeded)
+    ///   .loading → .failed (preloadModel threw)
+    ///   .loading → .idle (cancellation)
+    ///   .failed | .ready → .loading (next enqueueLoad)
+    private var loadStates: [LLMModelType: LoadState] = [:]
+
+    /// Per-tier last-load error. Cleared on the next `enqueueLoad`
+    /// (which transitions to .loading). Surfaced via
+    /// `/v1/llm/status.lastError` when the active tier's state is
+    /// `.failed`.
+    private var lastLoadErrors: [LLMModelType: String] = [:]
+
+    /// In-flight load handles (engine#125). When non-nil for a tier,
+    /// a subsequent `enqueueLoad(_:)` for that tier returns this
+    /// same handle so concurrent callers share one underlying load
+    /// (idempotent dedup).
+    private var inFlightLoadTasks: [LLMModelType: Task<Void, Error>] = [:]
+
     /// Currently active TouchUp model. Drives `/v1/touchup` routing
     /// via `processWithActiveModel(...)` and is reflected back to
     /// clients through the picker API (`GET /v1/touchup/models`).
@@ -196,6 +218,17 @@ public actor TouchUpEngine {
 
     /// Unload all models from memory.
     public func unload() async {
+        // Cancel any in-flight loads (engine#125) so a download
+        // racing with the unload doesn't end up reading from freed
+        // backend state. The Task's CancellationError catch resets
+        // the per-tier state to .idle.
+        for (_, task) in inFlightLoadTasks {
+            task.cancel()
+        }
+        inFlightLoadTasks.removeAll()
+        loadStates.removeAll()
+        lastLoadErrors.removeAll()
+
         if let light = lightModel {
             await light.unload()
         }
@@ -215,6 +248,14 @@ public actor TouchUpEngine {
     /// whole engine. Idempotent: unloading an already-unloaded model
     /// is a no-op.
     public func unload(_ modelType: LLMModelType) async {
+        // Cancel an in-flight load for this tier before tearing
+        // down the backend; mirrors `unload()` above.
+        if let task = inFlightLoadTasks.removeValue(forKey: modelType) {
+            task.cancel()
+        }
+        loadStates[modelType] = .idle
+        lastLoadErrors[modelType] = nil
+
         switch modelType {
         case .yoozLight:
             if let light = lightModel {
@@ -233,6 +274,103 @@ public actor TouchUpEngine {
     public func setPreferredModel(_ modelType: LLMModelType) {
         preferredModel = modelType
         logger.info("TouchUpEngine preferredModel set to \(modelType.rawValue, privacy: .public)")
+    }
+
+    // MARK: - Async load (engine#125)
+
+    /// Read the lifecycle state for a tier. Returns `.idle` for any
+    /// tier that hasn't been touched yet.
+    public func loadState(for modelType: LLMModelType) -> LoadState {
+        return loadStates[modelType] ?? .idle
+    }
+
+    /// Read the last error captured for a tier. `nil` unless that
+    /// tier's `loadState == .failed`.
+    public func lastLoadError(for modelType: LLMModelType) -> String? {
+        return lastLoadErrors[modelType]
+    }
+
+    /// Enqueue a load on a background Task; return a handle the
+    /// caller can either await (`?wait=true`) or drop (HTTP 202
+    /// fire-and-forget). Idempotent: a second call for the same
+    /// tier while a load is in flight returns the existing handle so
+    /// concurrent callers share one underlying load. Loads for
+    /// different tiers run concurrently (a quality preload doesn't
+    /// block a light preload).
+    ///
+    /// Cancellation: caller-side `Task.cancel()` propagates through
+    /// `preloadModel` cooperatively; cancelled state transitions
+    /// back to `.idle` (not `.failed`) so UI can distinguish a
+    /// user-initiated cancel from a real failure.
+    @discardableResult
+    public func enqueueLoad(
+        _ modelType: LLMModelType
+    ) -> Task<Void, Error> {
+        // Idempotent dedup: same tier, return existing handle.
+        if loadStates[modelType] == .loading,
+           let existing = inFlightLoadTasks[modelType]
+        {
+            return existing
+        }
+
+        loadStates[modelType] = .loading
+        lastLoadErrors[modelType] = nil
+
+        // Capture the task reference up-front so the settle hop can
+        // check identity (not just state) before mutating. Without
+        // identity comparison, an `unload` + immediate `enqueueLoad`
+        // race lets the old task's settle clobber the new task's
+        // state — see the review finding on engine#125.
+        var taskHandle: Task<Void, Error>?
+        // `self` is the actor singleton — guaranteed alive for the
+        // process lifetime. The weak capture pattern is dropped per
+        // the silent-failure review (would silently strand state at
+        // .loading if self ever went away mid-load).
+        let task = Task<Void, Error> {
+            do {
+                try await self.preloadModel(modelType)
+                await self.markLoadSettled(
+                    modelType, state: .ready, error: nil, owner: taskHandle
+                )
+            } catch is CancellationError {
+                await self.markLoadSettled(
+                    modelType, state: .idle, error: nil, owner: taskHandle
+                )
+                throw CancellationError()
+            } catch {
+                let message = error.localizedDescription
+                await self.markLoadSettled(
+                    modelType, state: .failed, error: message, owner: taskHandle
+                )
+                throw error
+            }
+        }
+        taskHandle = task
+
+        inFlightLoadTasks[modelType] = task
+        return task
+    }
+
+    /// Settle the post-load state from the Task's completion handler.
+    /// No-op when the in-flight task for `modelType` is no longer
+    /// `owner` — covers the race where `unload(modelType)` clears
+    /// state (and a new `enqueueLoad` may have started another Task)
+    /// while the old Task's settle hop was still queued behind the
+    /// actor. Without the identity check, an old task's settlement
+    /// could overwrite a new task's `.loading` state, leaving the
+    /// new load silently stranded.
+    private func markLoadSettled(
+        _ modelType: LLMModelType,
+        state: LoadState,
+        error: String?,
+        owner: Task<Void, Error>?
+    ) {
+        guard let owner, inFlightLoadTasks[modelType] == owner else {
+            return
+        }
+        loadStates[modelType] = state
+        lastLoadErrors[modelType] = error
+        inFlightLoadTasks[modelType] = nil
     }
 
     /// Ensure a specific model's weights are resident. Idempotent;

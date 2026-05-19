@@ -102,7 +102,25 @@ extension TouchUpClient {
     /// Ensure the named model is loaded and resident. Idempotent:
     /// already-loaded models return immediately. Used by whisper to
     /// warm the model when the user opens the AI tab.
+    ///
+    /// Sends `?wait=true` so the call preserves its pre-engine#125
+    /// blocking semantics — returns only when the model is loaded
+    /// (or the load fails). New code that wants to dispatch and
+    /// poll for completion should call
+    /// `preloadModelAsync(_:)` instead.
     public func preloadModel(_ id: String) async throws {
+        let body = try JSONEncoder().encode(LLMModelSelection(model: id))
+        _ = try await engine.post("/v1/llm/preload?wait=true", body: body)
+    }
+
+    /// Dispatch a preload on the engine and return immediately
+    /// (HTTP 202). Caller polls `/v1/llm/status` for the
+    /// `state == .ready` transition. Use for first-run pulls of
+    /// large weights (Quality v2 LoRA fused, etc.) where the
+    /// blocking call would HTTP-timeout. Idempotent: a second
+    /// `preloadModelAsync` for the same tier while a load is in
+    /// flight is a no-op on the server (shares the same Task).
+    public func preloadModelAsync(_ id: String) async throws {
         let body = try JSONEncoder().encode(LLMModelSelection(model: id))
         _ = try await engine.post("/v1/llm/preload", body: body)
     }

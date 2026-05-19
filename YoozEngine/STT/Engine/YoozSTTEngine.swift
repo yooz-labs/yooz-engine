@@ -62,6 +62,22 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     /// `YOOZ_STT_BACKEND` env var honored by `EngineConfig`.
     @Published public private(set) var currentBackend: STTBackendID = .parakeet
 
+    /// Lifecycle state for the in-flight load (engine#125). Drives
+    /// the `state` field on `/v1/stt/status`. Transitions:
+    ///   .idle → .loading (enqueueLoad starts)
+    ///   .loading → .ready (load succeeded)
+    ///   .loading → .failed (load threw)
+    ///   .loading → .idle (cancellation)
+    ///   .failed | .ready → .loading (next enqueueLoad)
+    ///   any → .idle (stop())
+    @Published public private(set) var loadState: LoadState = .idle
+
+    /// Human-readable error from the last failed load. Cleared on
+    /// the next `enqueueLoad` (which transitions to .loading) and on
+    /// `stop()`. Surfaced via `/v1/stt/status.lastError` when
+    /// `state == .failed`.
+    @Published public private(set) var lastLoadError: String?
+
     // MARK: - Callbacks
 
     /// Callback for transcription updates
@@ -75,6 +91,14 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     private var model: ParakeetModel?
     private var streamingContext: StreamingTranscriber?
     private let sampleRate: Int = 16000
+
+    /// In-flight load handle (engine#125). When non-nil, indicates a
+    /// load Task is running; a subsequent `enqueueLoad(language:)`
+    /// for the same language returns this same handle so concurrent
+    /// callers share one underlying load (idempotent dedup). Mutated
+    /// only on MainActor.
+    private var inFlightLoadTask: Task<Void, Error>?
+    private var inFlightLoadLanguage: STTLanguage?
 
     /// Lock for thread safety
     private let lock = NSLock()
@@ -288,6 +312,120 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         await MainActor.run { self.downloadProgress = clamped }
     }
 
+    // MARK: - Async load (engine#125)
+
+    /// Enqueue a load on a background Task, return a handle the
+    /// caller can either await (`?wait=true`) or drop (HTTP 202
+    /// fire-and-forget). Idempotent: a second call with the same
+    /// language while a load is in flight returns the existing
+    /// handle so concurrent callers share one underlying load. A
+    /// call with a different language while loading cancels the
+    /// previous Task and starts a fresh one (last-write-wins so the
+    /// picker's most recent selection always drives behavior).
+    ///
+    /// `body` is the work the Task performs — typically a closure
+    /// that wraps `start(language:allowFetch:)` plus any backend-
+    /// specific prep (e.g. `Qwen3ASRModelFetcher.download`). The
+    /// engine takes ownership of the Task and manages state
+    /// transitions on the @Published `loadState` / `lastLoadError`
+    /// properties so `/v1/stt/status` consumers see them
+    /// immediately.
+    ///
+    /// Cancellation: caller-side `Task.cancel()` propagates through
+    /// `body` cooperatively; the cancelled state transitions to
+    /// `.idle` (not `.failed`) so a UI driving on this state can
+    /// distinguish user-initiated cancel from a real failure.
+    @MainActor
+    @discardableResult
+    public func enqueueLoad(
+        language: STTLanguage,
+        body: @Sendable @escaping () async throws -> Void
+    ) -> Task<Void, Error> {
+        // Idempotent dedup: same language, same in-flight Task.
+        if loadState == .loading,
+           inFlightLoadLanguage == language,
+           let existing = inFlightLoadTask
+        {
+            return existing
+        }
+
+        // Different language while loading → cancel the prior load
+        // before starting the new one. The cancelled Task throws
+        // CancellationError to any awaiters; the catch path below
+        // settles state back to .idle, but only if the old task is
+        // still the registered in-flight one (identity guard in
+        // settleLoad). Without that guard, the old task's settle
+        // would clobber the new task's `.loading` state.
+        if loadState == .loading {
+            inFlightLoadTask?.cancel()
+        }
+
+        loadState = .loading
+        inFlightLoadLanguage = language
+        lastLoadError = nil
+
+        // Capture the task handle so the settle hop can compare
+        // identity (not just state). `self` is a singleton — never
+        // collected — so we drop the weak capture pattern; a [weak
+        // self] return-on-nil would silently strand state at
+        // `.loading` if the singleton ever went away mid-load.
+        var taskHandle: Task<Void, Error>?
+        let task = Task<Void, Error> {
+            do {
+                try await body()
+                await MainActor.run {
+                    self.settleLoad(state: .ready, error: nil, owner: taskHandle)
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    self.settleLoad(state: .idle, error: nil, owner: taskHandle)
+                }
+                throw CancellationError()
+            } catch {
+                let message = error.localizedDescription
+                await MainActor.run {
+                    self.settleLoad(state: .failed, error: message, owner: taskHandle)
+                }
+                throw error
+            }
+        }
+        taskHandle = task
+
+        inFlightLoadTask = task
+        return task
+    }
+
+    /// Mirror of `TouchUpEngine.markLoadSettled` — no-op when the
+    /// settling Task is no longer the registered in-flight one.
+    /// Covers the language-switch race (old task's cancellation
+    /// hop arriving after the new task is already registered) and
+    /// the stop()-races-success-arm race (the success hop arriving
+    /// after stop() cleared inFlightLoadTask).
+    @MainActor
+    private func settleLoad(
+        state: LoadState,
+        error: String?,
+        owner: Task<Void, Error>?
+    ) {
+        guard let owner, inFlightLoadTask == owner else {
+            return
+        }
+        loadState = state
+        lastLoadError = error
+        inFlightLoadTask = nil
+        inFlightLoadLanguage = nil
+        // Reset downloadProgress on terminal-not-loaded states so a
+        // stalled mid-download fraction does not linger in
+        // /v1/stt/status after a failed or cancelled load (the
+        // route's `running ? nil : ...` filter only covers the
+        // loaded case). On `.ready`, downloadProgress stays at its
+        // final value — the filter collapses it to nil since
+        // isRunning is now true.
+        if state == .idle || state == .failed {
+            downloadProgress = 0
+        }
+    }
+
     /// Unload the model and free resources
     public func stop() {
         lock.lock()
@@ -299,26 +437,47 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         model = nil
 
-        // Update state synchronously for immediate effect.
-        // Reset downloadProgress here so a stopped (but not yet
-        // restarted) engine doesn't keep reporting `progress: 1.0`
-        // to /v1/stt/status — without this the route's `loaded ?
-        // nil : ...` filter (engine#145) only covers the loaded
-        // case, leaving the narrow stop()-then-poll window
-        // surfacing a stale "Downloading... 100%" banner.
+        // Snapshot the in-flight load handle under the lock so the
+        // cancel happens off the MainActor hop below. The Task's
+        // CancellationError catch transitions loadState back to
+        // .idle via its own MainActor.run, which is independent of
+        // the state reset we do here.
+        //
+        // Reset downloadProgress alongside loadState so a stopped
+        // (but not yet restarted) engine doesn't keep reporting
+        // `progress: 1.0` to /v1/stt/status — the route's
+        // `loaded ? nil : ...` filter (engine#145) only covers the
+        // loaded case; this closes the stop()-then-poll window
+        // that would otherwise surface "Downloading... 100%".
+        let inFlight = inFlightLoadTask
+
+        // Update state synchronously for immediate effect
         if Thread.isMainThread {
             self.isReady = false
             self.isStreaming = false
             self.currentResult = .empty
             self.downloadProgress = 0
+            self.loadState = .idle
+            self.lastLoadError = nil
+            self.inFlightLoadTask = nil
+            self.inFlightLoadLanguage = nil
         } else {
             DispatchQueue.main.sync {
                 self.isReady = false
                 self.isStreaming = false
                 self.currentResult = .empty
                 self.downloadProgress = 0
+                self.loadState = .idle
+                self.lastLoadError = nil
+                self.inFlightLoadTask = nil
+                self.inFlightLoadLanguage = nil
             }
         }
+
+        // Cancel after clearing the state pointer so the Task's
+        // cancellation catch path can't race back through the
+        // engine and re-set inFlightLoadTask to nil (already done).
+        inFlight?.cancel()
 
         print("YoozSTTEngine: Stopped")
     }

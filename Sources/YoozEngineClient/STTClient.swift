@@ -57,8 +57,32 @@ public struct STTClient: Sendable {
         return try JSONDecoder().decode(TranscriptionResult.self, from: data)
     }
 
-    /// Pre-load the STT model for a language.
+    /// Pre-load the STT model for a language. Blocks until the
+    /// model is loaded (or the load fails).
+    ///
+    /// Sends `?wait=true` so the call preserves its pre-engine#125
+    /// blocking semantics. New code that wants to dispatch and
+    /// poll for completion should call `loadModelAsync(...)` and
+    /// poll `/v1/stt/status` for the `state == .ready` transition.
     public func loadModel(language: STTLanguage = .english) async throws -> STTStatus {
+        let request = STTLoadRequest(language: language.rawValue)
+        let body = try JSONEncoder().encode(request)
+        let data = try await engine.post("/v1/stt/load?wait=true", body: body)
+        return try JSONDecoder().decode(STTStatus.self, from: data)
+    }
+
+    /// Dispatch a load on the engine and return immediately
+    /// (HTTP 202). The returned `STTStatus` will have
+    /// `loaded == false` and `state == .loading`; poll
+    /// `/v1/stt/status` until `state == .ready` (or `.failed`).
+    /// Use for first-run pulls of large weights (qwen3 preview
+    /// ~2.5 GB, etc.) where the blocking call would HTTP-timeout.
+    /// Idempotent: a second `loadModelAsync` for the same language
+    /// while a load is in flight shares the same Task on the
+    /// server.
+    public func loadModelAsync(
+        language: STTLanguage = .english
+    ) async throws -> STTStatus {
         let request = STTLoadRequest(language: language.rawValue)
         let body = try JSONEncoder().encode(request)
         let data = try await engine.post("/v1/stt/load", body: body)
@@ -242,17 +266,28 @@ public struct STTStatus: Codable, Sendable {
     /// Fraction-completed [0.0, 1.0] for an in-progress HF model
     /// download. `nil` when the server omits the field (older builds).
     public let progress: Double?
+    /// Lifecycle state for the active STT backend (engine#125).
+    /// `nil` on pre-#125 server builds; consumers MAY infer state
+    /// from `loaded` + `progress` when nil.
+    public let state: LoadState?
+    /// Human-readable error from the last failed load. `nil` unless
+    /// `state == .failed`.
+    public let lastError: String?
 
     public init(
         loaded: Bool,
         language: String?,
         streaming: Bool,
-        progress: Double? = nil
+        progress: Double? = nil,
+        state: LoadState? = nil,
+        lastError: String? = nil
     ) {
         self.loaded = loaded
         self.language = language
         self.streaming = streaming
         self.progress = progress
+        self.state = state
+        self.lastError = lastError
     }
 }
 

@@ -161,6 +161,27 @@ struct LLMStatusResponse: ResponseCodable {
     /// is in flight (idle or already loaded). Mirrors
     /// `STTStatusResponse.progress` shape.
     let progress: Double?
+    /// Lifecycle state for the active LLM tier (engine#125). `nil`
+    /// on builds that predate the fire-and-forget rollout — consumers
+    /// MAY infer state from `loaded` + `progress` when nil.
+    let state: LoadState?
+    /// Human-readable error message when `state == .failed`. `nil`
+    /// in every other state.
+    let lastError: String?
+
+    init(
+        loaded: Bool,
+        modelId: String?,
+        progress: Double?,
+        state: LoadState? = nil,
+        lastError: String? = nil
+    ) {
+        self.loaded = loaded
+        self.modelId = modelId
+        self.progress = progress
+        self.state = state
+        self.lastError = lastError
+    }
 }
 
 struct STTStatusResponse: ResponseCodable {
@@ -174,6 +195,29 @@ struct STTStatusResponse: ResponseCodable {
     /// `LLMStatusResponse.progress` shape; same filter applied
     /// server-side by `/v1/stt/status` (engine#145).
     let progress: Double?
+    /// Lifecycle state for the active STT backend (engine#125). `nil`
+    /// on builds that predate the fire-and-forget rollout — consumers
+    /// MAY infer state from `loaded` + `progress` when nil.
+    let state: LoadState?
+    /// Human-readable error message when `state == .failed`. `nil`
+    /// in every other state.
+    let lastError: String?
+
+    init(
+        loaded: Bool,
+        language: String?,
+        streaming: Bool,
+        progress: Double?,
+        state: LoadState? = nil,
+        lastError: String? = nil
+    ) {
+        self.loaded = loaded
+        self.language = language
+        self.streaming = streaming
+        self.progress = progress
+        self.state = state
+        self.lastError = lastError
+    }
 }
 
 // MARK: - STT Backend Picker (canonical module-picker pattern, second adopter)
