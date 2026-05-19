@@ -168,9 +168,11 @@ struct STTStatusResponse: ResponseCodable {
     let language: String?
     let streaming: Bool
     /// Fraction-completed [0.0, 1.0] for an in-progress HF model
-    /// download. Reset to 0 at the start of every `/v1/stt/load`
-    /// call; ticks up to 1.0 as files stream in. Optional in the
-    /// wire shape so older clients continue to decode the response.
+    /// download. `nil` when no download is in flight (idle, loaded,
+    /// or Apple STT — which has no HF pull). Non-nil only while the
+    /// snapshot is actively streaming in. Mirrors
+    /// `LLMStatusResponse.progress` shape; same filter applied
+    /// server-side by `/v1/stt/status` (engine#145).
     let progress: Double?
 }
 

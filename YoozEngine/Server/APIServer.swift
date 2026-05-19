@@ -1764,11 +1764,28 @@ final class APIServer: ObservableObject {
                 }
                 let engine = YoozSTTEngine.shared
                 let running = engine.isRunning
+                // Mirror the `/v1/llm/status` filter (engine#143): nil
+                // when the model is loaded (banner hides) and nil when
+                // the residual fraction is 0 (cold engine, no download
+                // ever started). `engine.downloadProgress` is sticky —
+                // it ticks 0 -> 1.0 during the HF pull and is reset
+                // to 0 only at the start of the next `start()` or on
+                // `stop()`. Without this guard a loaded engine
+                // reports progress=1.0 forever and the consumer
+                // banner (whisper#194) shows "Downloading... 100%"
+                // on an idle engine.
+                let progress: Double?
+                if running {
+                    progress = nil
+                } else {
+                    let fraction = engine.downloadProgress
+                    progress = fraction > 0 ? fraction : nil
+                }
                 let payload = STTStatusResponse(
                     loaded: running,
                     language: running ? engine.currentLanguage.rawValue : nil,
                     streaming: engine.isStreaming,
-                    progress: engine.downloadProgress
+                    progress: progress
                 )
                 return try jsonResponse(payload)
                 #else
@@ -1894,11 +1911,16 @@ final class APIServer: ObservableObject {
                     language: language,
                     allowFetch: allowFetch
                 )
+                // loaded == true so progress must be nil per the
+                // /v1/stt/status contract (engine#145). Otherwise
+                // consumers that read the load response directly
+                // would render "Downloading... 100%" on a loaded
+                // engine.
                 return try jsonResponse(STTStatusResponse(
                     loaded: true,
                     language: language.rawValue,
                     streaming: false,
-                    progress: sttEngine.downloadProgress
+                    progress: nil
                 ))
             } catch {
                 return mapSTTLoadError(error)
