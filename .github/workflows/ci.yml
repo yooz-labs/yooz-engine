@@ -146,11 +146,15 @@ jobs:
     needs: changes
     if: needs.changes.outputs.engine == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: macos-26
-    # 90-minute safety net during the post-#125 transition. The
-    # combined build+test step now completes in ~25-35 min on a warm
-    # SPM cache (vs the 60-min ceiling the build-then-test split
-    # was hitting on cold runners).
-    timeout-minutes: 90
+    # 120-minute ceiling. First-run cold-cache `xcodebuild test` of
+    # the engine target on GitHub-hosted macos-26 runners takes
+    # ~85-95 minutes (SPM resolves ~30 packages, mlx-swift's C++
+    # core compiles cold, plus the engine + modules + test bundle).
+    # The SPM cache below saves out at the END of the job on Post,
+    # so we need at least one full run to land green before
+    # subsequent runs benefit. After that, warm-cache runs should
+    # complete in 25-35 minutes.
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
