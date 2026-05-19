@@ -71,9 +71,15 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
             }
             lock.unlock()
 
-            // Slice off the resumed portion, append to disk.
+            // Slice off the resumed portion, append to disk. Mirror
+            // the production `URLSessionHTTPDownloadClient.downloadFile`
+            // truncate-on-fresh contract so a regression that drops
+            // the `fetchFile` delete-on-oversize step still surfaces
+            // here (engine#144 belt-and-suspenders).
             let payload = blob.subdata(in: Int(byteOffset)..<blob.count)
-            if !FileManager.default.fileExists(atPath: destination.path) {
+            if byteOffset == 0
+                || !FileManager.default.fileExists(atPath: destination.path)
+            {
                 FileManager.default.createFile(
                     atPath: destination.path, contents: nil
                 )

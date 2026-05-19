@@ -21,6 +21,17 @@ import XCTest
 
 final class STTDownloadProgressTests: XCTestCase {
 
+    /// Reset the shared `YoozSTTEngine.downloadProgress` after every
+    /// test (and on failure paths that exit before reaching the
+    /// inline reset) so neighboring tests that read the property
+    /// aren't perturbed by these mutations. Cleanup in `tearDown`
+    /// rather than at the bottom of the body protects against
+    /// XCTAssert short-circuiting on a failure.
+    override func tearDown() async throws {
+        await YoozSTTEngine.shared.setDownloadProgress(0)
+        try await super.tearDown()
+    }
+
     /// External progress setter used by the `/v1/stt/load` route to
     /// forward `Qwen3ASRModelFetcher` events into the published
     /// `downloadProgress`. The value must be clamped to `[0, 1]` so
@@ -44,9 +55,5 @@ final class STTDownloadProgressTests: XCTestCase {
             XCTAssertEqual(engine.downloadProgress, 0.0, accuracy: 1e-9,
                            "Out-of-range low value must clamp to 0.0")
         }
-        // Leave the singleton in a clean state so neighboring tests
-        // that read `downloadProgress` aren't perturbed by the local
-        // mutations above.
-        await engine.setDownloadProgress(0)
     }
 }

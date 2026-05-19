@@ -176,14 +176,36 @@ public struct URLSessionHTTPDownloadClient: HTTPDownloadClient {
         // entry, which then failed the size-mismatch check and aborted
         // the run before the sentinel could be written, leaving the
         // dir not-ready for the next switch.
+        //
+        // Check `createFile`'s Bool: a `false` return means the
+        // truncate/create failed (disk full, permission denied, or a
+        // pre-existing file we can't replace). Without this guard the
+        // subsequent `seekToEnd` would append on top of the
+        // un-truncated bytes — reintroducing the very corruption this
+        // path was added to fix.
         if byteOffset == 0 {
-            FileManager.default.createFile(
+            guard FileManager.default.createFile(
                 atPath: destination.path, contents: nil
-            )
+            ) else {
+                throw Qwen3ASRError.fetchFailed(
+                    .other(
+                        "Could not truncate destination file at "
+                        + "\(destination.path) before fresh download; "
+                        + "refusing to append on possibly-corrupted bytes."
+                    )
+                )
+            }
         } else if !FileManager.default.fileExists(atPath: destination.path) {
-            FileManager.default.createFile(
+            guard FileManager.default.createFile(
                 atPath: destination.path, contents: nil
-            )
+            ) else {
+                throw Qwen3ASRError.fetchFailed(
+                    .other(
+                        "Could not create destination file at "
+                        + "\(destination.path) for download."
+                    )
+                )
+            }
         }
         let handle = try FileHandle(forWritingTo: destination)
         defer { try? handle.close() }
@@ -514,12 +536,31 @@ public actor Qwen3ASRModelFetcher {
                 // it and re-fetch from scratch; `downloadFile` will
                 // also truncate when `offset == 0` as belt-and-
                 // suspenders for the same scenario.
+                //
+                // Throw on remove failure rather than swallowing —
+                // a silent fall-through would let `downloadFile`
+                // append on top of the oversized prefix again,
+                // recreating the same bug a layer up. The truncate
+                // guard in `downloadFile` catches most cases, but a
+                // permission error or a busy file would slip through
+                // both layers without surfacing a diagnostic.
                 logger.warning("""
                     Removing oversized cached file \(entry.path, privacy: .public) \
                     (\(actual) bytes on disk vs \(expected) in manifest); \
                     re-fetching from scratch.
                     """)
-                try? FileManager.default.removeItem(at: dest)
+                do {
+                    try FileManager.default.removeItem(at: dest)
+                } catch {
+                    throw Qwen3ASRError.fetchFailed(
+                        .other(
+                            "Failed to remove oversized cached file "
+                            + "\(entry.path) (\(actual) bytes vs "
+                            + "\(expected) in manifest): "
+                            + "\(error.localizedDescription)"
+                        )
+                    )
+                }
             }
         } else if FileManager.default.fileExists(atPath: dest.path)
                   && entry.size == nil

@@ -1863,6 +1863,16 @@ final class APIServer: ObservableObject {
                         let stream = await fetcher.download(into: modelDir)
                         var totalBytes: Int64 = 0
                         var perFileWritten: [String: Int64] = [:]
+                        // Throttle MainActor publishes — `downloadFile`
+                        // emits one progress event per 64 KB chunk, so
+                        // a 2.5 GB pull would schedule ~40k hops if we
+                        // republished on every event. Only push when
+                        // the fraction has advanced by ≥ 0.5% (or on
+                        // the terminal 1.0 pin below) so the banner
+                        // animates smoothly without flooding the
+                        // MainActor or SwiftUI subscribers.
+                        var lastPublished: Double = 0
+                        let publishStep: Double = 0.005
                         for try await event in stream {
                             // Translate the fetcher's per-file events
                             // into a single rolling fraction so the
@@ -1874,11 +1884,10 @@ final class APIServer: ObservableObject {
                             switch event {
                             case .manifestResolved(let total, _):
                                 totalBytes = total
-                            case .fileStarted(let path, let bytes):
-                                if let bytes, perFileWritten[path] == nil {
+                            case .fileStarted(let path, _):
+                                if perFileWritten[path] == nil {
                                     perFileWritten[path] = 0
                                 }
-                                _ = bytes
                             case .fileBytes(let path, let completed, _):
                                 perFileWritten[path] = completed
                             case .fileFinished(let path, let bytes):
@@ -1894,7 +1903,10 @@ final class APIServer: ObservableObject {
                                     Double(sumBytes) / Double(totalBytes),
                                     1.0
                                 )
-                                await sttEngine.setDownloadProgress(fraction)
+                                if fraction - lastPublished >= publishStep {
+                                    lastPublished = fraction
+                                    await sttEngine.setDownloadProgress(fraction)
+                                }
                             }
                         }
                         // Pin to 1.0 once the stream completes — the
