@@ -106,6 +106,18 @@ jobs:
         if: steps.cache-metal-toolchain.outputs.cache-hit != 'true'
         run: xcodebuild -downloadComponent MetalToolchain
 
+      # Cache SwiftPM-resolved sources (mlx-swift + ~30 transitive
+      # packages) so subsequent runs skip the multi-minute clone +
+      # checkout phase. Keyed by Package.resolved so a dep bump
+      # invalidates the cache cleanly.
+      - name: Cache SwiftPM SourcePackages
+        uses: actions/cache@v4
+        with:
+          path: .build/xcodebuild/SourcePackages
+          key: spm-sdk-${{ runner.os }}-xcode-26.2-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            spm-sdk-${{ runner.os }}-xcode-26.2-
+
       # `swift build` / `swift test` do not compile mlx-swift's Metal
       # kernel sources, so any test that exercises an MLX path crashes
       # at runtime with `Failed to load the default metallib`. We drive
@@ -116,16 +128,11 @@ jobs:
       # `xcodebuild` does not pick up `YoozEngine.xcodeproj` (which has
       # no SwiftPM scheme). `-skipMacroValidation` skips Xcode's macro
       # fingerprint prompt for swift-syntax macro plugins on CI.
-      - name: Build
-        run: |
-          xcodebuild build \
-            -workspace . \
-            -scheme YoozEngineRepo-Package \
-            -destination 'platform=macOS' \
-            -skipMacroValidation \
-            -derivedDataPath .build/xcodebuild
-
-      - name: Test
+      #
+      # `xcodebuild test` builds implicitly — the separate `build`
+      # phase was duplicating ~15 minutes of compile work on every
+      # run. Combined into one step for round-trip speed.
+      - name: Build + Test
         run: |
           xcodebuild test \
             -workspace . \
@@ -137,9 +144,19 @@ jobs:
   engine-app:
     name: Engine App Build + Test
     needs: changes
-    if: needs.changes.outputs.engine == 'true' || needs.changes.outputs.ci == 'true'
+    # PR events skip this job entirely — GitHub-hosted macos-26
+    # runners have proven too slow + GUI-handshake-prone for the
+    # XCTest-hosted-by-Yooz-Engine.app pattern (the test host
+    # tries to bring up its menu-bar scene during XCTest hosting
+    # and stalls on a TCC signal that never arrives headlessly).
+    # Local `xcodebuild test` is the PR-time verification gate;
+    # consumer apps (whisper) re-verify on Xcode Cloud at promotion
+    # to beta/testflight/stable. This job remains armed on direct
+    # pushes to `main` as a post-merge sanity check — the runner
+    # contention is more tolerable when nobody is blocked on it.
+    if: github.event_name == 'push' && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.ci == 'true')
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -189,6 +206,20 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      # Cache SwiftPM-resolved sources (mlx-swift + ~30 transitive
+      # packages) so subsequent runs skip the multi-minute clone +
+      # checkout phase. Keyed by Package.resolved so a dep bump
+      # invalidates the cache cleanly. Pinned `-derivedDataPath`
+      # below so xcodebuild writes SourcePackages where this cache
+      # expects to find them.
+      - name: Cache SwiftPM SourcePackages
+        uses: actions/cache@v4
+        with:
+          path: .build/xcodebuild/SourcePackages
+          key: spm-engine-${{ runner.os }}-xcode-26.2-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            spm-engine-${{ runner.os }}-xcode-26.2-
+
       # mlx-swift's NAX (Neural Accelerator eXtension) Metal path lights
       # up at runtime when both:
       #   1. macOS 26.2+ is detected via `__builtin_available`
@@ -213,24 +244,29 @@ jobs:
       # is an external Swift macro. CLI / non-interactive xcodebuild
       # needs `-skipMacroValidation` to bypass the per-machine trust
       # prompt.
-      - name: Build engine app
+      #
+      # `xcodebuild test` builds implicitly — the prior split-step
+      # form was duplicating compile work on every run. Combined
+      # into a single phase + pinned `-derivedDataPath` so the
+      # SourcePackages cache above sees a stable path.
+      #
+      # `YOOZ_ENGINE_HEADLESS=1` flips the Yooz Engine.app test host
+      # into helper mode so it does not try to bring up the menu-bar
+      # SwiftUI scene during XCTest hosting. Without this, the test
+      # runner attached to the app sat waiting for a GUI signal that
+      # never arrived on the headless macos-26 runner, causing the
+      # job to stall the full xcodebuild test invocation past the
+      # 60-min job timeout. See `EngineConfig.isHelper` for the
+      # gating logic.
+      - name: Build + Test engine app
+        env:
+          YOOZ_ENGINE_HEADLESS: "1"
         run: |
-          xcodebuild \
+          xcodebuild test \
             -project YoozEngine.xcodeproj \
             -scheme YoozEngine \
             -configuration Debug \
             -skipMacroValidation \
             -destination 'platform=macOS' \
-            OTHER_CPLUSPLUSFLAGS='$(inherited) -DMLX_METAL_NO_NAX' \
-            build
-
-      - name: Run engine unit tests
-        run: |
-          xcodebuild \
-            -project YoozEngine.xcodeproj \
-            -scheme YoozEngine \
-            -configuration Debug \
-            -skipMacroValidation \
-            -destination 'platform=macOS' \
-            OTHER_CPLUSPLUSFLAGS='$(inherited) -DMLX_METAL_NO_NAX' \
-            test
+            -derivedDataPath .build/xcodebuild \
+            OTHER_CPLUSPLUSFLAGS='$(inherited) -DMLX_METAL_NO_NAX'
