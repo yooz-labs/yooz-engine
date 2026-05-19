@@ -244,11 +244,21 @@ jobs:
       # prompt.
       #
       # `xcodebuild test` builds implicitly — the prior split-step
-      # form was duplicating ~25 minutes of compile work on every
-      # run (hitting the 60-min job timeout on cold runners).
-      # Combined into a single phase + pinned `-derivedDataPath` so
-      # the SourcePackages cache above sees a stable path.
+      # form was duplicating compile work on every run. Combined
+      # into a single phase + pinned `-derivedDataPath` so the
+      # SourcePackages cache above sees a stable path.
+      #
+      # `YOOZ_ENGINE_HEADLESS=1` flips the Yooz Engine.app test host
+      # into helper mode so it does not try to bring up the menu-bar
+      # SwiftUI scene during XCTest hosting. Without this, the test
+      # runner attached to the app sat waiting for a GUI signal that
+      # never arrived on the headless macos-26 runner, causing the
+      # job to stall the full xcodebuild test invocation past the
+      # 60-min job timeout. See `EngineConfig.isHelper` for the
+      # gating logic.
       - name: Build + Test engine app
+        env:
+          YOOZ_ENGINE_HEADLESS: "1"
         run: |
           xcodebuild test \
             -project YoozEngine.xcodeproj \
