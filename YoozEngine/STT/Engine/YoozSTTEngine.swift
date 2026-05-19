@@ -352,7 +352,10 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         // Different language while loading → cancel the prior load
         // before starting the new one. The cancelled Task throws
         // CancellationError to any awaiters; the catch path below
-        // settles state back to .idle.
+        // settles state back to .idle, but only if the old task is
+        // still the registered in-flight one (identity guard in
+        // settleLoad). Without that guard, the old task's settle
+        // would clobber the new task's `.loading` state.
         if loadState == .loading {
             inFlightLoadTask?.cancel()
         }
@@ -361,50 +364,66 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         inFlightLoadLanguage = language
         lastLoadError = nil
 
-        let task = Task<Void, Error> { [weak self] in
+        // Capture the task handle so the settle hop can compare
+        // identity (not just state). `self` is a singleton — never
+        // collected — so we drop the weak capture pattern; a [weak
+        // self] return-on-nil would silently strand state at
+        // `.loading` if the singleton ever went away mid-load.
+        var taskHandle: Task<Void, Error>?
+        let task = Task<Void, Error> {
             do {
                 try await body()
                 await MainActor.run {
-                    guard let self = self else { return }
-                    self.loadState = .ready
-                    self.inFlightLoadTask = nil
-                    self.inFlightLoadLanguage = nil
+                    self.settleLoad(state: .ready, error: nil, owner: taskHandle)
                 }
             } catch is CancellationError {
                 await MainActor.run {
-                    guard let self = self else { return }
-                    self.loadState = .idle
-                    // Reset downloadProgress so a stalled mid-
-                    // download fraction does not linger in
-                    // /v1/stt/status after the cancel (the
-                    // route's `running ? nil : ...` filter only
-                    // covers the loaded case; this closes the
-                    // cancelled-load window).
-                    self.downloadProgress = 0
-                    self.inFlightLoadTask = nil
-                    self.inFlightLoadLanguage = nil
+                    self.settleLoad(state: .idle, error: nil, owner: taskHandle)
                 }
                 throw CancellationError()
             } catch {
                 let message = error.localizedDescription
                 await MainActor.run {
-                    guard let self = self else { return }
-                    self.loadState = .failed
-                    self.lastLoadError = message
-                    // Same reset as the cancellation arm — a
-                    // partial download fraction must not lie about
-                    // an in-flight load after the failure has been
-                    // observed on /v1/stt/status.lastError.
-                    self.downloadProgress = 0
-                    self.inFlightLoadTask = nil
-                    self.inFlightLoadLanguage = nil
+                    self.settleLoad(state: .failed, error: message, owner: taskHandle)
                 }
                 throw error
             }
         }
+        taskHandle = task
 
         inFlightLoadTask = task
         return task
+    }
+
+    /// Mirror of `TouchUpEngine.markLoadSettled` — no-op when the
+    /// settling Task is no longer the registered in-flight one.
+    /// Covers the language-switch race (old task's cancellation
+    /// hop arriving after the new task is already registered) and
+    /// the stop()-races-success-arm race (the success hop arriving
+    /// after stop() cleared inFlightLoadTask).
+    @MainActor
+    private func settleLoad(
+        state: LoadState,
+        error: String?,
+        owner: Task<Void, Error>?
+    ) {
+        guard let owner, inFlightLoadTask == owner else {
+            return
+        }
+        loadState = state
+        lastLoadError = error
+        inFlightLoadTask = nil
+        inFlightLoadLanguage = nil
+        // Reset downloadProgress on terminal-not-loaded states so a
+        // stalled mid-download fraction does not linger in
+        // /v1/stt/status after a failed or cancelled load (the
+        // route's `running ? nil : ...` filter only covers the
+        // loaded case). On `.ready`, downloadProgress stays at its
+        // final value — the filter collapses it to nil since
+        // isRunning is now true.
+        if state == .idle || state == .failed {
+            downloadProgress = 0
+        }
     }
 
     /// Unload the model and free resources

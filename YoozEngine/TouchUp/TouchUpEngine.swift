@@ -316,37 +316,56 @@ public actor TouchUpEngine {
         loadStates[modelType] = .loading
         lastLoadErrors[modelType] = nil
 
-        let task = Task<Void, Error> { [weak self] in
-            guard let self = self else { return }
+        // Capture the task reference up-front so the settle hop can
+        // check identity (not just state) before mutating. Without
+        // identity comparison, an `unload` + immediate `enqueueLoad`
+        // race lets the old task's settle clobber the new task's
+        // state — see the review finding on engine#125.
+        var taskHandle: Task<Void, Error>?
+        // `self` is the actor singleton — guaranteed alive for the
+        // process lifetime. The weak capture pattern is dropped per
+        // the silent-failure review (would silently strand state at
+        // .loading if self ever went away mid-load).
+        let task = Task<Void, Error> {
             do {
                 try await self.preloadModel(modelType)
-                await self.markLoadSettled(modelType, state: .ready, error: nil)
+                await self.markLoadSettled(
+                    modelType, state: .ready, error: nil, owner: taskHandle
+                )
             } catch is CancellationError {
-                await self.markLoadSettled(modelType, state: .idle, error: nil)
+                await self.markLoadSettled(
+                    modelType, state: .idle, error: nil, owner: taskHandle
+                )
                 throw CancellationError()
             } catch {
                 let message = error.localizedDescription
-                await self.markLoadSettled(modelType, state: .failed, error: message)
+                await self.markLoadSettled(
+                    modelType, state: .failed, error: message, owner: taskHandle
+                )
                 throw error
             }
         }
+        taskHandle = task
 
         inFlightLoadTasks[modelType] = task
         return task
     }
 
     /// Settle the post-load state from the Task's completion handler.
-    /// No-op when the load is no longer the in-flight one — covers
-    /// the race where `unload(modelType)` clears state while the
-    /// Task's success hop is still queued behind the actor (a
-    /// successful preload would otherwise resurrect `state = .ready`
-    /// after the caller already called `unload`).
+    /// No-op when the in-flight task for `modelType` is no longer
+    /// `owner` — covers the race where `unload(modelType)` clears
+    /// state (and a new `enqueueLoad` may have started another Task)
+    /// while the old Task's settle hop was still queued behind the
+    /// actor. Without the identity check, an old task's settlement
+    /// could overwrite a new task's `.loading` state, leaving the
+    /// new load silently stranded.
     private func markLoadSettled(
         _ modelType: LLMModelType,
         state: LoadState,
-        error: String?
+        error: String?,
+        owner: Task<Void, Error>?
     ) {
-        guard loadStates[modelType] == .loading else {
+        guard let owner, inFlightLoadTasks[modelType] == owner else {
             return
         }
         loadStates[modelType] = state

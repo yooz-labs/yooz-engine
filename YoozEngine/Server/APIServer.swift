@@ -21,6 +21,9 @@ import VADModule
 #endif
 
 private let cadenceLogger = os.Logger(subsystem: "live.yooz.engine", category: "stt-cadence")
+private let loadEndpointLogger = os.Logger(
+    subsystem: "live.yooz.engine", category: "load-endpoints"
+)
 
 /// Request context used by the HTTP router. The only material difference
 /// from `BasicRequestContext` is the body-size limit: Hummingbird 2's
@@ -498,10 +501,13 @@ final class APIServer: ObservableObject {
 
     /// Parse the `?wait=true` query param honored by the fire-and-
     /// forget load endpoints (engine#125). Treats `true` / `1` / `yes`
-    /// (case-insensitive) as true; everything else (including the
-    /// param's absence) is false — the new default is async 202.
-    /// Older whisper builds that need the pre-#125 blocking behavior
-    /// pass `?wait=true`.
+    /// (case-insensitive) as true; recognized false-y values
+    /// (`false` / `0` / `no`) are explicitly false; everything else
+    /// (including the param's absence and an unrecognized value)
+    /// also returns false but logs a warning so an operator typo
+    /// like `?wait=lol` doesn't silently degrade to async without
+    /// signal. Older whisper builds that need the pre-#125 blocking
+    /// behavior pass `?wait=true`.
     ///
     /// Accepts the raw query string rather than Hummingbird's
     /// `FlatDictionary` directly to keep this helper free of the
@@ -512,7 +518,17 @@ final class APIServer: ObservableObject {
             let kv = pair.split(separator: "=", maxSplits: 1)
             guard kv.count == 2, kv[0] == "wait" else { continue }
             let value = String(kv[1]).lowercased()
-            return value == "true" || value == "1" || value == "yes"
+            switch value {
+            case "true", "1", "yes":
+                return true
+            case "false", "0", "no", "":
+                return false
+            default:
+                loadEndpointLogger.warning(
+                    "Unrecognized ?wait query value: \"\(value, privacy: .public)\". Treating as ?wait=false (fire-and-forget); use 'true'/'1'/'yes' for blocking semantics."
+                )
+                return false
+            }
         }
         return false
     }
