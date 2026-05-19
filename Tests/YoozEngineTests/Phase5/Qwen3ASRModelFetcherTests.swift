@@ -71,9 +71,15 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
             }
             lock.unlock()
 
-            // Slice off the resumed portion, append to disk.
+            // Slice off the resumed portion, append to disk. Mirror
+            // the production `URLSessionHTTPDownloadClient.downloadFile`
+            // truncate-on-fresh contract so a regression that drops
+            // the `fetchFile` delete-on-oversize step still surfaces
+            // here (engine#144 belt-and-suspenders).
             let payload = blob.subdata(in: Int(byteOffset)..<blob.count)
-            if !FileManager.default.fileExists(atPath: destination.path) {
+            if byteOffset == 0
+                || !FileManager.default.fileExists(atPath: destination.path)
+            {
                 FileManager.default.createFile(
                     atPath: destination.path, contents: nil
                 )
@@ -216,6 +222,59 @@ final class Qwen3ASRModelFetcherTests: XCTestCase {
             client.rangeRequests.isEmpty,
             "Fresh fetch must not issue Range requests"
         )
+    }
+
+    /// engine#144 cumulative-bloat regression: pre-stage a
+    /// `model.safetensors` that is LARGER than the manifest claims
+    /// (the symptom a real user reproduced — `seekToEnd`-style
+    /// append on retries inflated the on-disk blob past its expected
+    /// size). The fetcher must remove the corrupted file, re-fetch
+    /// from scratch (no Range header), and end with a file whose
+    /// size matches the manifest entry exactly. Without the
+    /// delete-on-oversize fix, the MockClient's append-mode write
+    /// would stack the new payload on top of the oversized prefix
+    /// and the post-fetch size check would throw.
+    func testRecoversFromOversizedCachedFile() async throws {
+        let (client, blobs) = try fixtureClient()
+        let fetcher = Qwen3ASRModelFetcher(
+            client: client,
+            baseURL: URL(string: "https://mock.local")!
+        )
+
+        let dest = tempDir.appendingPathComponent("model.safetensors")
+        let expectedBlob = blobs["model.safetensors"]!
+        // Pre-stage 2x the expected payload to simulate the bloat
+        // case described in engine#144 (`actual > expected`).
+        let oversized = expectedBlob + Data(
+            repeating: 0xff, count: expectedBlob.count
+        )
+        FileManager.default.createFile(
+            atPath: dest.path, contents: oversized
+        )
+
+        for try await _ in await fetcher.download(
+            into: tempDir, runTokenizerPrep: false
+        ) {}
+
+        let onDisk = try Data(contentsOf: dest)
+        XCTAssertEqual(
+            onDisk.count, expectedBlob.count,
+            "After oversize recovery, on-disk size must match the manifest"
+        )
+        XCTAssertEqual(onDisk, expectedBlob,
+                       "Recovered file must equal the canonical payload")
+        // A fresh-from-scratch fetch must NOT issue a Range request
+        // (would imply the fetcher trusted the oversize prefix as a
+        // resume base — exactly the bug this guards).
+        XCTAssertFalse(
+            client.rangeRequests.contains { $0.path == "model.safetensors" },
+            "Recovery path must re-fetch from offset 0, no Range header"
+        )
+        // The sentinel must be written after every required file
+        // passes validation — without it, `isModelDirReady` would
+        // return false and the next switch would re-download.
+        let ready = await fetcher.isModelDirReady(tempDir)
+        XCTAssertTrue(ready, "Recovery must leave the dir ready (sentinel dropped)")
     }
 
     /// Pre-populate a partial `model.safetensors` on disk and confirm

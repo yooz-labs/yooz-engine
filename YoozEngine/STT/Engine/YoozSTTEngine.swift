@@ -48,6 +48,13 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     /// download. Resets to 0 on `start(language:)` and on failure;
     /// reaches 1.0 on successful load. UI clients poll via the
     /// `progress` field of `/v1/stt/status`.
+    ///
+    /// For backends whose download is owned by an actor outside
+    /// `YoozSTTEngine` (qwen3ASRPreview routes its fetch through
+    /// `Qwen3ASRModelFetcher` from the `/v1/stt/load` handler), the
+    /// API server calls `setDownloadProgress(_:)` as it drains the
+    /// fetcher's progress stream so `/v1/stt/status` can surface a
+    /// non-nil fraction for the whisper banner (engine#144).
     @Published public private(set) var downloadProgress: Double = 0
 
     /// Active STT backend. Default is `.parakeet`; switchable via
@@ -266,6 +273,19 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     /// Get list of available (implemented) languages
     public var availableLanguages: [STTLanguage] {
         STTLanguage.implemented
+    }
+
+    /// External setter used by backends whose download is owned by an
+    /// actor outside this class (today: qwen3ASRPreview, fetched by
+    /// `Qwen3ASRModelFetcher` and driven from the `/v1/stt/load`
+    /// route). Clamps to `[0, 1]` so a stale or malformed event can't
+    /// push the published value out of range. The route handler calls
+    /// this as it drains the fetcher's progress stream; the value
+    /// then surfaces via `/v1/stt/status.progress` for the consumer
+    /// banner (engine#144).
+    public func setDownloadProgress(_ fraction: Double) async {
+        let clamped = min(max(fraction, 0), 1)
+        await MainActor.run { self.downloadProgress = clamped }
     }
 
     /// Unload the model and free resources

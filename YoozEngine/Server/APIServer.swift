@@ -1855,22 +1855,82 @@ final class APIServer: ObservableObject {
                         )
                     }
                     do {
+                        // Reset published progress at the start of a
+                        // fresh fetch so a stale 1.0 from a prior run
+                        // (or a previously-loaded backend) does not
+                        // mislead the /v1/stt/status banner.
+                        await sttEngine.setDownloadProgress(0)
                         let stream = await fetcher.download(into: modelDir)
-                        for try await _ in stream {
-                            // Drain the progress stream; HTTP clients
-                            // get a single response after the fetch
-                            // completes. Streaming progress to clients
-                            // is a future enhancement (issue #59).
+                        var totalBytes: Int64 = 0
+                        var perFileWritten: [String: Int64] = [:]
+                        // Throttle MainActor publishes — `downloadFile`
+                        // emits one progress event per 64 KB chunk, so
+                        // a 2.5 GB pull would schedule ~40k hops if we
+                        // republished on every event. Only push when
+                        // the fraction has advanced by ≥ 0.5% (or on
+                        // the terminal 1.0 pin below) so the banner
+                        // animates smoothly without flooding the
+                        // MainActor or SwiftUI subscribers.
+                        var lastPublished: Double = 0
+                        let publishStep: Double = 0.005
+                        for try await event in stream {
+                            // Translate the fetcher's per-file events
+                            // into a single rolling fraction so the
+                            // consumer banner has something to render
+                            // (engine#144). Tokenizer prep events are
+                            // intentionally ignored — they fire after
+                            // every byte has landed and the banner is
+                            // already pinned near 1.0.
+                            switch event {
+                            case .manifestResolved(let total, _):
+                                totalBytes = total
+                            case .fileStarted(let path, _):
+                                if perFileWritten[path] == nil {
+                                    perFileWritten[path] = 0
+                                }
+                            case .fileBytes(let path, let completed, _):
+                                perFileWritten[path] = completed
+                            case .fileFinished(let path, let bytes):
+                                perFileWritten[path] = bytes
+                            case .tokenizerPrepStarted,
+                                 .tokenizerPrepFinished,
+                                 .done:
+                                break
+                            }
+                            if totalBytes > 0 {
+                                let sumBytes = perFileWritten.values.reduce(0, +)
+                                let fraction = min(
+                                    Double(sumBytes) / Double(totalBytes),
+                                    1.0
+                                )
+                                if fraction - lastPublished >= publishStep {
+                                    lastPublished = fraction
+                                    await sttEngine.setDownloadProgress(fraction)
+                                }
+                            }
                         }
+                        // Pin to 1.0 once the stream completes — the
+                        // route is about to call `start()` which will
+                        // either succeed (engine#145 filter on
+                        // /v1/stt/status collapses progress to nil
+                        // once `loaded == true`) or fail (we reset
+                        // back to 0 in the error mapper below).
+                        await sttEngine.setDownloadProgress(1.0)
                     } catch let asrError as Qwen3ASRError {
+                        // Reset published progress so a stalled
+                        // mid-download fraction does not linger in
+                        // /v1/stt/status after the failed load.
+                        await sttEngine.setDownloadProgress(0)
                         // Route through the same demux as
                         // /v1/stt/batch so a fetch failure surfaces
                         // the same HTTP code regardless of which
                         // endpoint the client hit.
                         return mapQwen3BatchError(asrError)
                     } catch let fetchFailure as FetchFailure {
+                        await sttEngine.setDownloadProgress(0)
                         return mapFetchFailure(fetchFailure)
                     } catch {
+                        await sttEngine.setDownloadProgress(0)
                         return errorResponse(
                             status: .internalServerError,
                             message: "Model fetch failed: \(error.localizedDescription)",
