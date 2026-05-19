@@ -165,8 +165,22 @@ public struct URLSessionHTTPDownloadClient: HTTPDownloadClient {
             throw Qwen3ASRError.fetchFailed(.rangeIgnored(url: url))
         }
 
-        // Append-mode write. Create the file if it doesn't exist.
-        if !FileManager.default.fileExists(atPath: destination.path) {
+        // When `byteOffset == 0` the caller wants a fresh download —
+        // either the file didn't exist or it was corrupted (e.g. local
+        // size > manifest size; see `fetchFile`). Truncate any existing
+        // bytes before opening the handle so `seekToEnd` puts the
+        // cursor at byte 0. Without this, an existing file's payload
+        // gets prepended to the new download and the on-disk size
+        // grows unbounded across retries — engine#144 reproduced this
+        // as a `model.safetensors` blob 10x larger than its HF manifest
+        // entry, which then failed the size-mismatch check and aborted
+        // the run before the sentinel could be written, leaving the
+        // dir not-ready for the next switch.
+        if byteOffset == 0 {
+            FileManager.default.createFile(
+                atPath: destination.path, contents: nil
+            )
+        } else if !FileManager.default.fileExists(atPath: destination.path) {
             FileManager.default.createFile(
                 atPath: destination.path, contents: nil
             )
@@ -488,10 +502,25 @@ public actor Qwen3ASRModelFetcher {
         if let expected = entry.size,
            let actual = try? FileManager.default.attributesOfItem(
                atPath: dest.path
-           )[.size] as? Int64,
-           actual < expected
+           )[.size] as? Int64
         {
-            offset = actual
+            if actual < expected {
+                offset = actual
+            } else if actual > expected {
+                // Local file is larger than the manifest claims —
+                // a prior aborted download left a corrupted blob
+                // (engine#144: cumulative append-on-retry inflated
+                // model.safetensors to 10x its expected size). Remove
+                // it and re-fetch from scratch; `downloadFile` will
+                // also truncate when `offset == 0` as belt-and-
+                // suspenders for the same scenario.
+                logger.warning("""
+                    Removing oversized cached file \(entry.path, privacy: .public) \
+                    (\(actual) bytes on disk vs \(expected) in manifest); \
+                    re-fetching from scratch.
+                    """)
+                try? FileManager.default.removeItem(at: dest)
+            }
         } else if FileManager.default.fileExists(atPath: dest.path)
                   && entry.size == nil
         {
