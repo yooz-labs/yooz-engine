@@ -496,6 +496,27 @@ final class APIServer: ObservableObject {
         )
     }
 
+    /// Parse the `?wait=true` query param honored by the fire-and-
+    /// forget load endpoints (engine#125). Treats `true` / `1` / `yes`
+    /// (case-insensitive) as true; everything else (including the
+    /// param's absence) is false — the new default is async 202.
+    /// Older whisper builds that need the pre-#125 blocking behavior
+    /// pass `?wait=true`.
+    ///
+    /// Accepts the raw query string rather than Hummingbird's
+    /// `FlatDictionary` directly to keep this helper free of the
+    /// HummingbirdCore type dependency at the helper signature.
+    private nonisolated func parseWaitQuery(_ query: String?) -> Bool {
+        guard let query, !query.isEmpty else { return false }
+        for pair in query.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2, kv[0] == "wait" else { continue }
+            let value = String(kv[1]).lowercased()
+            return value == "true" || value == "1" || value == "yes"
+        }
+        return false
+    }
+
     #if canImport(STTModule)
     /// Map a Qwen3-ASR backend error to the right HTTP error
     /// response. Mirrors the parakeet/fast_conformer error mapping
@@ -633,6 +654,110 @@ final class APIServer: ObservableObject {
             )
         }
     }
+
+    #if canImport(STTModule)
+    /// Run the actual STT load pipeline for the active backend.
+    /// Extracted so both the synchronous (`?wait=true`) and the
+    /// background-Task (`?wait=false`, the new fire-and-forget
+    /// default in engine#125) paths can share one implementation
+    /// without duplicating the qwen3 fetcher logic.
+    ///
+    /// For qwen3 backends: materializes the model dir on disk
+    /// (downloading from HF if necessary, gated by `allowFetch`)
+    /// and runs tokenizer prep before handing off to
+    /// `sttEngine.start(language:allowFetch:)`. Throws
+    /// `Qwen3ASRError` / `FetchFailure` / generic Error — the
+    /// caller maps to HTTP per the existing error-mapper helpers.
+    /// For parakeet / fast_conformer: delegates straight to
+    /// `sttEngine.start(...)` which handles the HF snapshot
+    /// resolution itself.
+    nonisolated func runSTTLoad(
+        language: STTLanguage,
+        allowFetch: Bool
+    ) async throws {
+        let engine = YoozSTTEngine.shared
+        if await engine.currentBackend == .qwen3ASRPreview {
+            let modelDir = Qwen3ASRModelFetcher.defaultModelDir
+            let fetcher = Qwen3ASRModelFetcher.shared
+            let ready = await fetcher.isModelDirReady(modelDir)
+            if !ready {
+                if !allowFetch {
+                    // Match the pre-#125 wire shape: 404 with
+                    // `model_not_found` code via the YoozSTTError
+                    // demux in `mapSTTLoadError`.
+                    throw YoozSTTError.modelNotFound(
+                        "Qwen3-ASR model not on disk and "
+                        + "allow_fetch=false; bring the model "
+                        + "directory into place first."
+                    )
+                }
+                // Reset published progress at the start of a fresh
+                // fetch so a stale 1.0 from a prior run (or a
+                // previously-loaded backend) does not mislead the
+                // /v1/stt/status banner (engine#144).
+                await engine.setDownloadProgress(0)
+                let stream = await fetcher.download(into: modelDir)
+                var totalBytes: Int64 = 0
+                var perFileWritten: [String: Int64] = [:]
+                // Throttle MainActor publishes — `downloadFile` emits
+                // one progress event per 64 KB chunk, so a 2.5 GB
+                // pull would schedule ~40k hops if we republished on
+                // every event. Only push when the fraction has
+                // advanced by ≥ 0.5% (or on the terminal 1.0 pin
+                // below) so the banner animates smoothly without
+                // flooding the MainActor or SwiftUI subscribers.
+                var lastPublished: Double = 0
+                let publishStep: Double = 0.005
+                for try await event in stream {
+                    // Translate the fetcher's per-file events into a
+                    // single rolling fraction so the consumer banner
+                    // has something to render (engine#144). Tokenizer
+                    // prep events are intentionally ignored — they
+                    // fire after every byte has landed and the banner
+                    // is already pinned near 1.0.
+                    switch event {
+                    case .manifestResolved(let total, _):
+                        totalBytes = total
+                    case .fileStarted(let path, _):
+                        if perFileWritten[path] == nil {
+                            perFileWritten[path] = 0
+                        }
+                    case .fileBytes(let path, let completed, _):
+                        perFileWritten[path] = completed
+                    case .fileFinished(let path, let bytes):
+                        perFileWritten[path] = bytes
+                    case .tokenizerPrepStarted,
+                         .tokenizerPrepFinished,
+                         .done:
+                        break
+                    }
+                    if totalBytes > 0 {
+                        let sumBytes = perFileWritten.values.reduce(0, +)
+                        let fraction = min(
+                            Double(sumBytes) / Double(totalBytes),
+                            1.0
+                        )
+                        if fraction - lastPublished >= publishStep {
+                            lastPublished = fraction
+                            await engine.setDownloadProgress(fraction)
+                        }
+                    }
+                }
+                // Pin to 1.0 once the stream completes — engine.start
+                // below will succeed (engine#145 filter collapses
+                // progress to nil once `loaded == true`) or throw
+                // (the engine#125 enqueueLoad catch path resets
+                // downloadProgress alongside loadState).
+                await engine.setDownloadProgress(1.0)
+            } else {
+                // Idempotent tokenizer prep — covers operator pre-
+                // staged dirs that skipped the integrity sentinel.
+                try await Qwen3ASRTokenizerPrep.prepare(modelDir: modelDir)
+            }
+        }
+        try await engine.start(language: language, allowFetch: allowFetch)
+    }
+    #endif
 
     /// Demux a `/v1/stt/load` failure into a structured wire response.
     /// Mirrors `mapFetchFailure`'s code surface so a Parakeet/HF-cache
@@ -1185,6 +1310,13 @@ final class APIServer: ObservableObject {
             let active = await engine.activeModel
             let loaded: Bool
             let progress: Double?
+            // engine#125: also surface the per-tier lifecycle state +
+            // last-load error for the active picker selection. The
+            // `loadStateValue` is only meaningful for tiers that ride
+            // through `enqueueLoad`; Foundation Models has no fetcher
+            // path so it stays at the inferred `loaded` boolean.
+            let loadStateValue: LoadState?
+            let lastError: String?
             switch active {
             case .yoozLight:
                 loaded = await engine.isLightModelLoaded
@@ -1194,6 +1326,8 @@ final class APIServer: ObservableObject {
                     let fraction = await engine.downloadProgress(for: .yoozLight) ?? 0
                     progress = fraction > 0 ? fraction : nil
                 }
+                loadStateValue = await engine.loadState(for: .yoozLight)
+                lastError = await engine.lastLoadError(for: .yoozLight)
             case .yoozQuality:
                 loaded = await engine.isQualityModelLoaded
                 if loaded {
@@ -1202,14 +1336,20 @@ final class APIServer: ObservableObject {
                     let fraction = await engine.downloadProgress(for: .yoozQuality) ?? 0
                     progress = fraction > 0 ? fraction : nil
                 }
+                loadStateValue = await engine.loadState(for: .yoozQuality)
+                lastError = await engine.lastLoadError(for: .yoozQuality)
             case .foundationModels:
                 loaded = await engine.isFoundationModelsLoaded
                 progress = nil
+                loadStateValue = loaded ? .ready : .idle
+                lastError = nil
             }
             let payload = LLMStatusResponse(
                 loaded: loaded,
                 modelId: active.rawValue,
-                progress: progress
+                progress: progress,
+                state: loadStateValue,
+                lastError: lastError
             )
             return try jsonResponse(payload)
         }
@@ -1269,16 +1409,42 @@ final class APIServer: ObservableObject {
                     code: "invalid_model"
                 )
             }
-            do {
-                try await TouchUpEngine.shared.preloadModel(modelType)
-            } catch {
-                return errorResponse(
-                    status: .internalServerError,
-                    message: error.localizedDescription,
-                    code: "preload_failed"
+
+            // engine#125: default to fire-and-forget. Caller polls
+            // `/v1/llm/status` for completion. `?wait=true` opts
+            // into the pre-#125 blocking behavior for back-compat
+            // with whisper builds that haven't migrated to the
+            // polling-aware SDK yet.
+            let wait = parseWaitQuery(request.uri.query)
+            let engine = TouchUpEngine.shared
+            let task = await engine.enqueueLoad(modelType)
+
+            if wait {
+                // Back-compat path: await the load and return the
+                // legacy 200 + loaded info entry.
+                do {
+                    try await task.value
+                } catch {
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: error.localizedDescription,
+                        code: "preload_failed"
+                    )
+                }
+                return try jsonResponse(
+                    Self.infoEntry(for: modelType, loaded: true)
                 )
             }
-            return try jsonResponse(Self.infoEntry(for: modelType, loaded: true))
+
+            // Fire-and-forget: return 202 with the picker entry in
+            // its current (loading) state. Consumers poll
+            // `/v1/llm/status` to observe the .ready / .failed
+            // transition. We do NOT await the task — the route
+            // returns while it runs in the background.
+            return try jsonResponse(
+                Self.infoEntry(for: modelType, loaded: false),
+                status: .accepted
+            )
         }
 
         router.post("/v1/llm/unload") { [self] request, context in
@@ -1770,10 +1936,7 @@ final class APIServer: ObservableObject {
                 // ever started). `engine.downloadProgress` is sticky —
                 // it ticks 0 -> 1.0 during the HF pull and is reset
                 // to 0 only at the start of the next `start()` or on
-                // `stop()`. Without this guard a loaded engine
-                // reports progress=1.0 forever and the consumer
-                // banner (whisper#194) shows "Downloading... 100%"
-                // on an idle engine.
+                // `stop()`.
                 let progress: Double?
                 if running {
                     progress = nil
@@ -1781,11 +1944,19 @@ final class APIServer: ObservableObject {
                     let fraction = engine.downloadProgress
                     progress = fraction > 0 ? fraction : nil
                 }
+                // engine#125: also surface the lifecycle state +
+                // last error so consumers can distinguish
+                // "downloading" from "idle, no load started" from
+                // "previous load failed."
+                let stateValue = await MainActor.run { engine.loadState }
+                let errorValue = await MainActor.run { engine.lastLoadError }
                 let payload = STTStatusResponse(
                     loaded: running,
                     language: running ? engine.currentLanguage.rawValue : nil,
                     streaming: engine.isStreaming,
-                    progress: progress
+                    progress: progress,
+                    state: stateValue,
+                    lastError: errorValue
                 )
                 return try jsonResponse(payload)
                 #else
@@ -1804,7 +1975,9 @@ final class APIServer: ObservableObject {
                     loaded: loaded,
                     language: loaded ? lang.rawValue : nil,
                     streaming: streaming,
-                    progress: nil
+                    progress: nil,
+                    state: loaded ? .ready : .idle,
+                    lastError: nil
                 )
                 return try jsonResponse(payload)
                 #else
@@ -1834,157 +2007,70 @@ final class APIServer: ObservableObject {
                     code: error.code
                 )
             }
-
-            // When the active backend is qwen3, ensure the model
-            // directory is materialized on disk before calling
-            // start(). The fetch is opt-in via `allowFetch` (default
-            // true for ergonomics; CI/tests can disable it).
-            if sttEngine.currentBackend == .qwen3ASRPreview {
-                let modelDir = Qwen3ASRModelFetcher.defaultModelDir
-                let fetcher = Qwen3ASRModelFetcher.shared
-                let ready = await fetcher.isModelDirReady(modelDir)
-                if !ready {
-                    let allow = body.allowFetch ?? true
-                    if !allow {
-                        return errorResponse(
-                            status: .notFound,
-                            message: "Qwen3-ASR model not on disk and "
-                                + "allow_fetch=false; bring the model "
-                                + "directory into place first.",
-                            code: "model_not_found"
-                        )
-                    }
-                    do {
-                        // Reset published progress at the start of a
-                        // fresh fetch so a stale 1.0 from a prior run
-                        // (or a previously-loaded backend) does not
-                        // mislead the /v1/stt/status banner.
-                        await sttEngine.setDownloadProgress(0)
-                        let stream = await fetcher.download(into: modelDir)
-                        var totalBytes: Int64 = 0
-                        var perFileWritten: [String: Int64] = [:]
-                        // Throttle MainActor publishes — `downloadFile`
-                        // emits one progress event per 64 KB chunk, so
-                        // a 2.5 GB pull would schedule ~40k hops if we
-                        // republished on every event. Only push when
-                        // the fraction has advanced by ≥ 0.5% (or on
-                        // the terminal 1.0 pin below) so the banner
-                        // animates smoothly without flooding the
-                        // MainActor or SwiftUI subscribers.
-                        var lastPublished: Double = 0
-                        let publishStep: Double = 0.005
-                        for try await event in stream {
-                            // Translate the fetcher's per-file events
-                            // into a single rolling fraction so the
-                            // consumer banner has something to render
-                            // (engine#144). Tokenizer prep events are
-                            // intentionally ignored — they fire after
-                            // every byte has landed and the banner is
-                            // already pinned near 1.0.
-                            switch event {
-                            case .manifestResolved(let total, _):
-                                totalBytes = total
-                            case .fileStarted(let path, _):
-                                if perFileWritten[path] == nil {
-                                    perFileWritten[path] = 0
-                                }
-                            case .fileBytes(let path, let completed, _):
-                                perFileWritten[path] = completed
-                            case .fileFinished(let path, let bytes):
-                                perFileWritten[path] = bytes
-                            case .tokenizerPrepStarted,
-                                 .tokenizerPrepFinished,
-                                 .done:
-                                break
-                            }
-                            if totalBytes > 0 {
-                                let sumBytes = perFileWritten.values.reduce(0, +)
-                                let fraction = min(
-                                    Double(sumBytes) / Double(totalBytes),
-                                    1.0
-                                )
-                                if fraction - lastPublished >= publishStep {
-                                    lastPublished = fraction
-                                    await sttEngine.setDownloadProgress(fraction)
-                                }
-                            }
-                        }
-                        // Pin to 1.0 once the stream completes — the
-                        // route is about to call `start()` which will
-                        // either succeed (engine#145 filter on
-                        // /v1/stt/status collapses progress to nil
-                        // once `loaded == true`) or fail (we reset
-                        // back to 0 in the error mapper below).
-                        await sttEngine.setDownloadProgress(1.0)
-                    } catch let asrError as Qwen3ASRError {
-                        // Reset published progress so a stalled
-                        // mid-download fraction does not linger in
-                        // /v1/stt/status after the failed load.
-                        await sttEngine.setDownloadProgress(0)
-                        // Route through the same demux as
-                        // /v1/stt/batch so a fetch failure surfaces
-                        // the same HTTP code regardless of which
-                        // endpoint the client hit.
-                        return mapQwen3BatchError(asrError)
-                    } catch let fetchFailure as FetchFailure {
-                        await sttEngine.setDownloadProgress(0)
-                        return mapFetchFailure(fetchFailure)
-                    } catch {
-                        await sttEngine.setDownloadProgress(0)
-                        return errorResponse(
-                            status: .internalServerError,
-                            message: "Model fetch failed: \(error.localizedDescription)",
-                            code: "model_fetch_failed"
-                        )
-                    }
-                } else {
-                    // Even when the directory is ready, run the
-                    // tokenizer prep step in case a previous run
-                    // missed it (e.g. user pre-staged the files
-                    // manually). Idempotent.
-                    do {
-                        try await Qwen3ASRTokenizerPrep.prepare(
-                            modelDir: modelDir
-                        )
-                    } catch let asrError as Qwen3ASRError {
-                        // Same mapping as the batch path so the wire
-                        // shape is consistent
-                        // (`tokenizer_validation_failed` /
-                        // `model_fetch_failed` / etc).
-                        return mapQwen3BatchError(asrError)
-                    } catch {
-                        return errorResponse(
-                            status: .internalServerError,
-                            message: "Tokenizer prep failed: \(error.localizedDescription)",
-                            code: "tokenizer_prep_failed"
-                        )
-                    }
-                }
-            }
-
-            // See `YoozSTTEngine.getModelDirectory` for resolution
-            // order. `allowFetch` defaults to true; clients that want
-            // to fail fast on a missing model pass `allow_fetch=false`.
             let allowFetch = body.allowFetch ?? true
-            do {
-                try await sttEngine.start(
+
+            // engine#125: default to fire-and-forget. Caller polls
+            // `/v1/stt/status` for completion. `?wait=true` opts
+            // into the pre-#125 blocking behavior for back-compat
+            // with whisper builds that haven't migrated to the
+            // polling-aware SDK yet.
+            let wait = parseWaitQuery(request.uri.query)
+
+            // Enqueue the load on a background Task and let
+            // YoozSTTEngine track the in-flight state. Both the
+            // qwen3 fetcher drain and the engine.start() call run
+            // inside the body so the state machine spans the entire
+            // load pipeline (not just the parakeet ParakeetModel
+            // init).
+            let task = await sttEngine.enqueueLoad(language: language) {
+                try await self.runSTTLoad(
                     language: language,
                     allowFetch: allowFetch
                 )
+            }
+
+            if wait {
+                // Back-compat path: await the load and return the
+                // legacy 200 + STTStatusResponse(loaded: true).
                 // loaded == true so progress must be nil per the
-                // /v1/stt/status contract (engine#145). Otherwise
+                // /v1/stt/status contract (engine#145) — otherwise
                 // consumers that read the load response directly
                 // would render "Downloading... 100%" on a loaded
                 // engine.
+                do {
+                    try await task.value
+                } catch let asrError as Qwen3ASRError {
+                    return mapQwen3BatchError(asrError)
+                } catch let fetchFailure as FetchFailure {
+                    return mapFetchFailure(fetchFailure)
+                } catch {
+                    return mapSTTLoadError(error)
+                }
                 return try jsonResponse(STTStatusResponse(
                     loaded: true,
                     language: language.rawValue,
                     streaming: false,
-                    progress: nil
+                    progress: nil,
+                    state: .ready,
+                    lastError: nil
                 ))
-            } catch {
-                return mapSTTLoadError(error)
             }
+
+            // Fire-and-forget: return 202 immediately with the
+            // current (loading) state. Consumers poll
+            // `/v1/stt/status` to observe the .ready / .failed
+            // transition.
+            return try jsonResponse(
+                STTStatusResponse(
+                    loaded: false,
+                    language: language.rawValue,
+                    streaming: false,
+                    progress: nil,
+                    state: .loading,
+                    lastError: nil
+                ),
+                status: .accepted
+            )
             #else
             return moduleNotBundled("stt")
             #endif

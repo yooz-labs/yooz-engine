@@ -96,10 +96,49 @@ public struct LLMStatus: Codable, Sendable, Equatable {
     /// Fraction-completed [0.0, 1.0] for an in-progress HF model
     /// download. `nil` when no download is in flight.
     public let progress: Double?
+    /// Lifecycle state for the active LLM tier (engine#125). `nil`
+    /// on pre-#125 server builds — consumers MAY infer state from
+    /// `loaded` + `progress` when nil.
+    public let state: LoadState?
+    /// Human-readable error from the last failed load. `nil` unless
+    /// `state == .failed`.
+    public let lastError: String?
 
-    public init(loaded: Bool, modelId: String?, progress: Double?) {
+    public init(
+        loaded: Bool,
+        modelId: String?,
+        progress: Double?,
+        state: LoadState? = nil,
+        lastError: String? = nil
+    ) {
         self.loaded = loaded
         self.modelId = modelId
         self.progress = progress
+        self.state = state
+        self.lastError = lastError
     }
+}
+
+/// Lifecycle state surfaced by `/v1/stt/status` and `/v1/llm/status`
+/// once the load endpoints went fire-and-forget in engine#125.
+///
+/// Wire-compatible duplicate of `EngineCore.LoadState` (server side):
+/// `YoozEngineClient` is a separate SwiftPM target that can't import
+/// `EngineCore` (which lives in the Xcode-only side of the build),
+/// so the contract is held by matching `rawValue`s. Keep these in
+/// sync with `EngineCore/LoadState.swift`.
+///
+/// Decode-safe on older clients: pre-#125 servers omit the field
+/// entirely, so consumers see `state == nil` and infer state from
+/// `loaded` + `progress`.
+public enum LoadState: String, Codable, Sendable, Equatable {
+    /// No model is loaded and no load is in flight.
+    case idle
+    /// A load is in flight; poll for completion via `state == .ready`.
+    case loading
+    /// The active model is loaded and serving.
+    case ready
+    /// The last load attempt failed. The accompanying `lastError`
+    /// field carries the human-readable message.
+    case failed
 }
