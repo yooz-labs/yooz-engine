@@ -279,16 +279,24 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         model = nil
 
-        // Update state synchronously for immediate effect
+        // Update state synchronously for immediate effect.
+        // Reset downloadProgress here so a stopped (but not yet
+        // restarted) engine doesn't keep reporting `progress: 1.0`
+        // to /v1/stt/status — without this the route's `loaded ?
+        // nil : ...` filter (engine#145) only covers the loaded
+        // case, leaving the narrow stop()-then-poll window
+        // surfacing a stale "Downloading... 100%" banner.
         if Thread.isMainThread {
             self.isReady = false
             self.isStreaming = false
             self.currentResult = .empty
+            self.downloadProgress = 0
         } else {
             DispatchQueue.main.sync {
                 self.isReady = false
                 self.isStreaming = false
                 self.currentResult = .empty
+                self.downloadProgress = 0
             }
         }
 

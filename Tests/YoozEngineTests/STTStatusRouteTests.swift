@@ -79,6 +79,33 @@ final class STTStatusRouteTests: XCTestCase {
                          "0.0 fraction must collapse to nil (banner hides)")
         }
     }
+
+    /// Calling `stop()` must reset `downloadProgress` so the narrow
+    /// stop()-then-poll window does not surface a stale `1.0` to the
+    /// banner. Without the reset, the route's `loaded ? nil : ...`
+    /// filter only covers the loaded case; a stopped (model=nil but
+    /// downloadProgress=1.0) engine would still report
+    /// "Downloading... 100%" to a polling client. We can't easily
+    /// load a real Parakeet model in CI to test the full sequence,
+    /// but we can verify `stop()` clears the published value on a
+    /// singleton that some earlier process may have left at 1.0.
+    @MainActor
+    func testStopResetsDownloadProgress() async throws {
+        // Simulate a prior load leaving downloadProgress sticky by
+        // calling stop() and asserting the property settles to 0.
+        // (The MLX engine's downloadProgress is private(set); the
+        // public surface we can verify is its post-stop() value via
+        // the route, which is the consumer-visible contract.)
+        YoozSTTEngine.shared.stop()
+        try await withServer { _ in
+            let (_, body) = try await get("/v1/stt/status")
+            let status = try JSONDecoder().decode(STTStatusResponse.self, from: body)
+            XCTAssertFalse(status.loaded,
+                           "stop() must leave the engine unloaded")
+            XCTAssertNil(status.progress,
+                         "stop() must reset downloadProgress so the route doesn't leak the prior 1.0")
+        }
+    }
     #endif
 
     // MARK: - Apple STT (lite-variant default)

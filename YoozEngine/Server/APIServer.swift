@@ -1768,11 +1768,12 @@ final class APIServer: ObservableObject {
                 // when the model is loaded (banner hides) and nil when
                 // the residual fraction is 0 (cold engine, no download
                 // ever started). `engine.downloadProgress` is sticky —
-                // it ticks 0 -> 1.0 during the HF pull and stays at 1.0
-                // until `unload` resets it, so without this guard a
-                // loaded engine reports progress=1.0 forever and the
-                // consumer banner (whisper#194) shows
-                // "Downloading... 100%" on an idle engine.
+                // it ticks 0 -> 1.0 during the HF pull and is reset
+                // to 0 only at the start of the next `start()` or on
+                // `stop()`. Without this guard a loaded engine
+                // reports progress=1.0 forever and the consumer
+                // banner (whisper#194) shows "Downloading... 100%"
+                // on an idle engine.
                 let progress: Double?
                 if running {
                     progress = nil
