@@ -148,15 +148,45 @@ public final class YoozEngineClient: Sendable {
 
     // MARK: - HTTP helpers
 
+    /// Build a URL from `baseURL` + a path that may contain a `?<query>`
+    /// suffix. `URL.appendingPathComponent` percent-encodes the `?` into
+    /// the path itself (producing e.g. `/v1/stt/load%3Fwait%3Dtrue`),
+    /// which hits a 404 because Hummingbird sees a literal path with
+    /// no route registered. Split on `?` and assign the query string
+    /// component explicitly via URLComponents so the engine sees the
+    /// real query parameters (engine#125's `?wait=true` contract
+    /// depended on this and was silently regressing every caller).
+    func resolveURL(_ path: String) -> URL {
+        let (rawPath, rawQuery): (String, String?)
+        if let separator = path.firstIndex(of: "?") {
+            rawPath = String(path[..<separator])
+            rawQuery = String(path[path.index(after: separator)...])
+        } else {
+            rawPath = path
+            rawQuery = nil
+        }
+        var pathOnly = baseURL.appendingPathComponent(rawPath)
+        guard let rawQuery, !rawQuery.isEmpty else {
+            return pathOnly
+        }
+        guard var components = URLComponents(
+            url: pathOnly, resolvingAgainstBaseURL: false
+        ) else {
+            return pathOnly
+        }
+        components.percentEncodedQuery = rawQuery
+        return components.url ?? pathOnly
+    }
+
     func get(_ path: String) async throws -> Data {
-        let url = baseURL.appendingPathComponent(path)
+        let url = resolveURL(path)
         let (data, response) = try await session.data(from: url)
         try validateResponse(response)
         return data
     }
 
     func post(_ path: String, body: Data) async throws -> Data {
-        let url = baseURL.appendingPathComponent(path)
+        let url = resolveURL(path)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
