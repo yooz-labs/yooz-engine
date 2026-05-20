@@ -263,8 +263,22 @@ public actor Qwen3ASRModelFetcher {
 
     // MARK: - Constants
 
-    /// HuggingFace repo id served from the canonical mirror.
-    public static let canonicalRepo = "mlx-community/Qwen3-ASR-1.7B-8bit"
+    /// HuggingFace repo id for the qwen3 ASR checkpoint.
+    ///
+    /// Points at the YoozLabs mirror of `mlx-community/Qwen3-ASR-1.7B-8bit`.
+    /// The upstream mlx-community drop (and every other Qwen3-ASR drop
+    /// on HF — Qwen/Qwen3-ASR-1.7B, mlx-community/-bf16, /-4bit,
+    /// ggml-org/-GGUF) ships only legacy BPE artifacts (vocab.json +
+    /// merges.txt + tokenizer_config.json) and omits the unified
+    /// tokenizer.json that swift-transformers' AutoTokenizer requires,
+    /// so a first-run fetch against any of them would download every
+    /// listed file cleanly with correct SHA but fail
+    /// `Qwen3ASRTokenizerPrep` with `configurationMissing("tokenizer.json")`.
+    ///
+    /// The mirror adds a tokenizer.json generated via Python's
+    /// transformers — see `scripts/mirror-qwen3-asr-to-yooz-labs.py`.
+    /// Same model weights as upstream (~2.46 GB); ~11 MB tokenizer delta.
+    public static let canonicalRepo = "YoozLabs/Qwen3-ASR-1.7B-8bit"
 
     /// Files we materialize on disk. `tokenizer.json` is in
     /// `optionalFiles` because some checkpoint revisions ship it and
