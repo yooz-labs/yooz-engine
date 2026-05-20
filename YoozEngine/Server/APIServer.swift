@@ -2135,6 +2135,37 @@ final class APIServer: ObservableObject {
                 let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
                 let wantsAligned = body.aligned ?? false
                 if wantsAligned {
+                    // qwen3 doesn't emit token-level timestamps —
+                    // fall through to the plain transcribe path and
+                    // return empty `tokens` rather than throwing
+                    // `stt_not_loaded`. Callers that rely on
+                    // alignment (whisper ChunkProcessor's chunk-
+                    // boundary dedup) degrade gracefully to the
+                    // un-aligned path on qwen3.
+                    if engine.currentBackend == .qwen3ASRPreview {
+                        let result: ParakeetResult
+                        do {
+                            result = try await engine.batchTranscribeQwen3Throwing(
+                                samples: body.samples,
+                                language: language
+                            )
+                        } catch let asrError as Qwen3ASRError {
+                            return mapQwen3BatchError(asrError)
+                        } catch {
+                            return errorResponse(
+                                status: .internalServerError,
+                                message: error.localizedDescription,
+                                code: "stt_aligned_failed"
+                            )
+                        }
+                        return try jsonResponse(BatchSTTResponse(
+                            text: result.text,
+                            finalized: result.finalized,
+                            draft: result.draft,
+                            language: language.rawValue,
+                            tokens: []
+                        ))
+                    }
                     // Parakeet already computes aligned tokens internally for
                     // the finalized/draft split; `batchTranscribeAligned`
                     // surfaces them. We still derive the full text from the
@@ -2175,6 +2206,40 @@ final class APIServer: ObservableObject {
                         draft: "",
                         language: language.rawValue,
                         tokens: wireTokens
+                    ))
+                }
+                // Dispatch on the engine's active backend. The
+                // legacy `batchTranscribe` path is Parakeet-only;
+                // for qwen3 we route through
+                // `batchTranscribeQwen3Throwing` which dispatches
+                // to the `Qwen3ASRBackend` actor. Without this
+                // dispatch, /v1/stt/batch with a qwen3-active
+                // engine silently returned `.empty` because the
+                // Parakeet `createBatchTranscriber` was nil after a
+                // qwen3 load — the user saw "ASR not working" on
+                // every qwen3 recording even though the model was
+                // loaded and reported state=.ready.
+                if engine.currentBackend == .qwen3ASRPreview {
+                    let result: ParakeetResult
+                    do {
+                        result = try await engine.batchTranscribeQwen3Throwing(
+                            samples: body.samples,
+                            language: language
+                        )
+                    } catch let asrError as Qwen3ASRError {
+                        return mapQwen3BatchError(asrError)
+                    } catch {
+                        return errorResponse(
+                            status: .internalServerError,
+                            message: error.localizedDescription,
+                            code: "stt_batch_failed"
+                        )
+                    }
+                    return try jsonResponse(BatchSTTResponse(
+                        text: result.text,
+                        finalized: result.finalized,
+                        draft: result.draft,
+                        language: language.rawValue
                     ))
                 }
                 let result = await engine.batchTranscribe(samples: body.samples, mode: mode)
