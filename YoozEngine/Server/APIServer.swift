@@ -2441,26 +2441,21 @@ final class APIServer: ObservableObject {
 
                         if config.type == "config" {
                             let languageCode = config.language ?? "en"
-                            guard let language = STTLanguage.fromCode(languageCode) else {
-                                await sendError(
-                                    "Unknown language: \(languageCode)",
-                                    code: .unknownLanguage
-                                )
-                                continue
-                            }
-                            guard language.isImplemented else {
-                                await sendError(
-                                    "Language not implemented: \(language.displayName)",
-                                    code: .languageNotImplemented
-                                )
-                                continue
-                            }
                             guard let appleLanguage = AppleSTTLanguage.from(
                                 rawCode: languageCode
                             ) else {
                                 await sendError(
+                                    "Unknown language for apple_stt: \(languageCode)",
+                                    code: .unknownLanguage
+                                )
+                                continue
+                            }
+                            guard AppleSTTBackend.isAvailable(
+                                localeIdentifier: appleLanguage.bcp47
+                            ) else {
+                                await sendError(
                                     "Language not supported by apple_stt: "
-                                        + language.displayName,
+                                        + appleLanguage.rawValue,
                                     code: .languageNotSupportedByBackend
                                 )
                                 continue
