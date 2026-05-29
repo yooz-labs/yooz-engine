@@ -186,6 +186,39 @@ public actor GrammarEngine {
         return (result: corrected, correctionsApplied: corrections)
     }
 
+    /// Check grammar and return structured per-match data alongside the
+    /// corrected text.
+    ///
+    /// Same correction behavior as ``check(text:categories:usePOS:)``; the
+    /// `result` and `correctionsApplied` values are identical for the same
+    /// inputs. Additionally returns `matches`: one ``GrammarMatch`` per
+    /// contiguous edit, with `offset` / `length` in UTF-16 code units of the
+    /// ORIGINAL text.
+    ///
+    /// Matches are derived from a token-aligned diff of original vs. corrected
+    /// text (the matcher's FFI exposes only the corrected string). Offsets,
+    /// lengths, original substrings, and replacements are exact; rule
+    /// identity / category / message are best-effort. See ``GrammarMatch`` for
+    /// the full rationale and limitations.
+    ///
+    /// - Parameters:
+    ///   - text: Input text to check.
+    ///   - categories: Optional category names restricting which rules apply.
+    ///   - usePOS: Whether to use NLTagger POS tagging. Defaults to true.
+    /// - Returns: Corrected text, correction count, and structured matches.
+    public func checkDetailed(
+        text: String,
+        categories: [String]?,
+        usePOS: Bool = true
+    ) -> (result: String, correctionsApplied: Int, matches: [GrammarMatch]) {
+        let base = check(text: text, categories: categories, usePOS: usePOS)
+        let matches = GrammarMatchExtractor.matches(
+            original: text,
+            corrected: base.result
+        )
+        return (result: base.result, correctionsApplied: base.correctionsApplied, matches: matches)
+    }
+
     // MARK: - Tier-Based Correction (Internal Use)
 
     /// Tier identifiers for grammar rule gating.
