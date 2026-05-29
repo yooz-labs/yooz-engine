@@ -22,6 +22,28 @@ public struct GrammarClient: Sendable {
         return response.result
     }
 
+    /// Check text and return the structured per-match data for rendering
+    /// targeted underlines, alongside the corrected text.
+    ///
+    /// Match `offset` / `length` are UTF-16 code units in the ORIGINAL `text`.
+    /// `matches` is `nil` when talking to an older server that predates the
+    /// field; treat that as "no structured matches available".
+    ///
+    /// - Parameters:
+    ///   - text: Text to check.
+    ///   - categories: Optional category names restricting which rules apply.
+    ///   - usePOS: Use NLTagger POS tagging. Server defaults to true when nil.
+    /// - Returns: Corrected text plus optional structured matches.
+    public func checkWithMatches(
+        text: String,
+        categories: [String]? = nil,
+        usePOS: Bool? = nil
+    ) async throws -> (result: String, matches: [GrammarMatch]?) {
+        let request = GrammarCheckRequest(text: text, categories: categories, usePOS: usePOS)
+        let response = try await check(request)
+        return (response.result, response.matches)
+    }
+
     /// Correct text using tier-appropriate categories.
     ///
     /// - Parameters:
