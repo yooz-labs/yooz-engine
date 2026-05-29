@@ -518,6 +518,25 @@ struct GrammarCheckServerResponse: ResponseCodable {
     let result: String
     let correctionsApplied: Int
     let ruleCount: Int?
+    /// Structured per-match data. Optional/additive so existing clients that
+    /// only read `result` / `correctionsApplied` / `ruleCount` keep working.
+    let matches: [GrammarMatchWire]?
+}
+
+/// Wire form of a single structured grammar match.
+///
+/// `offset` / `length` are UTF-16 code units in the ORIGINAL request text
+/// (NSString semantics). See `GrammarMatch` (GrammarModule) for the full
+/// position-recovery rationale.
+struct GrammarMatchWire: Codable {
+    let offset: Int
+    let length: Int
+    let original: String
+    let replacement: String
+    let ruleId: String
+    let category: String
+    let message: String
+    let shortMessage: String?
 }
 
 // MARK: - VAD Types

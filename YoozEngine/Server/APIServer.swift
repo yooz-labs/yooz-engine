@@ -1641,15 +1641,28 @@ final class APIServer: ObservableObject {
             }
 
             let usePOS = body.usePOS ?? true
-            let result = await GrammarEngine.shared.check(
+            let result = await GrammarEngine.shared.checkDetailed(
                 text: body.text,
                 categories: body.categories,
                 usePOS: usePOS
             )
+            let matches = result.matches.map { match in
+                GrammarMatchWire(
+                    offset: match.offset,
+                    length: match.length,
+                    original: match.original,
+                    replacement: match.replacement,
+                    ruleId: match.ruleId,
+                    category: match.category,
+                    message: match.message,
+                    shortMessage: match.shortMessage
+                )
+            }
             return try jsonResponse(GrammarCheckServerResponse(
                 result: result.result,
                 correctionsApplied: result.correctionsApplied,
-                ruleCount: GrammarEngine.shared.ruleCount
+                ruleCount: GrammarEngine.shared.ruleCount,
+                matches: matches
             ))
         }
 
