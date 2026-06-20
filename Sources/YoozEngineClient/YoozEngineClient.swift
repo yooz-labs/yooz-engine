@@ -140,6 +140,9 @@ public final class YoozEngineClient: Sendable {
     /// Touch-up (text cleanup) service client.
     public var touchUp: TouchUpClient { TouchUpClient(engine: self) }
 
+    /// Infinite long-context service client.
+    public var infinite: InfiniteClient { InfiniteClient(engine: self) }
+
     /// Grammar check service client.
     public var grammar: GrammarClient { GrammarClient(engine: self) }
 
