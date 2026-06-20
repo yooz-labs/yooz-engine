@@ -10,6 +10,10 @@ public enum InfiniteError: Error, LocalizedError, Sendable, Equatable {
     case invalidModel(String)
     case modelUnavailable(String)
     case modelSetFailed(String)
+    case sessionNotFound(String)
+    case invalidSessionInput(String)
+    case sessionLimitExceeded(Int)
+    case generationUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +23,14 @@ public enum InfiniteError: Error, LocalizedError, Sendable, Equatable {
             return "Infinite model is unavailable on this system: \(id)"
         case .modelSetFailed(let reason):
             return "Failed to set Infinite model: \(reason)"
+        case .sessionNotFound(let id):
+            return "Unknown Infinite session: \(id)"
+        case .invalidSessionInput(let reason):
+            return "Invalid Infinite session input: \(reason)"
+        case .sessionLimitExceeded(let limit):
+            return "Infinite session limit exceeded: \(limit)"
+        case .generationUnavailable(let reason):
+            return "Infinite generation is unavailable: \(reason)"
         }
     }
 }
@@ -26,11 +38,16 @@ public enum InfiniteError: Error, LocalizedError, Sendable, Equatable {
 public actor InfiniteEngine {
     public static let shared = InfiniteEngine()
 
+    public nonisolated static let maxActiveSessions = 16
+    public nonisolated static var cleanupPolicy: String {
+        "explicit_delete_or_process_exit;max_active_sessions=\(maxActiveSessions)"
+    }
+
     public private(set) var activeModel: InfiniteModelSelection = .gemma4E4B1M
     private var loadedModel: InfiniteModelSelection?
     private var preparedBackend: InfiniteBackendHandle?
     private var lastLoadError: String?
-    private var activeSessionCount = 0
+    private var sessions: [String: SessionRecord] = [:]
     private let backendAdapter: any InfiniteBackendAdapter
 
     init(backendAdapter: any InfiniteBackendAdapter = CatalogInfiniteBackendAdapter()) {
@@ -83,19 +100,121 @@ public actor InfiniteEngine {
             modelId: activeModel.rawValue,
             progress: nil,
             state: state,
-            activeSessions: activeSessionCount,
+            activeSessions: sessions.count,
             maxContextTokens: activeModel.maxContextTokens,
             ramTier: activeModel.ramTier,
             backendKind: activeModel.backendKind,
+            cleanupPolicy: Self.cleanupPolicy,
+            resources: resourceMetrics(for: activeModel),
             lastError: lastLoadError
         )
     }
 
+    public func listSessions() -> [InfiniteSessionInfo] {
+        sessions.values
+            .sorted { $0.createdAt < $1.createdAt }
+            .map(sessionInfo)
+    }
+
+    public func session(id: String) throws -> InfiniteSessionInfo {
+        try sessionInfo(for: id)
+    }
+
+    public func createSession(
+        request: InfiniteCreateSessionRequest
+    ) throws -> InfiniteSessionInfo {
+        guard sessions.count < Self.maxActiveSessions else {
+            throw InfiniteError.sessionLimitExceeded(Self.maxActiveSessions)
+        }
+        let selection = try sessionSelection(modelId: request.modelId)
+        guard isModelSelectable(selection) else {
+            throw InfiniteError.modelUnavailable(selection.rawValue)
+        }
+        let now = Self.timestamp()
+        let id = UUID().uuidString
+        let record = SessionRecord(
+            id: id,
+            selection: selection,
+            label: request.label,
+            createdAt: now,
+            updatedAt: now
+        )
+        sessions[id] = record
+        return sessionInfo(record)
+    }
+
+    public func append(
+        sessionID: String,
+        request: InfiniteAppendSessionRequest
+    ) throws -> InfiniteAppendSessionResponse {
+        guard !request.text.isEmpty else {
+            throw InfiniteError.invalidSessionInput("append text must not be empty")
+        }
+        guard var record = sessions[sessionID] else {
+            throw InfiniteError.sessionNotFound(sessionID)
+        }
+        record.inputCharacters += request.text.count
+        record.estimatedInputTokens += Self.estimatedTokens(for: request.text)
+        record.updatedAt = Self.timestamp()
+        sessions[sessionID] = record
+        return InfiniteAppendSessionResponse(
+            session: sessionInfo(record),
+            appendedCharacters: request.text.count,
+            estimatedAppendedTokens: Self.estimatedTokens(for: request.text)
+        )
+    }
+
+    public func generate(
+        sessionID: String,
+        request: InfiniteGenerateSessionRequest
+    ) throws -> InfiniteGenerateSessionResponse {
+        guard sessions[sessionID] != nil else {
+            throw InfiniteError.sessionNotFound(sessionID)
+        }
+        if let maxTokens = request.maxTokens, maxTokens <= 0 {
+            throw InfiniteError.invalidSessionInput("maxTokens must be greater than zero")
+        }
+        throw InfiniteError.generationUnavailable(
+            "backend inference is not wired in Phase 3; session state is preserved"
+        )
+    }
+
+    public func checkpoint(
+        sessionID: String,
+        request: InfiniteCheckpointSessionRequest
+    ) throws -> InfiniteCheckpointSessionResponse {
+        guard var record = sessions[sessionID] else {
+            throw InfiniteError.sessionNotFound(sessionID)
+        }
+        let checkpoint = InfiniteSessionCheckpoint(
+            id: UUID().uuidString,
+            label: request.label,
+            createdAt: Self.timestamp(),
+            inputCharacters: record.inputCharacters,
+            estimatedInputTokens: record.estimatedInputTokens,
+            resources: resourceMetrics(for: record.selection)
+        )
+        record.checkpoints.append(checkpoint)
+        record.updatedAt = checkpoint.createdAt
+        sessions[sessionID] = record
+        return InfiniteCheckpointSessionResponse(
+            session: sessionInfo(record),
+            checkpoint: checkpoint
+        )
+    }
+
+    public func deleteSession(id: String) throws -> InfiniteDeleteSessionResponse {
+        guard sessions.removeValue(forKey: id) != nil else {
+            throw InfiniteError.sessionNotFound(id)
+        }
+        return InfiniteDeleteSessionResponse(sessionId: id, deleted: true)
+    }
+
     public func resetForRecordingBoundary() {
         // The engine-wide /v1/session/begin boundary is per recording.
-        // It must not unload models or wipe future durable Infinite
-        // contexts. Phase 3 will add explicit long-context session APIs.
-        activeSessionCount = 0
+        // Infinite long-context sessions are durable engine resources
+        // and are cleaned up only through explicit /v1/infinite/sessions
+        // lifecycle calls or process exit.
     }
 
     private func info(for selection: InfiniteModelSelection) -> InfiniteModelInfo {
@@ -147,4 +266,78 @@ public actor InfiniteEngine {
         }
         return "idle"
     }
+
+    private func sessionSelection(modelId: String?) throws -> InfiniteModelSelection {
+        guard let modelId, !modelId.isEmpty else {
+            return activeModel
+        }
+        guard let selection = InfiniteModelSelection(rawValue: modelId) else {
+            throw InfiniteError.invalidModel(modelId)
+        }
+        return selection
+    }
+
+    private func sessionInfo(for id: String) throws -> InfiniteSessionInfo {
+        guard let record = sessions[id] else {
+            throw InfiniteError.sessionNotFound(id)
+        }
+        return sessionInfo(record)
+    }
+
+    private func sessionInfo(_ record: SessionRecord) -> InfiniteSessionInfo {
+        InfiniteSessionInfo(
+            id: record.id,
+            modelId: record.selection.rawValue,
+            label: record.label,
+            state: "open",
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            contextWindowTokens: record.selection.maxContextTokens,
+            inputCharacters: record.inputCharacters,
+            estimatedInputTokens: record.estimatedInputTokens,
+            checkpointCount: record.checkpoints.count,
+            cleanupPolicy: Self.cleanupPolicy,
+            resources: resourceMetrics(for: record.selection)
+        )
+    }
+
+    private func resourceMetrics(
+        for selection: InfiniteModelSelection
+    ) -> InfiniteResourceMetrics {
+        InfiniteResourceMetrics(
+            physicalMemoryBytes: Self.int64Clamping(ProcessInfo.processInfo.physicalMemory),
+            wiredMemoryLimitBytes: selection.requiredRAMTier.minimumPhysicalMemoryBytes,
+            requiredRAMTier: selection.ramTier,
+            peakMemoryBytes: nil,
+            prefillTokensPerSecond: nil,
+            decodeTokensPerSecond: nil,
+            draftAcceptanceRate: nil
+        )
+    }
+
+    private static func timestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
+    }
+
+    private static func estimatedTokens(for text: String) -> Int {
+        max(1, Int((Double(text.count) / 4.0).rounded(.up)))
+    }
+
+    private static func int64Clamping(_ value: UInt64) -> Int64 {
+        if value > UInt64(Int64.max) {
+            return Int64.max
+        }
+        return Int64(value)
+    }
+}
+
+private struct SessionRecord: Sendable {
+    let id: String
+    let selection: InfiniteModelSelection
+    let label: String?
+    let createdAt: String
+    var updatedAt: String
+    var inputCharacters: Int = 0
+    var estimatedInputTokens: Int = 0
+    var checkpoints: [InfiniteSessionCheckpoint] = []
 }

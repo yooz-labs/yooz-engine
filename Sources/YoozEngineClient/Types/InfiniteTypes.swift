@@ -84,6 +84,8 @@ public struct InfiniteStatus: Codable, Sendable, Equatable {
     public let maxContextTokens: Int?
     public let ramTier: String?
     public let backendKind: String?
+    public let cleanupPolicy: String?
+    public let resources: InfiniteResourceMetrics?
     public let lastError: String?
 
     public init(
@@ -95,6 +97,8 @@ public struct InfiniteStatus: Codable, Sendable, Equatable {
         maxContextTokens: Int?,
         ramTier: String?,
         backendKind: String?,
+        cleanupPolicy: String? = nil,
+        resources: InfiniteResourceMetrics? = nil,
         lastError: String? = nil
     ) {
         self.loaded = loaded
@@ -105,6 +109,8 @@ public struct InfiniteStatus: Codable, Sendable, Equatable {
         self.maxContextTokens = maxContextTokens
         self.ramTier = ramTier
         self.backendKind = backendKind
+        self.cleanupPolicy = cleanupPolicy
+        self.resources = resources
         self.lastError = lastError
     }
 }
