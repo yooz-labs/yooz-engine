@@ -18,8 +18,12 @@ final class InfiniteTypesTests: XCTestCase {
             loadState: .available,
             isActive: true,
             maxContextTokens: 1_000_000,
+            nativeContextTokens: 131_072,
             ramTier: "reduced",
             backendKind: "paged-kv",
+            adapterKind: "infinite-paged-kv-mlx-v1",
+            huggingFaceID: "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit",
+            revision: "b4966f32e71f9f4976a78f74bc8944b1d064bcbf",
             requiresAppleSilicon: true,
             evidenceRef: "infinite:research/18-gemma-support-matrix.md"
         )
@@ -42,8 +46,12 @@ final class InfiniteTypesTests: XCTestCase {
               "loadState": "available",
               "isActive": true,
               "maxContextTokens": 1000000,
+              "nativeContextTokens": 131072,
               "ramTier": "reduced",
               "backendKind": "paged-kv",
+              "adapterKind": "infinite-paged-kv-mlx-v1",
+              "huggingFaceID": "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit",
+              "revision": "b4966f32e71f9f4976a78f74bc8944b1d064bcbf",
               "requiresAppleSilicon": true,
               "evidenceRef": "infinite:research/18-gemma-support-matrix.md"
             }
@@ -57,6 +65,11 @@ final class InfiniteTypesTests: XCTestCase {
         XCTAssertEqual(response.models[0].tier, .light)
         XCTAssertEqual(response.models[0].loadState, .available)
         XCTAssertEqual(response.models[0].maxContextTokens, 1_000_000)
+        XCTAssertEqual(response.models[0].nativeContextTokens, 131_072)
+        XCTAssertEqual(
+            response.models[0].huggingFaceID,
+            "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit"
+        )
     }
 
     func testInfiniteSetModelRequestEncoding() throws {

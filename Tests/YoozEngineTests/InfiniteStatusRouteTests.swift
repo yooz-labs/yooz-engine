@@ -78,6 +78,11 @@ final class InfiniteStatusRouteTests: XCTestCase {
             )
             XCTAssertFalse(infinite.loaded)
             XCTAssertEqual(infinite.detail["active_model"], "gemma4-e4b-1m")
+            XCTAssertEqual(infinite.detail["adapter_kind"], "infinite-paged-kv-mlx-v1")
+            XCTAssertEqual(
+                infinite.detail["hf_repo"],
+                "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit"
+            )
         }
     }
 }

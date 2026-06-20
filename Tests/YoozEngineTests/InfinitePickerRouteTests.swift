@@ -81,14 +81,30 @@ final class InfinitePickerRouteTests: XCTestCase {
             XCTAssertEqual(byID["gemma4-e4b-1m"]?.tier, .light)
             XCTAssertEqual(byID["gemma4-e4b-1m"]?.ramTier, "reduced")
             XCTAssertEqual(byID["gemma4-e4b-1m"]?.maxContextTokens, 1_000_000)
-            XCTAssertEqual(byID["gemma4-e4b-1m"]?.loadState, .available)
+            XCTAssertEqual(byID["gemma4-e4b-1m"]?.nativeContextTokens, 131_072)
+            XCTAssertEqual(
+                byID["gemma4-e4b-1m"]?.huggingFaceID,
+                "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit"
+            )
+            XCTAssertEqual(byID["gemma4-e4b-1m"]?.adapterKind, "infinite-paged-kv-mlx-v1")
+            XCTAssertTrue(
+                [.available, .cached].contains(
+                    try XCTUnwrap(byID["gemma4-e4b-1m"]?.loadState)
+                )
+            )
             XCTAssertEqual(byID["gemma4-26b-a4b-1m"]?.tier, .quality)
             XCTAssertEqual(byID["qwen3-35b-1m"]?.tier, .premium)
-            let fullExpected: ModelLoadState =
-                InfiniteRAMTier.current == .full ? .available : .unavailable
-            XCTAssertEqual(byID["qwen3-35b-1m"]?.loadState, fullExpected)
+            if InfiniteRAMTier.current == .full {
+                XCTAssertTrue(
+                    [.available, .cached].contains(
+                        try XCTUnwrap(byID["qwen3-35b-1m"]?.loadState)
+                    )
+                )
+            } else {
+                XCTAssertEqual(byID["qwen3-35b-1m"]?.loadState, .unavailable)
+            }
             XCTAssertEqual(byID["s3-retrieval"]?.backendKind, "retrieval")
-            XCTAssertEqual(byID["s3-retrieval"]?.loadState, fullExpected)
+            XCTAssertEqual(byID["s3-retrieval"]?.adapterKind, "infinite-retrieval-index-v1")
         }
     }
 
@@ -136,23 +152,26 @@ final class InfinitePickerRouteTests: XCTestCase {
             let decoded = try JSONDecoder().decode(InfiniteModelInfo.self, from: payload)
             XCTAssertEqual(decoded.id, selection.rawValue)
             XCTAssertTrue(decoded.isActive)
-            XCTAssertEqual(decoded.loadState, .available)
+            XCTAssertTrue([.available, .cached].contains(decoded.loadState))
         }
     }
 
     @MainActor
-    func testPostModelWithPreloadReturns500UntilBackendExists() async throws {
+    func testPostModelWithPreloadReturns200AndAdapterReadyStatus() async throws {
         try await resetEngineState()
         try await withServer { _ in
             let body = try JSONEncoder().encode(
                 InfiniteSetModelRequest(id: "gemma4-e4b-1m", preload: true)
             )
             let (http, payload) = try await post("/v1/infinite/model", body: body)
-            XCTAssertEqual(http.statusCode, 500)
-            let json = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: payload) as? [String: Any]
-            )
-            XCTAssertEqual(json["code"] as? String, "model_set_failed")
+            XCTAssertEqual(http.statusCode, 200)
+            let decoded = try JSONDecoder().decode(InfiniteModelInfo.self, from: payload)
+            XCTAssertEqual(decoded.id, "gemma4-e4b-1m")
+
+            let (_, statusPayload) = try await get("/v1/infinite/status")
+            let status = try JSONDecoder().decode(InfiniteStatus.self, from: statusPayload)
+            XCTAssertFalse(status.loaded)
+            XCTAssertEqual(status.state, "adapter_ready")
         }
     }
 }

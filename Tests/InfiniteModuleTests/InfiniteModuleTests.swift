@@ -48,14 +48,38 @@ final class InfiniteModuleTests: XCTestCase {
         try await resetEngine()
         let models = await InfiniteEngine.shared.availableModels()
         let byID = Dictionary(uniqueKeysWithValues: models.map { ($0.id, $0) })
-        let reducedExpected: ModelLoadState =
-            InfiniteRAMTier.current == .belowMinimum ? .unavailable : .available
-        let fullExpected: ModelLoadState =
-            InfiniteRAMTier.current == .full ? .available : .unavailable
+        let selectable: Set<ModelLoadState> = [.available, .cached]
 
-        XCTAssertEqual(byID["gemma4-e4b-1m"]?.loadState, reducedExpected)
-        XCTAssertEqual(byID["qwen3-35b-1m"]?.loadState, fullExpected)
-        XCTAssertEqual(byID["s3-retrieval"]?.loadState, fullExpected)
+        XCTAssertTrue(selectable.contains(try XCTUnwrap(byID["gemma4-e4b-1m"]?.loadState)))
+        if InfiniteRAMTier.current == .full {
+            XCTAssertTrue(selectable.contains(try XCTUnwrap(byID["qwen3-35b-1m"]?.loadState)))
+            XCTAssertTrue(selectable.contains(try XCTUnwrap(byID["s3-retrieval"]?.loadState)))
+        } else {
+            XCTAssertEqual(byID["qwen3-35b-1m"]?.loadState, .unavailable)
+            XCTAssertEqual(byID["s3-retrieval"]?.loadState, .unavailable)
+        }
+    }
+
+    func testDescriptorsPinRepositoriesAndAdapterKinds() {
+        XCTAssertEqual(
+            InfiniteModelSelection.gemma4E4B1M.huggingFaceID,
+            "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit"
+        )
+        XCTAssertEqual(
+            InfiniteModelSelection.gemma4E4B1M.revision,
+            "b4966f32e71f9f4976a78f74bc8944b1d064bcbf"
+        )
+        XCTAssertEqual(
+            InfiniteModelSelection.gemma4_26BA4B1M.huggingFaceID,
+            "mlx-community/gemma-4-26b-a4b-it-4bit"
+        )
+        XCTAssertEqual(
+            InfiniteModelSelection.qwen35B1M.huggingFaceID,
+            "mlx-community/Qwen3.6-35B-A3B-4bit"
+        )
+        XCTAssertEqual(InfiniteModelSelection.s3Retrieval.huggingFaceID, nil)
+        XCTAssertEqual(InfiniteModelSelection.gemma4E4B1M.adapterKind, "infinite-paged-kv-mlx-v1")
+        XCTAssertEqual(InfiniteModelSelection.s3Retrieval.adapterKind, "infinite-retrieval-index-v1")
     }
 
     func testSetActiveModelWithoutPreloadReturnsActiveRow() async throws {
@@ -76,16 +100,18 @@ final class InfiniteModuleTests: XCTestCase {
         try await resetEngine()
     }
 
-    func testPreloadFailsUntilBackendWiringLands() async throws {
+    func testPreloadPreparesAdapterWithoutMarkingGenerationReady() async throws {
         try await resetEngine()
-        do {
-            _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: true)
-            XCTFail("Phase 1 scaffold must not pretend backend preload works")
-        } catch let error as InfiniteError {
-            XCTAssertEqual(
-                error,
-                .modelSetFailed("Infinite backend loading is not implemented in Phase 1")
-            )
-        }
+        let active = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: true)
+        XCTAssertEqual(active.id, "gemma4-e4b-1m")
+
+        let status = await InfiniteEngine.shared.status()
+        XCTAssertFalse(status.loaded)
+        XCTAssertEqual(status.state, "adapter_ready")
+
+        let ready = await InfiniteEngine.shared.isReady
+        XCTAssertFalse(ready)
+
+        try await resetEngine()
     }
 }
