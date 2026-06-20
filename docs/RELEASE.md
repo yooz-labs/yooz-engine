@@ -7,7 +7,9 @@ Notes workflow only validates the tag and creates a draft GitHub release,
 then a maintainer uploads artifacts built on their own machine.
 
 Scope: full engine (`YoozEngine.app`), lite variant (`YoozEngineLite.app`),
-and the whisper helper (`YoozEngineWhisper.app`). Notarization is explicitly
+and the whisper helper (`YoozEngineWhisper.app`). The full engine includes
+Infinite long-context endpoints; Lite and Whisper intentionally do not.
+Notarization is explicitly
 deferred in Phase 5 (see `.context/phase5_epic.md`); Gatekeeper will warn on
 first launch for any non-notarized artifact.
 
@@ -65,7 +67,7 @@ gh release edit vX.Y.Z --draft=false
 ## What each script does
 
 - `scripts/build-engine-release.sh` — builds `dist/YoozEngine.app` (full
-  variant: STT + LLM + VAD + Grammar + AppleSTT), signs it, runs
+  variant: STT + LLM + VAD + Grammar + AppleSTT + Infinite), signs it, runs
   `codesign --verify --deep --strict`.
 - `scripts/build-engine-lite.sh` — same for `dist/YoozEngineLite.app`
   (Apple STT only; sub-GB bundle, no MLX).
@@ -92,6 +94,23 @@ shasum -a 256 "YoozEngine.app/Contents/MacOS/Yooz Engine"
 For the whisper helper the command is the same with bundle name
 `YoozEngineWhisper.app` and binary `Yooz Engine (Whisper)`.
 
+For Infinite contract coverage before cutting a full-engine release, run:
+
+```bash
+swift test --filter InfiniteTypesTests
+xcodegen generate
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
+  -configuration Debug -skipMacroValidation \
+  -derivedDataPath .build/DerivedData \
+  build-for-testing
+scripts/run-integration.sh
+```
+
+The integration suite drives the served app through `YoozEngineClient` and
+checks `/v1/modules`, `/v1/infinite/models`, `/v1/infinite/status`, session
+create/append/fetch/checkpoint/delete, expected `501 generation_unavailable`,
+and deleted-session `404`.
+
 ## Known limitations (A6)
 
 - **No notarization.** First launch shows "Apple could not verify this app
@@ -105,6 +124,9 @@ For the whisper helper the command is the same with bundle name
   the scripts warn loudly and default to Debug.
 - **Shared port.** Smoke test launches are serial — the three variants
   all bind port 19920, so parallel smoke-testing is not possible.
+- **Infinite full-variant only.** `/v1/infinite/*` is available in
+  `YoozEngine.app`; Lite and Whisper return module-not-bundled `501` by
+  design. Full-tier Infinite rows require 64 GiB+ Apple Silicon.
 
 ## Troubleshooting
 
@@ -119,6 +141,8 @@ For the whisper helper the command is the same with bundle name
 ## Cross-references
 
 - Epic tracker: [engine#24](https://github.com/yooz-labs/yooz-engine/issues/24)
+- Infinite epic: [engine#160](https://github.com/yooz-labs/yooz-engine/issues/160)
+- Infinite API: [INFINITE_MODULE.md](INFINITE_MODULE.md)
 - A5 (whisper helper): [engine#29](https://github.com/yooz-labs/yooz-engine/issues/29)
 - A6 (this pipeline): [engine#30](https://github.com/yooz-labs/yooz-engine/issues/30)
 - CI macOS constraint: [engine#23](https://github.com/yooz-labs/yooz-engine/issues/23)
