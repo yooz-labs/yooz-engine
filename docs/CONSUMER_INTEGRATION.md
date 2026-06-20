@@ -24,8 +24,8 @@ The engine ships in three variants. Pick based on what services your app needs:
 | Variant | Modules | Bundle size | When to use |
 |---|---|---|---|
 | `YoozEngineLite` | Apple STT + Grammar + LLM | sub-GB | Apps that don't need MLX STT (e.g. Crisp, Remi). Smallest bundle. |
-| `YoozEngineWhisper` | Lite + MLX STT (Parakeet, FastConformer) | ~600 MB | Apps that need high-accuracy non-Apple STT (Whisper, Notes). No VAD module — caller handles VAD locally. |
-| `YoozEngine` | All of the above + VAD | ~600 MB | The "full" variant. Currently no consumer app uses this; it's the dev/standalone build. |
+| `YoozEngineWhisper` | Lite + MLX STT (Parakeet, FastConformer) | ~600 MB | Apps that need high-accuracy non-Apple STT (Whisper, Notes). No VAD or Infinite module — caller handles VAD locally. |
+| `YoozEngine` | All of the above + VAD + Infinite | ~600 MB + HF cache | The full engine host. Use for dev/standalone, super-yooz, VAD, or engine-hosted long-context sessions. |
 
 **The standalone `Yooz Engine.app` (full variant, menu-bar UI) is dev-only and not shipped publicly.** The future is super-yooz hosting all of this; for now consumer apps embed their own variant.
 
@@ -75,7 +75,7 @@ The SDK's `connect()` does this:
 3. If no bundled helper → look up `live.yooz.engine` via LaunchServices. Same launch path. (Legacy / dev-only.)
 4. If TCP accepted but `/v1/health` doesn't respond → stale engine. Throws `YoozEngineError.portHeldByStaleEngine` unless `YOOZ_ENGINE_AUTO_RECOVER=1` is set, in which case the SDK kills the holder and relaunches.
 
-The SDK is `Sendable`; you can safely use one `YoozEngineClient` for the lifetime of your app. Each service client (`stt`, `llm`, `touchUp`, `grammar`, `vad`) is a thin wrapper, cheap to construct.
+The SDK is `Sendable`; you can safely use one `YoozEngineClient` for the lifetime of your app. Each service client (`stt`, `llm`, `touchUp`, `grammar`, `vad`, `infinite`) is a thin wrapper, cheap to construct.
 
 ## Available services (v0.6.0)
 
@@ -112,6 +112,17 @@ let result = try await client.grammar.check(text: "...")
 
 // VAD (only available in YoozEngine full variant)
 let segments = try await client.vad.detect(samples: [...])
+
+// Infinite long-context sessions (only available in YoozEngine full variant)
+let infiniteModels = try await client.infinite.availableModels()
+_ = try await client.infinite.status()
+let session = try await client.infinite.createSession(
+    modelId: infiniteModels.activeId,
+    label: "analysis-context"
+)
+try await client.infinite.append(sessionId: session.id, text: longDocumentText)
+try await client.infinite.checkpoint(sessionId: session.id, label: "loaded")
+try await client.infinite.deleteSession(id: session.id)
 ```
 
 ## The canonical model picker pattern
@@ -128,9 +139,36 @@ POST /v1/<module>/model    body { id: String, preload: Bool? } → ModelInfo
 - `loadState`: `.unavailable` < `.available` < `.cached` < `.loaded` (total ordering)
 - `isActive`: exactly one row has `isActive == true`
 
-Build a generic `ModelPickerStore<T>` once; reuse across TouchUp, STT engine, future TTS voices. See `yooz-whisper/YoozWhisper/UI/LLMModelPickerStore.swift` for the reference implementation.
+Build a generic `ModelPickerStore<T>` once; reuse across TouchUp, STT engine, Infinite, and future TTS voices. See `yooz-whisper/YoozWhisper/UI/LLMModelPickerStore.swift` for the reference implementation.
 
 Full pattern documented in `AGENTS.md` → "Module model picker pattern".
+
+## Infinite long-context module
+
+Infinite follows the engine substrate rule: the engine owns the API surface, session lifecycle, RAM gating, picker catalogue, and cleanup policy; the Infinite project lends backend modules and benchmark evidence. Consumer apps should integrate through `YoozEngineClient.infinite` or `/v1/infinite/*`, not by calling Infinite repo code directly.
+
+Use the full `YoozEngine` variant for Infinite. Lite and Whisper variants do not bundle it and return the standard module-not-bundled `501`.
+
+| Capability | Contract |
+|---|---|
+| Model picker | `GET /v1/infinite/models`, `POST /v1/infinite/model` |
+| Status | `GET /v1/infinite/status` |
+| Sessions | `GET/POST /v1/infinite/sessions`, `GET/DELETE /v1/infinite/sessions/:id` |
+| Context append | `POST /v1/infinite/sessions/:id/append` |
+| Checkpoints | `POST /v1/infinite/sessions/:id/checkpoint` |
+| Generation | `POST /v1/infinite/sessions/:id/generate`; currently returns `501 generation_unavailable` until backend inference is wired |
+
+RAM gating is part of the contract. Hosts below 32 GiB cannot select Infinite models. A 32-63 GiB host is the reduced tier and can select `gemma4-e4b-1m`; 64 GiB+ is the full tier and can select the full catalogue. Apps should render `loadState == .unavailable` rows as visible but disabled so users understand the hardware boundary.
+
+Infinite sessions are engine-owned resources. They survive `/v1/session/begin` recording boundaries and are cleaned up only by explicit delete or process exit:
+
+```text
+explicit_delete_or_process_exit;max_active_sessions=16
+```
+
+Always delete sessions when finished. Leaking sessions blocks capacity for other engine clients.
+
+The full API, model catalogue, RAM tiers, evidence references, and verification commands are documented in [`INFINITE_MODULE.md`](INFINITE_MODULE.md).
 
 ## Error handling
 
@@ -151,7 +189,7 @@ If your client wraps the SDK with a `ConnectionGate` (whisper does), only re-han
 
 ## HF model auto-download
 
-Both STT and LLM models are pulled from HuggingFace on first use. Cache lands at `~/.cache/huggingface/hub/`. There is no embedded / GHCR fallback — the engine assumes network on first use. Subsequent launches use the cached snapshot.
+STT, LLM, TouchUp, and Infinite model artifacts are pulled from HuggingFace on first use. Cache lands at `~/.cache/huggingface/hub/`. There is no embedded / GHCR fallback — the engine assumes network on first use. Subsequent launches use the cached snapshot.
 
 For STT, `POST /v1/stt/load` accepts `allow_fetch: false` to fail fast on a cold cache. The engine surfaces download progress via `/v1/stt/status.progress` (a Double 0.0–1.0).
 
@@ -250,7 +288,10 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 | Engine starts but shows "port in use" alert | A stale engine instance is holding 19920 | Set `YOOZ_ENGINE_AUTO_RECOVER=1` for dev (SDK will SIGKILL the holder). For ship, surface the error to the user. |
 | MLXHuggingFaceMacros build failure from CLI | Macro requires explicit trust on first use | Pass `-skipMacroValidation` to xcodebuild. Xcode UI handles this prompt automatically; CI / scripts must pass the flag. |
 | `connect()` succeeds but service calls 501 | Active build variant doesn't bundle that module (e.g. Lite has no MLX STT) | Check `client.modules()` — `unavailable` modules return 501 by design. Render the limitation in your UI. |
+| Infinite `generate` returns 501 | Backend inference is not wired yet; session state is preserved | Treat `generation_unavailable` as the current app-level boundary, not a transport failure. Keep using create/append/checkpoint/delete. |
+| Infinite models are visible but disabled | Host RAM tier cannot run that row | Use `loadState == .unavailable`, `ramTier`, and `maxContextTokens` from `/v1/infinite/models` to explain the requirement. |
+| Infinite session creation starts failing after repeated tests | Sessions are engine-owned and capped at 16 | Delete sessions explicitly with `client.infinite.deleteSession(id:)`; `/v1/session/begin` does not clean them up. |
 
 ---
 
-*See also: AGENTS.md "Module model picker pattern" + scripts/build-*.sh for the variant build pipeline.*
+*See also: AGENTS.md "Module model picker pattern", docs/INFINITE_MODULE.md, and scripts/build-*.sh for the variant build pipeline.*
