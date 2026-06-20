@@ -20,8 +20,12 @@ public struct InfiniteModelInfo: Codable, Sendable, Equatable {
     public let loadState: ModelLoadState
     public let isActive: Bool
     public let maxContextTokens: Int?
+    public let nativeContextTokens: Int?
     public let ramTier: String?
     public let backendKind: String?
+    public let adapterKind: String?
+    public let huggingFaceID: String?
+    public let revision: String?
     public let requiresAppleSilicon: Bool
     public let evidenceRef: String?
 
@@ -34,8 +38,12 @@ public struct InfiniteModelInfo: Codable, Sendable, Equatable {
         loadState: ModelLoadState,
         isActive: Bool,
         maxContextTokens: Int?,
+        nativeContextTokens: Int?,
         ramTier: String?,
         backendKind: String?,
+        adapterKind: String?,
+        huggingFaceID: String?,
+        revision: String?,
         requiresAppleSilicon: Bool,
         evidenceRef: String?
     ) {
@@ -47,8 +55,12 @@ public struct InfiniteModelInfo: Codable, Sendable, Equatable {
         self.loadState = loadState
         self.isActive = isActive
         self.maxContextTokens = maxContextTokens
+        self.nativeContextTokens = nativeContextTokens
         self.ramTier = ramTier
         self.backendKind = backendKind
+        self.adapterKind = adapterKind
+        self.huggingFaceID = huggingFaceID
+        self.revision = revision
         self.requiresAppleSilicon = requiresAppleSilicon
         self.evidenceRef = evidenceRef
     }

@@ -37,8 +37,9 @@ public enum InfiniteRAMTier: String, Codable, Sendable {
 /// Engine-owned model/mode catalogue for the Infinite long-context module.
 ///
 /// Stable raw values are the wire ids used by `/v1/infinite/model[s]`.
-/// Phase 1 exposes the contract and evidence-backed rows only; real
-/// backend launch/load behavior lands in later phases.
+/// Catalog rows are owned by the engine, while adapter implementations
+/// live behind `InfiniteBackendAdapter` so Infinite lends capability
+/// without becoming another serving surface.
 public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
     /// Light/reduced-tier 1M-capable Gemma4 model proven in infinite.
     case gemma4E4B1M = "gemma4-e4b-1m"
@@ -56,7 +57,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         case .gemma4_26BA4B1M:
             return "Gemma4 26B-A4B 1M"
         case .qwen35B1M:
-            return "Qwen3 35B 1M"
+            return "Qwen3.6 35B-A3B 1M"
         case .s3Retrieval:
             return "S3 Retrieval"
         }
@@ -69,7 +70,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         case .gemma4_26BA4B1M:
             return "Full-tier Gemma4 long-context model, proven at ~1M tokens."
         case .qwen35B1M:
-            return "Paged-cache Qwen flagship path for 1M-token contexts."
+            return "Paged-cache Qwen3.6 flagship path for 1M-token contexts."
         case .s3Retrieval:
             return "Fast retrieval-backed long-context mode for lexical and semantic recall."
         }
@@ -102,21 +103,15 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
     }
 
     public var maxContextTokens: Int {
-        switch self {
-        case .gemma4E4B1M, .gemma4_26BA4B1M, .qwen35B1M:
-            return 1_000_000
-        case .s3Retrieval:
-            return 10_000_000
-        }
+        descriptor.targetContextTokens
+    }
+
+    public var nativeContextTokens: Int {
+        descriptor.nativeContextTokens
     }
 
     public var requiredRAMTier: InfiniteRAMTier {
-        switch self {
-        case .gemma4E4B1M:
-            return .reduced
-        case .gemma4_26BA4B1M, .qwen35B1M, .s3Retrieval:
-            return .full
-        }
+        descriptor.requiredRAMTier
     }
 
     public var ramTier: String {
@@ -124,12 +119,19 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
     }
 
     public var backendKind: String {
-        switch self {
-        case .gemma4E4B1M, .gemma4_26BA4B1M, .qwen35B1M:
-            return "paged-kv"
-        case .s3Retrieval:
-            return "retrieval"
-        }
+        descriptor.backendKind.rawValue
+    }
+
+    public var adapterKind: String {
+        descriptor.adapterKind.rawValue
+    }
+
+    public var huggingFaceID: String? {
+        descriptor.repository?.id
+    }
+
+    public var revision: String? {
+        descriptor.repository?.revision
     }
 
     public var evidenceRef: String {
@@ -140,6 +142,61 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
             return "infinite:research/26-flagship-1m.md"
         case .s3Retrieval:
             return "infinite:research/24-dense-retrieval.md"
+        }
+    }
+
+    public var descriptor: InfiniteBackendDescriptor {
+        switch self {
+        case .gemma4E4B1M:
+            return InfiniteBackendDescriptor(
+                selection: self,
+                repository: InfiniteModelRepository(
+                    id: "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit",
+                    revision: "b4966f32e71f9f4976a78f74bc8944b1d064bcbf"
+                ),
+                backendKind: .pagedKV,
+                adapterKind: .pagedKVMLX,
+                nativeContextTokens: 131_072,
+                targetContextTokens: 1_000_000,
+                requiredRAMTier: .reduced
+            )
+        case .gemma4_26BA4B1M:
+            return InfiniteBackendDescriptor(
+                selection: self,
+                repository: InfiniteModelRepository(
+                    id: "mlx-community/gemma-4-26b-a4b-it-4bit",
+                    revision: "efbeee6e582ebfd06abc9d65e90839c4b5d2116b"
+                ),
+                backendKind: .pagedKV,
+                adapterKind: .pagedKVMLX,
+                nativeContextTokens: 262_144,
+                targetContextTokens: 1_000_000,
+                requiredRAMTier: .full
+            )
+        case .qwen35B1M:
+            return InfiniteBackendDescriptor(
+                selection: self,
+                repository: InfiniteModelRepository(
+                    id: "mlx-community/Qwen3.6-35B-A3B-4bit",
+                    revision: "38740b847e4cb78f352aba30aa41c76e08e6eb46"
+                ),
+                backendKind: .pagedKV,
+                adapterKind: .pagedKVMLX,
+                nativeContextTokens: 262_144,
+                targetContextTokens: 1_000_000,
+                requiredRAMTier: .full
+            )
+        case .s3Retrieval:
+            return InfiniteBackendDescriptor(
+                selection: self,
+                repository: nil,
+                backendKind: .retrieval,
+                adapterKind: .retrievalIndex,
+                nativeContextTokens: 0,
+                targetContextTokens: 10_000_000,
+                requiredRAMTier: .full,
+                requiredCachedFiles: []
+            )
         }
     }
 }

@@ -28,10 +28,14 @@ public actor InfiniteEngine {
 
     public private(set) var activeModel: InfiniteModelSelection = .gemma4E4B1M
     private var loadedModel: InfiniteModelSelection?
+    private var preparedBackend: InfiniteBackendHandle?
     private var lastLoadError: String?
     private var activeSessionCount = 0
+    private let backendAdapter: any InfiniteBackendAdapter
 
-    private init() {}
+    init(backendAdapter: any InfiniteBackendAdapter = CatalogInfiniteBackendAdapter()) {
+        self.backendAdapter = backendAdapter
+    }
 
     public var isLoaded: Bool {
         loadedModel == activeModel
@@ -54,15 +58,21 @@ public actor InfiniteEngine {
             throw InfiniteError.modelUnavailable(selection.rawValue)
         }
 
-        activeModel = selection
-        lastLoadError = nil
-
+        let nextPreparedBackend: InfiniteBackendHandle?
         if preload {
-            // Phase 1 is contract/scaffold only. Real backend loading lands
-            // in Phase 2; preload=false is the route-test happy path.
-            lastLoadError = "Infinite backend loading is not implemented in Phase 1"
-            throw InfiniteError.modelSetFailed(lastLoadError!)
+            do {
+                nextPreparedBackend = try await backendAdapter.prepare(selection.descriptor)
+            } catch {
+                lastLoadError = error.localizedDescription
+                throw InfiniteError.modelSetFailed(error.localizedDescription)
+            }
+        } else {
+            nextPreparedBackend = preparedBackend?.selection == selection ? preparedBackend : nil
         }
+
+        activeModel = selection
+        preparedBackend = nextPreparedBackend
+        lastLoadError = nil
 
         return info(for: selection)
     }
@@ -72,7 +82,7 @@ public actor InfiniteEngine {
             loaded: isLoaded,
             modelId: activeModel.rawValue,
             progress: nil,
-            state: isLoaded ? "ready" : "idle",
+            state: state,
             activeSessions: activeSessionCount,
             maxContextTokens: activeModel.maxContextTokens,
             ramTier: activeModel.ramTier,
@@ -98,8 +108,12 @@ public actor InfiniteEngine {
             loadState: loadState(for: selection),
             isActive: selection == activeModel,
             maxContextTokens: selection.maxContextTokens,
+            nativeContextTokens: selection.nativeContextTokens,
             ramTier: selection.ramTier,
             backendKind: selection.backendKind,
+            adapterKind: selection.adapterKind,
+            huggingFaceID: selection.huggingFaceID,
+            revision: selection.revision,
             requiresAppleSilicon: true,
             evidenceRef: selection.evidenceRef
         )
@@ -107,7 +121,13 @@ public actor InfiniteEngine {
 
     private func loadState(for selection: InfiniteModelSelection) -> ModelLoadState {
         guard isModelSelectable(selection) else { return .unavailable }
-        return loadedModel == selection ? .loaded : .available
+        if loadedModel == selection {
+            return .loaded
+        }
+        if InfiniteCacheProbe.isCached(selection.descriptor) {
+            return .cached
+        }
+        return .available
     }
 
     private func isModelSelectable(_ selection: InfiniteModelSelection) -> Bool {
@@ -116,5 +136,15 @@ public actor InfiniteEngine {
         #else
         return false
         #endif
+    }
+
+    private var state: String {
+        if isLoaded {
+            return "ready"
+        }
+        if preparedBackend?.selection == activeModel {
+            return "adapter_ready"
+        }
+        return "idle"
     }
 }

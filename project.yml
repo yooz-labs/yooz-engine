@@ -157,6 +157,8 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - package: swift-huggingface
+        product: HuggingFace
 
   STTModule:
     type: framework
