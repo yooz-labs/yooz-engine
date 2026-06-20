@@ -490,6 +490,55 @@ final class APIServer: ObservableObject {
         )
     }
 
+    #if canImport(InfiniteModule)
+    private nonisolated func infiniteErrorResponse(_ error: InfiniteError) -> Response {
+        switch error {
+        case .invalidModel:
+            return errorResponse(
+                status: .badRequest,
+                message: error.localizedDescription,
+                code: "invalid_model"
+            )
+        case .modelUnavailable:
+            return errorResponse(
+                status: .notImplemented,
+                message: error.localizedDescription,
+                code: "model_unavailable"
+            )
+        case .modelSetFailed:
+            return errorResponse(
+                status: .internalServerError,
+                message: error.localizedDescription,
+                code: "model_set_failed"
+            )
+        case .sessionNotFound:
+            return errorResponse(
+                status: .notFound,
+                message: error.localizedDescription,
+                code: "session_not_found"
+            )
+        case .invalidSessionInput:
+            return errorResponse(
+                status: .badRequest,
+                message: error.localizedDescription,
+                code: "invalid_session_input"
+            )
+        case .sessionLimitExceeded:
+            return errorResponse(
+                status: .conflict,
+                message: error.localizedDescription,
+                code: "session_limit_exceeded"
+            )
+        case .generationUnavailable:
+            return errorResponse(
+                status: .notImplemented,
+                message: error.localizedDescription,
+                code: "generation_unavailable"
+            )
+        }
+    }
+    #endif
+
     private nonisolated func jsonResponse<T: Encodable>(
         _ value: T,
         status: HTTPResponse.Status = .ok
@@ -1544,26 +1593,7 @@ final class APIServer: ObservableObject {
                 )
                 return try jsonResponse(active)
             } catch let error as InfiniteError {
-                switch error {
-                case .modelUnavailable:
-                    return errorResponse(
-                        status: .notImplemented,
-                        message: error.localizedDescription,
-                        code: "model_unavailable"
-                    )
-                case .invalidModel:
-                    return errorResponse(
-                        status: .badRequest,
-                        message: error.localizedDescription,
-                        code: "invalid_model"
-                    )
-                case .modelSetFailed:
-                    return errorResponse(
-                        status: .internalServerError,
-                        message: error.localizedDescription,
-                        code: "model_set_failed"
-                    )
-                }
+                return infiniteErrorResponse(error)
             } catch {
                 return errorResponse(
                     status: .internalServerError,
@@ -1580,6 +1610,159 @@ final class APIServer: ObservableObject {
             }
             let status = await InfiniteEngine.shared.status()
             return try jsonResponse(status)
+        }
+
+        // Infinite: Engine-owned long-context sessions. These are distinct
+        // from /v1/session/begin recording boundaries; generic recording
+        // resets must not delete durable Infinite context.
+        router.get("/v1/infinite/sessions") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let sessions = await InfiniteEngine.shared.listSessions()
+            return try jsonResponse(InfiniteSessionsResponse(sessions: sessions))
+        }
+
+        router.post("/v1/infinite/sessions") { [self] request, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let body: InfiniteCreateSessionRequest
+            do {
+                body = try await request.decode(
+                    as: InfiniteCreateSessionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            do {
+                let session = try await InfiniteEngine.shared.createSession(request: body)
+                return try jsonResponse(session)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
+        }
+
+        router.get("/v1/infinite/sessions/:sessionID") { [self] _, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            do {
+                let sessionID = try context.parameters.require("sessionID")
+                let session = try await InfiniteEngine.shared.session(id: sessionID)
+                return try jsonResponse(session)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
+        }
+
+        router.post("/v1/infinite/sessions/:sessionID/append") { [self] request, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let body: InfiniteAppendSessionRequest
+            do {
+                body = try await request.decode(
+                    as: InfiniteAppendSessionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            do {
+                let sessionID = try context.parameters.require("sessionID")
+                let response = try await InfiniteEngine.shared.append(
+                    sessionID: sessionID,
+                    request: body
+                )
+                return try jsonResponse(response)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
+        }
+
+        router.post("/v1/infinite/sessions/:sessionID/generate") { [self] request, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let body: InfiniteGenerateSessionRequest
+            do {
+                body = try await request.decode(
+                    as: InfiniteGenerateSessionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            do {
+                let sessionID = try context.parameters.require("sessionID")
+                let response = try await InfiniteEngine.shared.generate(
+                    sessionID: sessionID,
+                    request: body
+                )
+                return try jsonResponse(response)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
+        }
+
+        router.post("/v1/infinite/sessions/:sessionID/checkpoint") { [self] request, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let body: InfiniteCheckpointSessionRequest
+            do {
+                body = try await request.decode(
+                    as: InfiniteCheckpointSessionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            do {
+                let sessionID = try context.parameters.require("sessionID")
+                let response = try await InfiniteEngine.shared.checkpoint(
+                    sessionID: sessionID,
+                    request: body
+                )
+                return try jsonResponse(response)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
+        }
+
+        router.delete("/v1/infinite/sessions/:sessionID") { [self] _, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            do {
+                let sessionID = try context.parameters.require("sessionID")
+                let response = try await InfiniteEngine.shared.deleteSession(id: sessionID)
+                return try jsonResponse(response)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
         }
         #endif
 

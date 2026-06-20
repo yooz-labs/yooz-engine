@@ -41,9 +41,28 @@ final class InfiniteStatusRouteTests: XCTestCase {
         return (try XCTUnwrap(response as? HTTPURLResponse), data)
     }
 
+    private func post(_ path: String, body: Data = Data()) async throws -> (HTTPURLResponse, Data) {
+        var request = URLRequest(url: baseURL().appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return (try XCTUnwrap(response as? HTTPURLResponse), data)
+    }
+
+    private func delete(_ path: String) async throws -> (HTTPURLResponse, Data) {
+        var request = URLRequest(url: baseURL().appendingPathComponent(path))
+        request.httpMethod = "DELETE"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return (try XCTUnwrap(response as? HTTPURLResponse), data)
+    }
+
     private func resetEngineState() async throws {
         guard InfiniteRAMTier.current != .belowMinimum else {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
+        }
+        for session in await InfiniteEngine.shared.listSessions() {
+            _ = try await InfiniteEngine.shared.deleteSession(id: session.id)
         }
         _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
     }
@@ -83,6 +102,70 @@ final class InfiniteStatusRouteTests: XCTestCase {
                 infinite.detail["hf_repo"],
                 "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit"
             )
+        }
+    }
+
+    @MainActor
+    func testInfiniteSessionRoutesSurviveRecordingResetAndRejectGenerate() async throws {
+        try await resetEngineState()
+        try await withServer { _ in
+            let createBody = try JSONEncoder().encode(
+                InfiniteCreateSessionRequest(label: "route-session")
+            )
+            let (createHTTP, createPayload) = try await post(
+                "/v1/infinite/sessions",
+                body: createBody
+            )
+            XCTAssertEqual(createHTTP.statusCode, 200)
+            let created = try JSONDecoder().decode(InfiniteSessionInfo.self, from: createPayload)
+            XCTAssertEqual(created.modelId, "gemma4-e4b-1m")
+            XCTAssertEqual(created.label, "route-session")
+
+            let appendBody = try JSONEncoder().encode(
+                InfiniteAppendSessionRequest(text: "real route context")
+            )
+            let (appendHTTP, appendPayload) = try await post(
+                "/v1/infinite/sessions/\(created.id)/append",
+                body: appendBody
+            )
+            XCTAssertEqual(appendHTTP.statusCode, 200)
+            let appended = try JSONDecoder().decode(
+                InfiniteAppendSessionResponse.self,
+                from: appendPayload
+            )
+            XCTAssertEqual(appended.session.inputCharacters, 18)
+
+            let (beginHTTP, _) = try await post("/v1/session/begin")
+            XCTAssertEqual(beginHTTP.statusCode, 200)
+
+            let (getHTTP, getPayload) = try await get("/v1/infinite/sessions/\(created.id)")
+            XCTAssertEqual(getHTTP.statusCode, 200)
+            let fetched = try JSONDecoder().decode(InfiniteSessionInfo.self, from: getPayload)
+            XCTAssertEqual(fetched.id, created.id)
+            XCTAssertEqual(fetched.inputCharacters, 18)
+
+            let generateBody = try JSONEncoder().encode(
+                InfiniteGenerateSessionRequest(prompt: "summarize", maxTokens: 16)
+            )
+            let (generateHTTP, generatePayload) = try await post(
+                "/v1/infinite/sessions/\(created.id)/generate",
+                body: generateBody
+            )
+            XCTAssertEqual(generateHTTP.statusCode, 501)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: generatePayload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "generation_unavailable")
+
+            let (deleteHTTP, deletePayload) = try await delete(
+                "/v1/infinite/sessions/\(created.id)"
+            )
+            XCTAssertEqual(deleteHTTP.statusCode, 200)
+            let deleted = try JSONDecoder().decode(
+                InfiniteDeleteSessionResponse.self,
+                from: deletePayload
+            )
+            XCTAssertTrue(deleted.deleted)
         }
     }
 }

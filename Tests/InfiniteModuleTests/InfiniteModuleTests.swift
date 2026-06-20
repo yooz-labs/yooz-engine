@@ -13,6 +13,9 @@ final class InfiniteModuleTests: XCTestCase {
         guard InfiniteRAMTier.current != .belowMinimum else {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
         }
+        for session in await InfiniteEngine.shared.listSessions() {
+            _ = try await InfiniteEngine.shared.deleteSession(id: session.id)
+        }
         _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
     }
 
@@ -113,5 +116,94 @@ final class InfiniteModuleTests: XCTestCase {
         XCTAssertFalse(ready)
 
         try await resetEngine()
+    }
+
+    func testSessionLifecycleTracksContextCheckpointsAndCleanup() async throws {
+        guard InfiniteRAMTier.current != .belowMinimum else {
+            throw XCTSkip("Infinite requires at least 32 GB unified memory")
+        }
+        let engine = InfiniteEngine()
+        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+
+        let created = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(label: "fixture-real-session")
+        )
+        XCTAssertEqual(created.modelId, "gemma4-e4b-1m")
+        XCTAssertEqual(created.label, "fixture-real-session")
+        XCTAssertEqual(created.contextWindowTokens, 1_000_000)
+        XCTAssertEqual(created.inputCharacters, 0)
+        XCTAssertEqual(created.estimatedInputTokens, 0)
+        XCTAssertEqual(created.checkpointCount, 0)
+        XCTAssertEqual(created.cleanupPolicy, InfiniteEngine.cleanupPolicy)
+        XCTAssertGreaterThan(created.resources.physicalMemoryBytes, 0)
+        XCTAssertEqual(
+            created.resources.wiredMemoryLimitBytes,
+            InfiniteRAMTier.reduced.minimumPhysicalMemoryBytes
+        )
+
+        let appended = try await engine.append(
+            sessionID: created.id,
+            request: InfiniteAppendSessionRequest(text: "real context")
+        )
+        XCTAssertEqual(appended.appendedCharacters, 12)
+        XCTAssertEqual(appended.estimatedAppendedTokens, 3)
+        XCTAssertEqual(appended.session.inputCharacters, 12)
+        XCTAssertEqual(appended.session.estimatedInputTokens, 3)
+
+        let checkpoint = try await engine.checkpoint(
+            sessionID: created.id,
+            request: InfiniteCheckpointSessionRequest(label: "after-append")
+        )
+        XCTAssertEqual(checkpoint.checkpoint.label, "after-append")
+        XCTAssertEqual(checkpoint.checkpoint.inputCharacters, 12)
+        XCTAssertEqual(checkpoint.session.checkpointCount, 1)
+
+        let listed = await engine.listSessions()
+        XCTAssertEqual(listed.map(\.id), [created.id])
+
+        let deleted = try await engine.deleteSession(id: created.id)
+        XCTAssertTrue(deleted.deleted)
+        XCTAssertEqual(deleted.sessionId, created.id)
+        let status = await engine.status()
+        XCTAssertEqual(status.activeSessions, 0)
+        XCTAssertEqual(status.cleanupPolicy, InfiniteEngine.cleanupPolicy)
+    }
+
+    func testRecordingBoundaryDoesNotDeleteInfiniteSessions() async throws {
+        guard InfiniteRAMTier.current != .belowMinimum else {
+            throw XCTSkip("Infinite requires at least 32 GB unified memory")
+        }
+        let engine = InfiniteEngine()
+        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+        let created = try await engine.createSession(request: InfiniteCreateSessionRequest())
+
+        await engine.resetForRecordingBoundary()
+
+        let status = await engine.status()
+        XCTAssertEqual(status.activeSessions, 1)
+        let fetched = try await engine.session(id: created.id)
+        XCTAssertEqual(fetched.id, created.id)
+    }
+
+    func testGenerateOperationIsExplicitlyUnavailableUntilBackendInferenceLands() async throws {
+        guard InfiniteRAMTier.current != .belowMinimum else {
+            throw XCTSkip("Infinite requires at least 32 GB unified memory")
+        }
+        let engine = InfiniteEngine()
+        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+        let created = try await engine.createSession(request: InfiniteCreateSessionRequest())
+
+        do {
+            _ = try await engine.generate(
+                sessionID: created.id,
+                request: InfiniteGenerateSessionRequest(prompt: "summarize", maxTokens: 16)
+            )
+            XCTFail("generate should not report synthetic text before inference is wired")
+        } catch InfiniteError.generationUnavailable(let reason) {
+            XCTAssertTrue(reason.contains("Phase 3"))
+        }
+
+        let status = await engine.status()
+        XCTAssertEqual(status.activeSessions, 1)
     }
 }

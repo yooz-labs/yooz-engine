@@ -11,6 +11,17 @@ public enum InfiniteRAMTier: String, Codable, Sendable {
     case reduced
     case full
 
+    public var minimumPhysicalMemoryBytes: Int64 {
+        switch self {
+        case .belowMinimum:
+            return 0
+        case .reduced:
+            return 32 * 1024 * 1024 * 1024
+        case .full:
+            return 64 * 1024 * 1024 * 1024
+        }
+    }
+
     public static var current: InfiniteRAMTier {
         let gib = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
         if gib >= 64 {

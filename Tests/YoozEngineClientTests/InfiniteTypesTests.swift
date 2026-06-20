@@ -92,6 +92,16 @@ final class InfiniteTypesTests: XCTestCase {
           "maxContextTokens": 1000000,
           "ramTier": "reduced",
           "backendKind": "paged-kv",
+          "cleanupPolicy": "explicit_delete_or_process_exit;max_active_sessions=16",
+          "resources": {
+            "physicalMemoryBytes": 68719476736,
+            "wiredMemoryLimitBytes": 34359738368,
+            "requiredRAMTier": "reduced",
+            "peakMemoryBytes": null,
+            "prefillTokensPerSecond": null,
+            "decodeTokensPerSecond": null,
+            "draftAcceptanceRate": null
+          },
           "lastError": null
         }
         """
@@ -103,5 +113,68 @@ final class InfiniteTypesTests: XCTestCase {
         XCTAssertEqual(status.state, "idle")
         XCTAssertEqual(status.activeSessions, 0)
         XCTAssertEqual(status.maxContextTokens, 1_000_000)
+        XCTAssertEqual(status.cleanupPolicy, "explicit_delete_or_process_exit;max_active_sessions=16")
+        XCTAssertEqual(status.resources?.wiredMemoryLimitBytes, 34_359_738_368)
+    }
+
+    func testInfiniteSessionLifecycleTypesRoundTrip() throws {
+        let metrics = InfiniteResourceMetrics(
+            physicalMemoryBytes: 68_719_476_736,
+            wiredMemoryLimitBytes: 34_359_738_368,
+            requiredRAMTier: "reduced",
+            peakMemoryBytes: nil,
+            prefillTokensPerSecond: nil,
+            decodeTokensPerSecond: 12.5,
+            draftAcceptanceRate: nil
+        )
+        let session = InfiniteSessionInfo(
+            id: "session-1",
+            modelId: "gemma4-e4b-1m",
+            label: "work",
+            state: "open",
+            createdAt: "2026-06-20T04:00:00Z",
+            updatedAt: "2026-06-20T04:01:00Z",
+            contextWindowTokens: 1_000_000,
+            inputCharacters: 128,
+            estimatedInputTokens: 32,
+            checkpointCount: 1,
+            cleanupPolicy: "explicit_delete_or_process_exit;max_active_sessions=16",
+            resources: metrics
+        )
+        let checkpoint = InfiniteSessionCheckpoint(
+            id: "checkpoint-1",
+            label: "after-load",
+            createdAt: "2026-06-20T04:01:00Z",
+            inputCharacters: 128,
+            estimatedInputTokens: 32,
+            resources: metrics
+        )
+        let response = InfiniteCheckpointSessionResponse(
+            session: session,
+            checkpoint: checkpoint
+        )
+
+        let data = try JSONEncoder().encode(response)
+        let decoded = try JSONDecoder().decode(InfiniteCheckpointSessionResponse.self, from: data)
+        XCTAssertEqual(decoded, response)
+    }
+
+    func testInfiniteSessionRequestEncoding() throws {
+        let create = InfiniteCreateSessionRequest(modelId: "gemma4-e4b-1m", label: "doc")
+        let createData = try JSONEncoder().encode(create)
+        let createJSON = try JSONSerialization.jsonObject(with: createData) as! [String: Any]
+        XCTAssertEqual(createJSON["modelId"] as? String, "gemma4-e4b-1m")
+        XCTAssertEqual(createJSON["label"] as? String, "doc")
+
+        let append = InfiniteAppendSessionRequest(text: "real context")
+        let appendData = try JSONEncoder().encode(append)
+        let appendJSON = try JSONSerialization.jsonObject(with: appendData) as! [String: Any]
+        XCTAssertEqual(appendJSON["text"] as? String, "real context")
+
+        let generate = InfiniteGenerateSessionRequest(prompt: "summarize", maxTokens: 16)
+        let generateData = try JSONEncoder().encode(generate)
+        let generateJSON = try JSONSerialization.jsonObject(with: generateData) as! [String: Any]
+        XCTAssertEqual(generateJSON["prompt"] as? String, "summarize")
+        XCTAssertEqual(generateJSON["maxTokens"] as? Int, 16)
     }
 }

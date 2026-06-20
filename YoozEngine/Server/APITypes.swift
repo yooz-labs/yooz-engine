@@ -514,6 +514,12 @@ extension TouchUpModelsResponse: ResponseEncodable {}
 extension InfiniteModelInfo: ResponseEncodable {}
 extension InfiniteModelsResponse: ResponseEncodable {}
 extension InfiniteStatus: ResponseEncodable {}
+extension InfiniteSessionInfo: ResponseEncodable {}
+extension InfiniteSessionsResponse: ResponseEncodable {}
+extension InfiniteAppendSessionResponse: ResponseEncodable {}
+extension InfiniteGenerateSessionResponse: ResponseEncodable {}
+extension InfiniteCheckpointSessionResponse: ResponseEncodable {}
+extension InfiniteDeleteSessionResponse: ResponseEncodable {}
 #endif
 
 // MARK: - Grammar Types

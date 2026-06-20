@@ -16,12 +16,14 @@ extension InfiniteEngine: AIModule, SessionResettable {
         let current = activeModel
         return ModuleHealth(
             loaded: isLoaded,
-            error: isLoaded ? nil : "Infinite generation backend not loaded; Phase 2 exposes adapter/catalog readiness",
+            error: isLoaded ? nil : "Infinite generation backend not loaded; sessions and adapter readiness are available",
             detail: [
                 "active_model": current.rawValue,
                 "backend_kind": current.backendKind,
                 "adapter_kind": current.adapterKind,
                 "hf_repo": current.huggingFaceID ?? "none",
+                "active_sessions": String(status().activeSessions),
+                "cleanup_policy": Self.cleanupPolicy,
                 "max_context_tokens": String(current.maxContextTokens),
                 "ram_tier": current.ramTier
             ]

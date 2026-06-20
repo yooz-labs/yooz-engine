@@ -199,6 +199,15 @@ public final class YoozEngineClient: Sendable {
         return data
     }
 
+    func delete(_ path: String) async throws -> Data {
+        let url = resolveURL(path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return data
+    }
+
     private func validateResponse(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else {
             throw YoozEngineError.invalidResponse
