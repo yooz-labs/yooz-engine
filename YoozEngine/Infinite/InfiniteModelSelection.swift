@@ -55,7 +55,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
     /// Light/reduced-tier 1M-capable Gemma4 model proven in infinite.
     case gemma4E4B1M = "gemma4-e4b-1m"
     /// Full-tier Gemma4 MoE model proven in infinite.
-    case gemma4_26BA4B1M = "gemma4-26b-a4b-1m"
+    case gemma4_26B_A4B1M = "gemma4-26b-a4b-1m"
     /// Qwen/d1 paged long-context flagship path.
     case qwen35B1M = "qwen3-35b-1m"
     /// Fast retrieval-backed mode from the s3 carry track.
@@ -65,7 +65,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         switch self {
         case .gemma4E4B1M:
             return "Gemma4 E4B 1M"
-        case .gemma4_26BA4B1M:
+        case .gemma4_26B_A4B1M:
             return "Gemma4 26B-A4B 1M"
         case .qwen35B1M:
             return "Qwen3.6 35B-A3B 1M"
@@ -78,7 +78,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         switch self {
         case .gemma4E4B1M:
             return "Reduced-tier long-context model, proven at ~1M tokens."
-        case .gemma4_26BA4B1M:
+        case .gemma4_26B_A4B1M:
             return "Full-tier Gemma4 long-context model, proven at ~1M tokens."
         case .qwen35B1M:
             return "Paged-cache Qwen3.6 flagship path for 1M-token contexts."
@@ -91,7 +91,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         switch self {
         case .gemma4E4B1M:
             return .light
-        case .gemma4_26BA4B1M, .s3Retrieval:
+        case .gemma4_26B_A4B1M, .s3Retrieval:
             return .quality
         case .qwen35B1M:
             return .premium
@@ -104,7 +104,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         switch self {
         case .gemma4E4B1M:
             return 3 * 1024 * 1024 * 1024
-        case .gemma4_26BA4B1M:
+        case .gemma4_26B_A4B1M:
             return 14 * 1024 * 1024 * 1024
         case .qwen35B1M:
             return 20 * 1024 * 1024 * 1024
@@ -147,7 +147,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
 
     public var evidenceRef: String {
         switch self {
-        case .gemma4E4B1M, .gemma4_26BA4B1M:
+        case .gemma4E4B1M, .gemma4_26B_A4B1M:
             return "infinite:research/18-gemma-support-matrix.md"
         case .qwen35B1M:
             return "infinite:research/26-flagship-1m.md"
@@ -171,7 +171,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
                 targetContextTokens: 1_000_000,
                 requiredRAMTier: .reduced
             )
-        case .gemma4_26BA4B1M:
+        case .gemma4_26B_A4B1M:
             return InfiniteBackendDescriptor(
                 selection: self,
                 repository: InfiniteModelRepository(

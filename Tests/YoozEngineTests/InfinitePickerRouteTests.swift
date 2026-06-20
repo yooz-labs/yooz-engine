@@ -143,7 +143,7 @@ final class InfinitePickerRouteTests: XCTestCase {
         try await resetEngineState()
         try await withServer { _ in
             let selection: InfiniteModelSelection =
-                InfiniteRAMTier.current == .full ? .gemma4_26BA4B1M : .gemma4E4B1M
+                InfiniteRAMTier.current == .full ? .gemma4_26B_A4B1M : .gemma4E4B1M
             let body = try JSONEncoder().encode(
                 InfiniteSetModelRequest(id: selection.rawValue, preload: false)
             )

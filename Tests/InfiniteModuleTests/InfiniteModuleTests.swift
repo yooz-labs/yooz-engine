@@ -73,7 +73,7 @@ final class InfiniteModuleTests: XCTestCase {
             "b4966f32e71f9f4976a78f74bc8944b1d064bcbf"
         )
         XCTAssertEqual(
-            InfiniteModelSelection.gemma4_26BA4B1M.huggingFaceID,
+            InfiniteModelSelection.gemma4_26B_A4B1M.huggingFaceID,
             "mlx-community/gemma-4-26b-a4b-it-4bit"
         )
         XCTAssertEqual(
@@ -88,7 +88,7 @@ final class InfiniteModuleTests: XCTestCase {
     func testSetActiveModelWithoutPreloadReturnsActiveRow() async throws {
         try await resetEngine()
         let selection: InfiniteModelSelection =
-            InfiniteRAMTier.current == .full ? .gemma4_26BA4B1M : .gemma4E4B1M
+            InfiniteRAMTier.current == .full ? .gemma4_26B_A4B1M : .gemma4E4B1M
         let active = try await InfiniteEngine.shared.setActiveModel(
             selection,
             preload: false
