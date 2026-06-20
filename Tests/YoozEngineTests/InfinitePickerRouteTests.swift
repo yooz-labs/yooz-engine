@@ -1,0 +1,158 @@
+// InfinitePickerRouteTests.swift
+// YoozEngineTests
+//
+// Copyright 2026 Yooz Labs. All rights reserved.
+
+import Foundation
+import XCTest
+@testable import EngineCore
+@testable import InfiniteModule
+@testable import YoozEngine
+
+final class InfinitePickerRouteTests: XCTestCase {
+
+    @MainActor
+    private func withServer<T>(
+        _ body: (APIServer) async throws -> T
+    ) async throws -> T {
+        UniqueEnginePort.assignFreshPort()
+        await ModuleRegistry.shared.register(InfiniteEngine.shared)
+        let server = APIServer()
+        try await server.start()
+        let result: T
+        do {
+            result = try await body(server)
+        } catch {
+            await server.stop()
+            throw error
+        }
+        await server.stop()
+        return result
+    }
+
+    private func baseURL() -> URL {
+        URL(string: "http://\(EngineConfig.host):\(EngineConfig.port)")!
+    }
+
+    private func get(_ path: String) async throws -> (HTTPURLResponse, Data) {
+        var request = URLRequest(url: baseURL().appendingPathComponent(path))
+        request.httpMethod = "GET"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return (try XCTUnwrap(response as? HTTPURLResponse), data)
+    }
+
+    private func post(_ path: String, body: Data) async throws -> (HTTPURLResponse, Data) {
+        var request = URLRequest(url: baseURL().appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return (try XCTUnwrap(response as? HTTPURLResponse), data)
+    }
+
+    private func resetEngineState() async throws {
+        guard InfiniteRAMTier.current != .belowMinimum else {
+            throw XCTSkip("Infinite requires at least 32 GB unified memory")
+        }
+        _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
+    }
+
+    @MainActor
+    func testGetModelsReturnsCanonicalShape() async throws {
+        try await resetEngineState()
+        try await withServer { _ in
+            let (http, body) = try await get("/v1/infinite/models")
+            XCTAssertEqual(http.statusCode, 200)
+            let decoded = try JSONDecoder().decode(InfiniteModelsResponse.self, from: body)
+            XCTAssertEqual(decoded.models.count, InfiniteModelSelection.allCases.count)
+            XCTAssertEqual(decoded.activeId, "gemma4-e4b-1m")
+            XCTAssertEqual(decoded.models.filter(\.isActive).count, 1)
+            XCTAssertEqual(decoded.models.first(where: \.isActive)?.id, decoded.activeId)
+        }
+    }
+
+    @MainActor
+    func testGetModelsTierAndMetadataMapping() async throws {
+        try await resetEngineState()
+        try await withServer { _ in
+            let (_, body) = try await get("/v1/infinite/models")
+            let decoded = try JSONDecoder().decode(InfiniteModelsResponse.self, from: body)
+            let byID = Dictionary(uniqueKeysWithValues: decoded.models.map { ($0.id, $0) })
+            XCTAssertEqual(byID["gemma4-e4b-1m"]?.tier, .light)
+            XCTAssertEqual(byID["gemma4-e4b-1m"]?.ramTier, "reduced")
+            XCTAssertEqual(byID["gemma4-e4b-1m"]?.maxContextTokens, 1_000_000)
+            XCTAssertEqual(byID["gemma4-e4b-1m"]?.loadState, .available)
+            XCTAssertEqual(byID["gemma4-26b-a4b-1m"]?.tier, .quality)
+            XCTAssertEqual(byID["qwen3-35b-1m"]?.tier, .premium)
+            let fullExpected: ModelLoadState =
+                InfiniteRAMTier.current == .full ? .available : .unavailable
+            XCTAssertEqual(byID["qwen3-35b-1m"]?.loadState, fullExpected)
+            XCTAssertEqual(byID["s3-retrieval"]?.backendKind, "retrieval")
+            XCTAssertEqual(byID["s3-retrieval"]?.loadState, fullExpected)
+        }
+    }
+
+    @MainActor
+    func testPostModelWithUnknownIdReturns400InvalidModel() async throws {
+        try await resetEngineState()
+        try await withServer { _ in
+            let body = try JSONEncoder().encode(
+                InfiniteSetModelRequest(id: "missing-model", preload: false)
+            )
+            let (http, payload) = try await post("/v1/infinite/model", body: body)
+            XCTAssertEqual(http.statusCode, 400)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "invalid_model")
+        }
+    }
+
+    @MainActor
+    func testPostModelWithMalformedBodyReturns400InvalidRequest() async throws {
+        try await resetEngineState()
+        try await withServer { _ in
+            let body = Data("not json".utf8)
+            let (http, payload) = try await post("/v1/infinite/model", body: body)
+            XCTAssertEqual(http.statusCode, 400)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "invalid_request")
+        }
+    }
+
+    @MainActor
+    func testPostModelWithoutPreloadReturns200AndActiveRow() async throws {
+        try await resetEngineState()
+        try await withServer { _ in
+            let selection: InfiniteModelSelection =
+                InfiniteRAMTier.current == .full ? .gemma4_26BA4B1M : .gemma4E4B1M
+            let body = try JSONEncoder().encode(
+                InfiniteSetModelRequest(id: selection.rawValue, preload: false)
+            )
+            let (http, payload) = try await post("/v1/infinite/model", body: body)
+            XCTAssertEqual(http.statusCode, 200)
+            let decoded = try JSONDecoder().decode(InfiniteModelInfo.self, from: payload)
+            XCTAssertEqual(decoded.id, selection.rawValue)
+            XCTAssertTrue(decoded.isActive)
+            XCTAssertEqual(decoded.loadState, .available)
+        }
+    }
+
+    @MainActor
+    func testPostModelWithPreloadReturns500UntilBackendExists() async throws {
+        try await resetEngineState()
+        try await withServer { _ in
+            let body = try JSONEncoder().encode(
+                InfiniteSetModelRequest(id: "gemma4-e4b-1m", preload: true)
+            )
+            let (http, payload) = try await post("/v1/infinite/model", body: body)
+            XCTAssertEqual(http.statusCode, 500)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "model_set_failed")
+        }
+    }
+}

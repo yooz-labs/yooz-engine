@@ -7,6 +7,9 @@ import GrammarModule
 import HuggingFace
 import Hummingbird
 import HummingbirdWebSocket
+#if canImport(InfiniteModule)
+import InfiniteModule
+#endif
 #if canImport(LLMModule)
 import LLMModule
 #endif
@@ -1490,6 +1493,95 @@ final class APIServer: ObservableObject {
             await TouchUpEngine.shared.unload(modelType)
             return try jsonResponse(Self.infoEntry(for: modelType, loaded: false))
         }
+
+        #if canImport(InfiniteModule)
+        // Infinite: List available long-context models/modes.
+        // Follows the canonical picker shape from AGENTS.md:
+        // id / displayName / description / tier / sizeBytes /
+        // loadState / isActive, plus optional Infinite metadata.
+        router.get("/v1/infinite/models") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let models = await InfiniteEngine.shared.availableModels()
+            let activeId = await InfiniteEngine.shared.activeModel.rawValue
+            return try jsonResponse(InfiniteModelsResponse(models: models, activeId: activeId))
+        }
+
+        // Infinite: Set active model/mode. Phase 1 supports selecting
+        // rows without preloading; real backend loading is Phase 2.
+        router.post("/v1/infinite/model") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let body: InfiniteSetModelRequest
+            do {
+                body = try await request.decode(
+                    as: InfiniteSetModelRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            guard let selection = InfiniteModelSelection(rawValue: body.id) else {
+                let known = InfiniteModelSelection.allCases.map(\.rawValue).joined(separator: ", ")
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Unknown Infinite model id '\(body.id)'. Known: \(known).",
+                    code: "invalid_model"
+                )
+            }
+
+            do {
+                let active = try await InfiniteEngine.shared.setActiveModel(
+                    selection,
+                    preload: body.preload ?? true
+                )
+                return try jsonResponse(active)
+            } catch let error as InfiniteError {
+                switch error {
+                case .modelUnavailable:
+                    return errorResponse(
+                        status: .notImplemented,
+                        message: error.localizedDescription,
+                        code: "model_unavailable"
+                    )
+                case .invalidModel:
+                    return errorResponse(
+                        status: .badRequest,
+                        message: error.localizedDescription,
+                        code: "invalid_model"
+                    )
+                case .modelSetFailed:
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: error.localizedDescription,
+                        code: "model_set_failed"
+                    )
+                }
+            } catch {
+                return errorResponse(
+                    status: .internalServerError,
+                    message: error.localizedDescription,
+                    code: "model_set_failed"
+                )
+            }
+        }
+
+        // Infinite: Status for the active long-context model/mode.
+        router.get("/v1/infinite/status") { [self] _, _ -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let status = await InfiniteEngine.shared.status()
+            return try jsonResponse(status)
+        }
+        #endif
 
         // TouchUp: Process text
         router.post("/v1/touchup") { [self] request, context in

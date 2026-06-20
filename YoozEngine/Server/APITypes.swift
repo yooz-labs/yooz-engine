@@ -1,5 +1,8 @@
 import EngineCore
 import Hummingbird
+#if canImport(InfiniteModule)
+import InfiniteModule
+#endif
 #if canImport(LLMModule)
 import LLMModule
 #endif
@@ -504,6 +507,14 @@ struct TouchUpServerResponse: ResponseCodable {
 // concern belongs here, not in LLMModule.
 extension TouchUpModelInfo: ResponseEncodable {}
 extension TouchUpModelsResponse: ResponseEncodable {}
+
+// MARK: - Infinite Picker (engine-owned long-context module)
+
+#if canImport(InfiniteModule)
+extension InfiniteModelInfo: ResponseEncodable {}
+extension InfiniteModelsResponse: ResponseEncodable {}
+extension InfiniteStatus: ResponseEncodable {}
+#endif
 
 // MARK: - Grammar Types
 
