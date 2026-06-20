@@ -7,10 +7,9 @@
 #   2. Build the `YoozEngine` scheme; locate the resulting `Yooz Engine.app`
 #      inside DerivedData.
 #   3. Invoke `xcodebuild test -testPlan IntegrationTests`. The plan sets
-#      `YOOZ_INTEGRATION=1` unconditionally and expands
-#      `YOOZ_ENGINE_APP_PATH` / `YOOZ_TEST_ENGINE_URL` from build settings
-#      passed on the command line. The harness itself launches the
-#      subprocess — this script does NOT start the engine ahead of time.
+#      `YOOZ_INTEGRATION=1` unconditionally. The harness itself locates the
+#      built app beside the test bundle and launches it — this script does
+#      NOT start the engine ahead of time.
 #   4. Print per-endpoint timings (grep `[timing] ...` lines emitted by
 #      IntegrationTestCase) and an overall pass/fail summary.
 #
@@ -42,6 +41,12 @@ TEST_PLAN="IntegrationTests"
 PROJECT="YoozEngine.xcodeproj"
 CONFIGURATION="Debug"
 LOG_DIR="$ROOT/.build/integration-logs"
+XCODEBUILD_FLAGS=(-skipMacroValidation)
+COVERAGE_SETTING_FLAGS=(
+    "CLANG_ENABLE_CODE_COVERAGE=NO"
+    "GCC_GENERATE_TEST_COVERAGE_FILES=NO"
+    "GCC_INSTRUMENT_PROGRAM_FLOW_ARCS=NO"
+)
 
 mkdir -p "$LOG_DIR"
 
@@ -59,9 +64,9 @@ BUILD_SETTING_FLAGS=()
 if [[ -n "${YOOZ_TEST_ENGINE_URL:-}" ]]; then
     echo "[run-integration] YOOZ_TEST_ENGINE_URL=$YOOZ_TEST_ENGINE_URL — skipping engine build"
     BUILD_SETTING_FLAGS+=("YOOZ_TEST_ENGINE_URL=$YOOZ_TEST_ENGINE_URL")
-    # Still provide APP_PATH as an empty string so the xctestplan
-    # $(YOOZ_ENGINE_APP_PATH) expansion resolves; IntegrationTestCase only
-    # reads it when YOOZ_TEST_ENGINE_URL is unset.
+    # Still provide APP_PATH as an empty string for callers that inspect
+    # build settings; the test harness ignores unresolved placeholders and
+    # only reads this when Xcode forwards a real environment value.
     BUILD_SETTING_FLAGS+=("YOOZ_ENGINE_APP_PATH=")
 else
     echo "[run-integration] step 2: build $SCHEME_APP ($CONFIGURATION)"
@@ -69,11 +74,13 @@ else
     DERIVED_DATA_FLAGS=(-derivedDataPath "$DERIVED_DATA")
     mkdir -p "$DERIVED_DATA"
     xcodebuild \
+        "${XCODEBUILD_FLAGS[@]}" \
         -project "$PROJECT" \
         -scheme "$SCHEME_APP" \
         -configuration "$CONFIGURATION" \
         "${DERIVED_DATA_FLAGS[@]}" \
         CODE_SIGNING_ALLOWED=NO \
+        "${COVERAGE_SETTING_FLAGS[@]}" \
         build \
         > "$LOG_DIR/build.log" 2>&1 || {
             echo "error: build failed; see $LOG_DIR/build.log" >&2
@@ -96,17 +103,18 @@ echo "[run-integration] step 3: run $SCHEME_TESTS via -testPlan $TEST_PLAN"
 TEST_LOG="$LOG_DIR/test.log"
 
 # xcodebuild forwards the IntegrationTests.xctestplan environment to the
-# xctest host. Command-line build settings (KEY=VALUE after the action) are
-# expanded into `$(KEY)` references inside the plan's
-# `environmentVariableEntries`, which is how we parameterize the app path
-# without shipping a developer-specific plan.
+# xctest host. Some Xcode versions leave `$(KEY)` placeholders literal, so
+# EngineProcessLauncher falls back to the built-products directory beside
+# IntegrationTests.xctest instead of depending on expansion.
 xcodebuild \
+    "${XCODEBUILD_FLAGS[@]}" \
     -project "$PROJECT" \
     -scheme "$SCHEME_TESTS" \
     -configuration "$CONFIGURATION" \
     -testPlan "$TEST_PLAN" \
     "${DERIVED_DATA_FLAGS[@]}" \
     CODE_SIGNING_ALLOWED=NO \
+    "${COVERAGE_SETTING_FLAGS[@]}" \
     "${BUILD_SETTING_FLAGS[@]}" \
     test \
     > "$TEST_LOG" 2>&1 && TEST_EXIT=0 || TEST_EXIT=$?

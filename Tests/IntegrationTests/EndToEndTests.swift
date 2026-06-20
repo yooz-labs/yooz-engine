@@ -106,6 +106,115 @@ final class EndToEndTests: IntegrationTestCase {
                        "regex path must echo some processed text")
     }
 
+    // MARK: - /v1/infinite/* (engine-hosted module)
+
+    /// Consumer-style proof for Infinite as an engine-hosted module. This
+    /// goes through `YoozEngineClient` against the served app, not module
+    /// internals, so it catches SDK/route/schema drift at the boundary that
+    /// downstream apps will use.
+    func testInfiniteSDKSessionLifecycleThroughEngine() async throws {
+        let client = try requireClient()
+
+        let manifest = try await measureEndpoint("GET /v1/modules infinite") {
+            try await client.modules()
+        }
+        let infiniteManifest = try XCTUnwrap(
+            manifest.modules.first { $0.name == "infinite" },
+            "full engine variant must advertise the Infinite module"
+        )
+        XCTAssertEqual(infiniteManifest.version, manifest.engineVersion)
+        XCTAssertEqual(
+            infiniteManifest.detail["cleanup_policy"],
+            "explicit_delete_or_process_exit;max_active_sessions=16"
+        )
+
+        let models = try await measureEndpoint("GET /v1/infinite/models") {
+            try await client.infinite.availableModels()
+        }
+        XCTAssertFalse(models.models.isEmpty, "Infinite picker must expose models")
+        let active = try XCTUnwrap(
+            models.models.first { $0.id == models.activeId },
+            "activeId must identify one picker row"
+        )
+        try XCTSkipUnless(
+            active.loadState != .unavailable,
+            "Active Infinite model is not available on this machine"
+        )
+        XCTAssertEqual(active.adapterKind, "infinite-paged-kv-mlx-v1")
+        XCTAssertNotNil(active.evidenceRef)
+
+        let statusBefore = try await measureEndpoint("GET /v1/infinite/status") {
+            try await client.infinite.status()
+        }
+        XCTAssertEqual(statusBefore.modelId, models.activeId)
+        XCTAssertEqual(
+            statusBefore.cleanupPolicy,
+            "explicit_delete_or_process_exit;max_active_sessions=16"
+        )
+        XCTAssertNotNil(statusBefore.resources)
+
+        let created = try await measureEndpoint("POST /v1/infinite/sessions") {
+            try await client.infinite.createSession(label: "sdk-integration")
+        }
+        XCTAssertEqual(created.modelId, models.activeId)
+        XCTAssertEqual(created.label, "sdk-integration")
+        XCTAssertEqual(created.state, "open")
+
+        do {
+            let appended = try await measureEndpoint("POST /v1/infinite/sessions/:id/append") {
+                try await client.infinite.append(
+                    sessionId: created.id,
+                    text: "real hosted Infinite context"
+                )
+            }
+            XCTAssertEqual(appended.session.id, created.id)
+            XCTAssertGreaterThan(appended.appendedCharacters, 0)
+            XCTAssertGreaterThan(appended.estimatedAppendedTokens, 0)
+
+            let fetched = try await measureEndpoint("GET /v1/infinite/sessions/:id") {
+                try await client.infinite.session(id: created.id)
+            }
+            XCTAssertEqual(fetched.inputCharacters, appended.session.inputCharacters)
+            XCTAssertEqual(fetched.estimatedInputTokens, appended.session.estimatedInputTokens)
+
+            let checkpoint = try await measureEndpoint("POST /v1/infinite/sessions/:id/checkpoint") {
+                try await client.infinite.checkpoint(sessionId: created.id, label: "after-append")
+            }
+            XCTAssertEqual(checkpoint.session.id, created.id)
+            XCTAssertEqual(checkpoint.session.checkpointCount, 1)
+            XCTAssertEqual(checkpoint.checkpoint.label, "after-append")
+
+            do {
+                _ = try await measureEndpoint("POST /v1/infinite/sessions/:id/generate") {
+                    try await client.infinite.generate(
+                        sessionId: created.id,
+                        prompt: "summarize",
+                        maxTokens: 16
+                    )
+                }
+                XCTFail("Infinite generate should return 501 until backend inference is wired")
+            } catch YoozEngineError.httpError(statusCode: let statusCode) where statusCode == 501 {
+                // Current served contract: session state is durable, inference is not wired yet.
+            }
+
+            let deleted = try await measureEndpoint("DELETE /v1/infinite/sessions/:id") {
+                try await client.infinite.deleteSession(id: created.id)
+            }
+            XCTAssertTrue(deleted.deleted)
+            XCTAssertEqual(deleted.sessionId, created.id)
+
+            do {
+                _ = try await client.infinite.session(id: created.id)
+                XCTFail("deleted Infinite session should not be fetchable")
+            } catch YoozEngineError.httpError(statusCode: let statusCode) where statusCode == 404 {
+                // expected
+            }
+        } catch {
+            _ = try? await client.infinite.deleteSession(id: created.id)
+            throw error
+        }
+    }
+
     // MARK: - /v1/stt/status
 
     /// Shape check only: the STT engine may or may not be pre-loaded on a

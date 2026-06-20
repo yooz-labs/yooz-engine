@@ -170,7 +170,7 @@ class IntegrationTestCase: XCTestCase {
         let env = ProcessInfo.processInfo.environment
 
         // External-engine mode: no subprocess, just validate the URL.
-        if let override = env["YOOZ_TEST_ENGINE_URL"], !override.isEmpty {
+        if let override = resolvedEnvironmentValue(env["YOOZ_TEST_ENGINE_URL"]) {
             guard let url = URL(string: override),
                   hostAndPort(from: url) != nil else {
                 throw SetUpFailure(
@@ -248,5 +248,10 @@ class IntegrationTestCase: XCTestCase {
     static func parseHostPort(_ raw: String) -> (String, Int)? {
         guard let url = URL(string: raw) else { return nil }
         return hostAndPort(from: url)
+    }
+
+    static func resolvedEnvironmentValue(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty, !raw.hasPrefix("$(") else { return nil }
+        return raw
     }
 }

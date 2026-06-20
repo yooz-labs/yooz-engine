@@ -168,7 +168,7 @@ public final class YoozEngineClient: Sendable {
             rawPath = path
             rawQuery = nil
         }
-        var pathOnly = baseURL.appendingPathComponent(rawPath)
+        let pathOnly = baseURL.appendingPathComponent(rawPath)
         guard let rawQuery, !rawQuery.isEmpty else {
             return pathOnly
         }

@@ -124,6 +124,20 @@ final class IntegrationHelperTests: XCTestCase {
         }
     }
 
+    /// Xcode test plans can pass unresolved build-setting placeholders
+    /// through literally. Treat those as absent so `locateAppBundle` can
+    /// fall back to the built-products directory beside the test bundle.
+    func testAppBundleOverrideIgnoresUnresolvedBuildSetting() {
+        XCTAssertNil(EngineProcessLauncher.appBundleOverrideURL("$(YOOZ_ENGINE_APP_PATH)"))
+        XCTAssertNil(EngineProcessLauncher.appBundleOverrideURL(""))
+
+        let explicit = "/tmp/Yooz Engine.app"
+        XCTAssertEqual(
+            EngineProcessLauncher.appBundleOverrideURL(explicit)?.path,
+            explicit
+        )
+    }
+
     // MARK: - TimeoutGuard
 
     /// Predicate already true -> returns without sleeping.
@@ -187,5 +201,14 @@ final class IntegrationHelperTests: XCTestCase {
 
     func testParseHostPortMalformed() {
         XCTAssertNil(IntegrationTestCase.parseHostPort("not a url"))
+    }
+
+    func testResolvedEnvironmentValueIgnoresUnresolvedBuildSetting() {
+        XCTAssertNil(IntegrationTestCase.resolvedEnvironmentValue("$(YOOZ_TEST_ENGINE_URL)"))
+        XCTAssertNil(IntegrationTestCase.resolvedEnvironmentValue(""))
+        XCTAssertEqual(
+            IntegrationTestCase.resolvedEnvironmentValue("http://127.0.0.1:19920"),
+            "http://127.0.0.1:19920"
+        )
     }
 }

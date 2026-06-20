@@ -103,13 +103,18 @@ public final class EngineProcessLauncher: @unchecked Sendable {
 
     /// Resolves an `Yooz Engine.app` URL in priority order.
     public static func locateAppBundle() throws -> URL {
-        if let env = ProcessInfo.processInfo.environment["YOOZ_ENGINE_APP_PATH"],
-           !env.isEmpty {
-            let url = URL(fileURLWithPath: env)
+        if let url = appBundleOverrideURL(
+            ProcessInfo.processInfo.environment["YOOZ_ENGINE_APP_PATH"]
+        ) {
             if FileManager.default.fileExists(atPath: url.path) {
                 return url
             }
-            throw LaunchError.bundleNotFound("YOOZ_ENGINE_APP_PATH=\(env) does not exist")
+            throw LaunchError.bundleNotFound(
+                "YOOZ_ENGINE_APP_PATH=\(url.path) does not exist"
+            )
+        }
+        if let built = locateBesideTestBundle() {
+            return built
         }
         if let derived = try locateInDerivedData() {
             return derived
@@ -117,6 +122,26 @@ public final class EngineProcessLauncher: @unchecked Sendable {
         throw LaunchError.bundleNotFound(
             "set YOOZ_ENGINE_APP_PATH or build YoozEngine scheme first"
         )
+    }
+
+    static func appBundleOverrideURL(_ raw: String?) -> URL? {
+        guard let raw, !raw.isEmpty, !raw.hasPrefix("$(") else { return nil }
+        return URL(fileURLWithPath: raw)
+    }
+
+    /// Finds the app in the same built-products directory as
+    /// `IntegrationTests.xctest`. This is the reliable path for
+    /// `scripts/run-integration.sh`, which builds into repo-local
+    /// `.build/DerivedData` instead of Xcode's default DerivedData root.
+    static func locateBesideTestBundle() -> URL? {
+        let productsDir = Bundle(for: EngineProcessLauncher.self)
+            .bundleURL
+            .deletingLastPathComponent()
+        let candidate = productsDir.appendingPathComponent("Yooz Engine.app")
+        guard FileManager.default.fileExists(atPath: candidate.path) else {
+            return nil
+        }
+        return candidate
     }
 
     /// Walks `~/Library/Developer/Xcode/DerivedData/YoozEngine-*/Build/Products/Debug/`
