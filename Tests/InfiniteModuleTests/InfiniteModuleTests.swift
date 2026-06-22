@@ -91,13 +91,14 @@ final class InfiniteModuleTests: XCTestCase {
         XCTAssertEqual(InfiniteModelSelection.s3Retrieval.adapterKind, "infinite-retrieval-index-v1")
     }
 
-    /// Only architectures the Swift mlx-swift-lm fork implements can load.
-    /// Qwen3.6 (`qwen3_5_moe`) runs; Gemma4 (`gemma4`) needs the Swift port
-    /// (#184); retrieval has no MLX backend wired. load/generate gate on this.
+    /// Only architectures the Swift mlx-swift-lm fork can load + generate.
+    /// Qwen3.6 (`qwen3_5_moe`) and Gemma4 26B-A4B (`gemma4`) run, verified vs
+    /// Python mlx-lm (#184). Gemma4 E4B stays gated on the OptiQ-quant fork-fix
+    /// (#186); retrieval has no MLX backend wired. load/generate gate on this.
     func testSwiftRuntimeSupportReflectsMLXBackendCoverage() {
         XCTAssertTrue(InfiniteModelSelection.qwen35B1M.swiftRuntimeSupported)
+        XCTAssertTrue(InfiniteModelSelection.gemma4_26B_A4B1M.swiftRuntimeSupported)
         XCTAssertFalse(InfiniteModelSelection.gemma4E4B1M.swiftRuntimeSupported)
-        XCTAssertFalse(InfiniteModelSelection.gemma4_26B_A4B1M.swiftRuntimeSupported)
         XCTAssertFalse(InfiniteModelSelection.s3Retrieval.swiftRuntimeSupported)
     }
 
@@ -244,8 +245,9 @@ final class InfiniteModuleTests: XCTestCase {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
         }
         let engine = InfiniteEngine()
-        // gemma4 passes the RAM/tier gate but has no Swift MLX backend yet,
-        // so generate must refuse cleanly and point at the gemma4 port (#184).
+        // Gemma4 E4B passes the RAM/tier gate but its OptiQ-4bit build does not
+        // load in the Swift fork yet (#186), so generate must refuse cleanly and
+        // point at that fork-fix issue.
         _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
         let created = try await engine.createSession(request: InfiniteCreateSessionRequest())
 
@@ -256,7 +258,7 @@ final class InfiniteModuleTests: XCTestCase {
             )
             XCTFail("generate should refuse a model the Swift runtime can't run")
         } catch InfiniteError.generationUnavailable(let reason) {
-            XCTAssertTrue(reason.contains("184"), "should cite the gemma4 Swift-port issue #184")
+            XCTAssertTrue(reason.contains("186"), "should cite the Gemma4 E4B OptiQ-quant fork-fix issue #186")
         }
 
         let status = await engine.status()

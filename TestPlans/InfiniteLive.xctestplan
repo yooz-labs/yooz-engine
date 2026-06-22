@@ -1,0 +1,39 @@
+{
+  "configurations" : [
+    {
+      "id" : "B7E2C1A0-1840-4E4E-9184-0E2E2E2E2E84",
+      "name" : "InfiniteLive",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "INFINITE_LIVE",
+            "value" : "1"
+          }
+        ]
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "environmentVariableEntries" : [
+      {
+        "key" : "INFINITE_LIVE",
+        "value" : "1"
+      }
+    ]
+  },
+  "testTargets" : [
+    {
+      "selectedTests" : [
+        "InfiniteGemma4ParityTests\/testGemma4E4BGreedyParityVsPython()",
+        "InfiniteGemma4ParityTests\/testGemma4_26B_A4B_LoadsAndGeneratesNativeContext()"
+      ],
+      "target" : {
+        "containerPath" : "container:YoozEngine.xcodeproj",
+        "identifier" : "YoozEngineTests",
+        "name" : "YoozEngineTests"
+      }
+    }
+  ],
+  "version" : 1
+}
