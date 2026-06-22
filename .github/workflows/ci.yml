@@ -127,7 +127,9 @@ jobs:
       # above. `-workspace .` selects the implicit SwiftPM workspace so
       # `xcodebuild` does not pick up `YoozEngine.xcodeproj` (which has
       # no SwiftPM scheme). `-skipMacroValidation` skips Xcode's macro
-      # fingerprint prompt for swift-syntax macro plugins on CI.
+      # fingerprint prompt for swift-syntax macro plugins on CI;
+      # `-skipPackagePluginValidation` does the same for any build plugins a
+      # future MLX bump may carry (defensive; the 0.31.4 release ships none).
       #
       # `xcodebuild test` builds implicitly — the separate `build`
       # phase was duplicating ~15 minutes of compile work on every
@@ -139,6 +141,7 @@ jobs:
             -scheme YoozEngineRepo-Package \
             -destination 'platform=macOS' \
             -skipMacroValidation \
+            -skipPackagePluginValidation \
             -derivedDataPath .build/xcodebuild
 
   engine-app:
@@ -267,6 +270,7 @@ jobs:
             -scheme YoozEngine \
             -configuration Debug \
             -skipMacroValidation \
+            -skipPackagePluginValidation \
             -destination 'platform=macOS' \
             -derivedDataPath .build/xcodebuild \
             OTHER_CPLUSPLUSFLAGS='$(inherited) -DMLX_METAL_NO_NAX'

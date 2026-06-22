@@ -8,9 +8,11 @@ row has no mlx-lm implementation, so it is verified against the `mlx-vlm` text p
 All three `swiftRuntimeSupported` gates are flipped. Only retrieval mode has no MLX
 backend.
 
-**Machine:** Apple M4 Pro, 64 GiB (full tier), macOS 26. mlx-swift-lm pinned at
-`yooz-labs/mlx-swift-lm@e4259c6` (our fork; SharpAI `38d7ff2` lineage + the #186
-Gemma4 E4B fix + the #187 `gemma4_unified` registration and K-eq-V value-path fix).
+**Machine:** Apple M4 Pro, 64 GiB (full tier), macOS 26. Runtime pinned to
+Apple's ml-explore upstream: `mlx-swift@e23ae6b` (main) + `mlx-swift-lm@f4fd39e`
+(`yooz-labs/mlx-swift-lm` main, a clean ml-explore fork = ml-explore main + the
+gemma4_unified `vision_embedder` sanitize fix + the MLXLLM Gemma4 MoE/KV-sharing
+port; both have upstream PRs in flight). The SharpAI lineage is retired.
 Reference engines: `mlx-lm==0.31.3` (`gemma4` rows) and `mlx-vlm==0.6.3`
 (`gemma4_unified`).
 

@@ -47,18 +47,24 @@ let package = Package(
         .library(name: "Qwen3ASR", targets: ["Qwen3ASR"]),
     ],
     dependencies: [
+        // mlx-swift 0.31.4 release (what mlx-swift-lm main declares). Pin the
+        // release, not mlx-swift main, which is on the unreleased swift-tools 6.3
+        // toolchain. Kept in lockstep with project.yml.
         .package(
             url: "https://github.com/ml-explore/mlx-swift",
-            from: "0.21.2"
+            .upToNextMinor(from: "0.31.4")
         ),
         // Phase 4: Qwen3 text decoder + tokenizer-aware chat template
         // are reused from mlx-swift-lm + swift-transformers. The
         // engine Xcode project already pulls these in via project.yml;
         // SwiftPM needs them too so the headless parity tests can
-        // exercise the full bridge.
+        // exercise the full bridge. Kept in lockstep with project.yml: our clean
+        // ml-explore fork (yooz-labs/mlx-swift-lm) main, = ml-explore main + the
+        // gemma4_unified `vision_embedder` fix + the MLXLLM Gemma4 MoE/KV-sharing
+        // port, both with upstream PRs in flight (yooz-engine#187).
         .package(
-            url: "https://github.com/ml-explore/mlx-swift-lm",
-            from: "2.30.3"
+            url: "https://github.com/yooz-labs/mlx-swift-lm",
+            revision: "f4fd39e7037574169bbb521f3724b0f71512b498"
         ),
         .package(
             url: "https://github.com/huggingface/swift-transformers",

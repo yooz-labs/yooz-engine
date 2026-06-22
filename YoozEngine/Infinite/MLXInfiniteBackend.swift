@@ -127,7 +127,7 @@ public actor MLXInfiniteBackend {
         let params = GenerateParameters(
             maxTokens: maxTokens, temperature: Float(temperature), topP: 0.95
         )
-        let collected = try await container.perform { ctx -> (String, GenerateCompletionInfo?) in
+        let collected = try await container.perform { (ctx: ModelContext) -> (String, GenerateCompletionInfo?) in
             let cache = ctx.model.newCache(parameters: params)
             let stream = try MLXLMCommon.generate(
                 input: preparedInput,
@@ -139,7 +139,7 @@ public actor MLXInfiniteBackend {
             var info: GenerateCompletionInfo?
             for await generation in stream {
                 switch generation {
-                case let .chunk(chunk, _):
+                case let .chunk(chunk):
                     text += chunk
                 case let .info(completion):
                     info = completion

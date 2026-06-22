@@ -28,37 +28,31 @@ packages:
   swift-collections:
     url: https://github.com/apple/swift-collections.git
     exactVersion: "1.3.0"
-  # MLX runtime forks, maintained under this org so the whole dependency graph
-  # is under our control rather than an upstream rebase bot's cadence. Lineage:
-  #   ml-explore/mlx-swift{,-lm} (Apple, Apache-2.0)
-  #     -> SharpAI/mlx-swift{,-lm} (TurboQuant Metal ops + Gemma4 fork work)
-  #     -> yooz-labs/mlx-swift{,-lm} (this org's fork; pinned here)
-  # They carry what Apple upstream lacks and we depend on:
-  #   mlx-swift:    MLXFast.turboQuantEncode / turboDecodeK / V (TurboQuant, #10)
-  #   mlx-swift-lm: Gemma4 MoE block + KV-sharing/quant fixes, the
-  #                 KVCacheSimple.turboQuantEnabled hook, and our Gemma4 E4B
-  #                 OptiQ load fix (#186; mirrors upstream ml-explore PR #330).
+  # MLX runtime — Apple's ml-explore upstream. We track the mlx community now
+  # (yooz-labs/mlx-swift-lm is a clean fork of ml-explore, not SharpAI). The
+  # SharpAI lineage is retired; its only unique carry was TurboQuant (issue #10),
+  # now parked — see results/PHASE1_FEASIBILITY.md.
   #
-  # mlx-swift-lm is pinned to an explicit revision; mlx-swift is forced to
-  # follow `branch: "main"` because mlx-swift-lm declares its mlx-swift dep
-  # as a branch requirement, and SwiftPM cannot mix a branch requirement
-  # from one consumer with a revision requirement from another. The
-  # mlx-swift commit is therefore pinned via `Package.resolved` (committed
-  # to the repo, un-gitignored) rather than here. Currently resolved:
-  #   mlx-swift:    35191a6c3533765ee591130159c769ff5ddbd5f4 (via Package.resolved)
-  #   mlx-swift-lm: e4259c61e9940027bf9eb3de6146851c560e7125 (revision below)
-  #
-  # See issue #10 / `results/PHASE1_FEASIBILITY.md` for the TurboQuant rationale.
-  # Re-pin policy: when ml-explore PR #330 (Gemma4 E4B) merges upstream and our
-  # fork rebases onto it, drop our custom patch and re-pin to the rebased commit.
-  # The e4259c6 pin adds gemma4_unified (12B) registration + the K-eq-V value
-  # path fix on top of the #186 E4B fix (yooz-engine#187).
+  #   - mlx-swift: the 0.31.4 release (what mlx-swift-lm main declares,
+  #     `.upToNextMinor(from: 0.31.4)`). We pin the release, not mlx-swift main —
+  #     main is on swift-tools 6.3 (an unreleased toolchain CI lacks), while
+  #     0.31.4 needs only the stable toolchain. The Gemma4 APIs we depend on
+  #     (ropeOffset / weightedExpertSum) live in mlx-swift-lm, not mlx-swift.
+  #   - mlx-swift-lm @ f4fd39e: yooz-labs/mlx-swift-lm `main` = ml-explore main
+  #     (swift-tools 6.1) plus two deltas not yet in an ml-explore release, each
+  #     with an upstream PR in flight: (1) drop the gemma4_unified
+  #     `vision_embedder` weights in sanitize so the multimodal 12B checkpoint
+  #     loads (#187); (2) bring the MLXVLM Gemma4 MoE block + KV-shared-layer
+  #     attention to the MLXLLM text path so 26B-A4B (MoE) and E4B (KV-sharing)
+  #     load through the Infinite backend. Pinned to a revision (not the 3.31.3
+  #     release) because that release predates this Gemma4 work. Re-pin to a
+  #     clean ml-explore tag once both land upstream + ship.
   mlx-swift:
-    url: https://github.com/yooz-labs/mlx-swift
-    branch: "main"
+    url: https://github.com/ml-explore/mlx-swift
+    exactVersion: "0.31.4"
   mlx-swift-lm:
     url: https://github.com/yooz-labs/mlx-swift-lm
-    revision: "e4259c61e9940027bf9eb3de6146851c560e7125"
+    revision: "f4fd39e7037574169bbb521f3724b0f71512b498"
   # mlx-swift-lm 3.x decoupled from HuggingFace — consuming apps now bring
   # their own concrete tokenizer + downloader. We use Apple's swift-transformers
   # (Tokenizers + Hub) and huggingface/swift-huggingface (HubClient namespace
