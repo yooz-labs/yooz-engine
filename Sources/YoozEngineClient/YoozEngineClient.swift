@@ -184,7 +184,7 @@ public final class YoozEngineClient: Sendable {
     func get(_ path: String) async throws -> Data {
         let url = resolveURL(path)
         let (data, response) = try await session.data(from: url)
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return data
     }
 
@@ -195,7 +195,7 @@ public final class YoozEngineClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         let (data, response) = try await session.data(for: request)
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return data
     }
 
@@ -204,15 +204,32 @@ public final class YoozEngineClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         let (data, response) = try await session.data(for: request)
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return data
     }
 
-    private func validateResponse(_ response: URLResponse) throws {
+    /// Engine error envelope: every non-2xx response carries `{error, code}`.
+    private struct ServerErrorBody: Decodable {
+        let error: String
+        let code: String
+    }
+
+    private func validateResponse(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw YoozEngineError.invalidResponse
         }
         guard (200...299).contains(http.statusCode) else {
+            // Surface the engine's structured error code/message when present so
+            // callers can branch on it (e.g. generation_unavailable vs
+            // module_not_bundled, both 501). Fall back to a bare httpError when
+            // the body is missing or not the structured shape.
+            if let body = try? JSONDecoder().decode(ServerErrorBody.self, from: data) {
+                throw YoozEngineError.serverError(
+                    statusCode: http.statusCode,
+                    code: body.code,
+                    message: body.error
+                )
+            }
             throw YoozEngineError.httpError(statusCode: http.statusCode)
         }
     }

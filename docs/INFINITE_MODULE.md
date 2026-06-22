@@ -84,8 +84,9 @@ do {
         prompt: "Summarize the loaded context",
         maxTokens: 256
     )
-} catch YoozEngineError.httpError(statusCode: 501) {
+} catch YoozEngineError.serverError(_, let code, _) where code == "generation_unavailable" {
     // Current expected boundary: backend inference is not wired yet.
+    // Branch on the stable `code`, not the bare 501 status.
 }
 ```
 
