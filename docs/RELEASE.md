@@ -108,9 +108,9 @@ scripts/run-integration.sh
 
 The integration suite drives the served app through `YoozEngineClient` and
 checks `/v1/modules`, `/v1/infinite/models`, `/v1/infinite/status`, session
-create/append/fetch/checkpoint/delete, generation (`501 generation_unavailable`
-against the default Gemma4 E4B model — OptiQ-quant load blocked on #186; the
-Gemma4 26B-A4B and Qwen rows do generate, #184), and deleted-session `404`.
+create/append/fetch/checkpoint/delete, generation (real text from the default
+Gemma4 E4B model — #184/#186; retrieval returns `501 generation_unavailable`),
+and deleted-session `404`.
 
 ## Known limitations (A6)
 

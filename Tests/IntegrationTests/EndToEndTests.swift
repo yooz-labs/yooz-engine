@@ -184,23 +184,20 @@ final class EndToEndTests: IntegrationTestCase {
             XCTAssertEqual(checkpoint.session.checkpointCount, 1)
             XCTAssertEqual(checkpoint.checkpoint.label, "after-append")
 
-            do {
-                _ = try await measureEndpoint("POST /v1/infinite/sessions/:id/generate") {
-                    try await client.infinite.generate(
-                        sessionId: created.id,
-                        prompt: "summarize",
-                        maxTokens: 16
-                    )
-                }
-                XCTFail("Infinite generate on the default Gemma4 E4B model should return 501 (OptiQ-quant load blocked on #186)")
-            } catch YoozEngineError.serverError(let statusCode, let code, _) {
-                // The default model is Gemma4 E4B, whose OptiQ-4bit build does not
-                // load in the Swift fork yet (#186); generation refuses cleanly
-                // while session state stays durable. Swift-runtime-supported models
-                // (Qwen3.6 qwen3_5_moe, Gemma4 26B-A4B — #184) do generate.
-                XCTAssertEqual(statusCode, 501)
-                XCTAssertEqual(code, "generation_unavailable")
+            // The default model (Gemma4 E4B) runs now (#184/#186): generation
+            // returns real text through the full HTTP -> engine -> MLX path,
+            // bounded to the native window. This downloads the E4B weights on
+            // first run if they are not already cached.
+            let generated = try await measureEndpoint("POST /v1/infinite/sessions/:id/generate") {
+                try await client.infinite.generate(
+                    sessionId: created.id,
+                    prompt: "summarize",
+                    maxTokens: 16
+                )
             }
+            XCTAssertFalse(generated.text.isEmpty)
+            XCTAssertTrue(["stop", "length"].contains(generated.finishReason))
+            XCTAssertGreaterThan(generated.resources.decodeTokensPerSecond ?? 0, 0)
 
             let deleted = try await measureEndpoint("DELETE /v1/infinite/sessions/:id") {
                 try await client.infinite.deleteSession(id: created.id)

@@ -272,15 +272,12 @@ public actor InfiniteEngine {
         guard isModelSelectable(selection) else {
             throw InfiniteError.modelUnavailable(selection.rawValue)
         }
-        // The Gemma4 E4B row (OptiQ mixed-quant, #186) and retrieval mode have
-        // no runnable Swift MLX backend yet; fail clearly here rather than
-        // advertise a capability we can't run. (Gemma4 26B + Qwen do run, #184.)
+        // All three MLX rows run (Qwen #184, Gemma4 26B #184, Gemma4 E4B #186);
+        // only retrieval mode has no MLX backend wired. Fail clearly here rather
+        // than advertise a capability we can't run.
         guard selection.swiftRuntimeSupported else {
-            let tracking = selection == .gemma4E4B1M
-                ? "tracked in yooz-engine#186 (Gemma4 E4B OptiQ quantization)"
-                : "the retrieval backend is not yet wired"
             throw InfiniteError.generationUnavailable(
-                "model \(selection.rawValue) (\(selection.backendKind)) is not yet runnable by the Swift MLX runtime; \(tracking)"
+                "model \(selection.rawValue) (\(selection.backendKind)) is not yet runnable by the Swift MLX runtime; the retrieval backend is not yet wired"
             )
         }
 

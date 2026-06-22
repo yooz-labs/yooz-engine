@@ -112,7 +112,7 @@ final class InfiniteStatusRouteTests: XCTestCase {
     }
 
     @MainActor
-    func testInfiniteSessionRoutesSurviveRecordingResetAndRejectGenerate() async throws {
+    func testInfiniteSessionRoutesSurviveRecordingReset() async throws {
         try requireSupportedTier()
         try await withServer { _ in
             let createBody = try JSONEncoder().encode(
@@ -150,19 +150,6 @@ final class InfiniteStatusRouteTests: XCTestCase {
             XCTAssertEqual(fetched.id, created.id)
             XCTAssertEqual(fetched.inputCharacters, 18)
 
-            let generateBody = try JSONEncoder().encode(
-                InfiniteGenerateSessionRequest(prompt: "summarize", maxTokens: 16)
-            )
-            let (generateHTTP, generatePayload) = try await post(
-                "/v1/infinite/sessions/\(created.id)/generate",
-                body: generateBody
-            )
-            XCTAssertEqual(generateHTTP.statusCode, 501)
-            let json = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: generatePayload) as? [String: Any]
-            )
-            XCTAssertEqual(json["code"] as? String, "generation_unavailable")
-
             let (deleteHTTP, deletePayload) = try await delete(
                 "/v1/infinite/sessions/\(created.id)"
             )
@@ -172,6 +159,43 @@ final class InfiniteStatusRouteTests: XCTestCase {
                 from: deletePayload
             )
             XCTAssertTrue(deleted.deleted)
+        }
+    }
+
+    /// Retrieval is the only row with no MLX backend, so generate on it returns
+    /// 501 generation_unavailable. The MLX rows (Qwen, Gemma4 26B/E4B) all run
+    /// now, so this is the remaining route-level refusal case. Full-tier only.
+    @MainActor
+    func testGenerateOnRetrievalModelReturns501() async throws {
+        guard InfiniteRAMTier.current == .full else {
+            throw XCTSkip("retrieval mode (the only non-MLX row) is full-tier; needs 64 GB")
+        }
+        try await withServer { _ in
+            let setBody = try JSONEncoder().encode(
+                InfiniteSetModelRequest(id: "s3-retrieval", preload: false)
+            )
+            let (setHTTP, _) = try await post("/v1/infinite/model", body: setBody)
+            XCTAssertEqual(setHTTP.statusCode, 200)
+
+            let createBody = try JSONEncoder().encode(InfiniteCreateSessionRequest())
+            let (createHTTP, createPayload) = try await post(
+                "/v1/infinite/sessions", body: createBody
+            )
+            XCTAssertEqual(createHTTP.statusCode, 200)
+            let created = try JSONDecoder().decode(InfiniteSessionInfo.self, from: createPayload)
+            XCTAssertEqual(created.modelId, "s3-retrieval")
+
+            let generateBody = try JSONEncoder().encode(
+                InfiniteGenerateSessionRequest(prompt: "summarize", maxTokens: 16)
+            )
+            let (generateHTTP, generatePayload) = try await post(
+                "/v1/infinite/sessions/\(created.id)/generate", body: generateBody
+            )
+            XCTAssertEqual(generateHTTP.statusCode, 501)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: generatePayload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "generation_unavailable")
         }
     }
 
