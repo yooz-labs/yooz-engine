@@ -31,16 +31,12 @@ public actor ModuleRegistry {
     /// Remove a previously-registered module by name. No-op if absent.
     ///
     /// Registration normally happens once at app launch and persists for the
-    /// process lifetime. Tests that need to exercise the not-bundled path
-    /// (HTTP 501) use this to start a server without a given module present.
+    /// process lifetime; this exists for tests that exercise the not-bundled
+    /// path (HTTP 501) by starting a server without a given module present.
+    /// Scoped to a single name on purpose — there is no drop-all, so a stray
+    /// call can only affect the one module it names.
     public func unregister(_ name: String) {
         modules.removeValue(forKey: name)
-    }
-
-    /// Drop all registered modules. Test-isolation helper only; production
-    /// registers once at launch and never clears.
-    public func reset() {
-        modules.removeAll()
     }
 
     /// Whether a module with the given name is bundled in this build variant.

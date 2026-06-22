@@ -188,7 +188,9 @@ final class InfinitePickerRouteTests: XCTestCase {
     @MainActor
     func testInfiniteRoutesReturn501WhenModuleNotBundled() async throws {
         UniqueEnginePort.assignFreshPort()
-        await ModuleRegistry.shared.reset()
+        // Drop only Infinite (not the whole registry) so other suites' modules
+        // are untouched. The next withServer re-registers it.
+        await ModuleRegistry.shared.unregister("infinite")
         let server = APIServer()
         try await server.start()
         do {

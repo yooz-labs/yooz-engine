@@ -38,8 +38,8 @@ public enum YoozEngineError: LocalizedError, Sendable, Equatable {
             return "Invalid response from Yooz Engine"
         case .httpError(let code):
             return "HTTP error \(code) from Yooz Engine"
-        case .serverError(let code, let errorCode, let message):
-            return "Yooz Engine error \(code) [\(errorCode)]: \(message)"
+        case .serverError(let statusCode, let code, let message):
+            return "Yooz Engine error \(statusCode) [\(code)]: \(message)"
         case .decodingError(let message):
             return "Failed to decode response: \(message)"
         case .webSocketError(let message):

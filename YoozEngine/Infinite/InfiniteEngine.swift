@@ -171,11 +171,14 @@ public actor InfiniteEngine {
         sessionID: String,
         request: InfiniteAppendSessionRequest
     ) throws -> InfiniteAppendSessionResponse {
-        guard !request.text.isEmpty else {
-            throw InfiniteError.invalidSessionInput("append text must not be empty")
-        }
+        // Session existence is checked first so a bad id maps to 404
+        // session_not_found rather than 400 invalid_session_input (matches
+        // generate()'s ordering).
         guard var record = sessions[sessionID] else {
             throw InfiniteError.sessionNotFound(sessionID)
+        }
+        guard !request.text.isEmpty else {
+            throw InfiniteError.invalidSessionInput("append text must not be empty")
         }
         record.inputCharacters += request.text.count
         record.estimatedInputTokens += Self.estimatedTokens(for: request.text)
@@ -184,7 +187,7 @@ public actor InfiniteEngine {
         let contextWindow = record.selection.maxContextTokens
         if record.estimatedInputTokens > contextWindow {
             infiniteEngineLogger.warning(
-                "Infinite session \(sessionID, privacy: .public) estimated input \(record.estimatedInputTokens, privacy: .public) tokens exceeds the \(contextWindow, privacy: .public)-token context window for \(record.selection.rawValue, privacy: .public); generation will truncate or refuse once backend inference is wired."
+                "Infinite session \(sessionID, privacy: .public) has accumulated ~\(record.estimatedInputTokens, privacy: .public) tokens (context window: \(contextWindow, privacy: .public)) for \(record.selection.rawValue, privacy: .public); generation may truncate or refuse once backend inference is wired."
             )
         }
         return InfiniteAppendSessionResponse(

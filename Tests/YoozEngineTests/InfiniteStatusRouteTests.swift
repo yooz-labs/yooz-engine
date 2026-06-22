@@ -82,6 +82,8 @@ final class InfiniteStatusRouteTests: XCTestCase {
             XCTAssertEqual(status.modelId, "gemma4-e4b-1m")
             XCTAssertNil(status.progress)
             XCTAssertEqual(status.state, "idle")
+            // The default active model (gemma4-e4b-1m) is a `reduced`-tier model
+            // regardless of the host machine's tier, so this is host-independent.
             XCTAssertEqual(status.activeSessions, 0)
             XCTAssertEqual(status.maxContextTokens, 1_000_000)
             XCTAssertEqual(status.ramTier, "reduced")
@@ -170,6 +172,24 @@ final class InfiniteStatusRouteTests: XCTestCase {
                 from: deletePayload
             )
             XCTAssertTrue(deleted.deleted)
+        }
+    }
+
+    @MainActor
+    func testSessionLimitReturns409() async throws {
+        try requireSupportedTier()
+        try await withServer { _ in
+            let body = try JSONEncoder().encode(InfiniteCreateSessionRequest(label: "limit"))
+            for _ in 0..<InfiniteEngine.maxActiveSessions {
+                let (http, _) = try await post("/v1/infinite/sessions", body: body)
+                XCTAssertEqual(http.statusCode, 200)
+            }
+            let (overflow, payload) = try await post("/v1/infinite/sessions", body: body)
+            XCTAssertEqual(overflow.statusCode, 409)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "session_limit_exceeded")
         }
     }
 

@@ -9,14 +9,20 @@ import XCTest
 
 final class InfiniteModuleTests: XCTestCase {
 
+    override func setUp() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    override func tearDown() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    /// Resets `InfiniteEngine.shared` to a clean baseline (clears the leaked
+    /// `preparedBackend`/sessions that order-dependent flakes came from) and
+    /// skips on unsupported tiers. setUp/tearDown also reset for belt-and-braces.
     private func resetEngine() async throws {
-        guard InfiniteRAMTier.current != .belowMinimum else {
-            throw XCTSkip("Infinite requires at least 32 GB unified memory")
-        }
-        for session in await InfiniteEngine.shared.listSessions() {
-            _ = try await InfiniteEngine.shared.deleteSession(id: session.id)
-        }
-        _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
+        try requireSupportedTier()
+        await InfiniteEngine.shared.reset()
     }
 
     func testAIModuleName() {
@@ -240,6 +246,14 @@ final class InfiniteModuleTests: XCTestCase {
                 request: InfiniteAppendSessionRequest(text: "x")
             )
         }
+        // Even with otherwise-invalid input, an unknown session is a 404, not a
+        // 400 — session existence is checked before input validation.
+        await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
+            _ = try await engine.append(
+                sessionID: missing,
+                request: InfiniteAppendSessionRequest(text: "")
+            )
+        }
         await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
             _ = try await engine.checkpoint(
                 sessionID: missing,
@@ -329,11 +343,19 @@ final class InfiniteModuleTests: XCTestCase {
         _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
 
         let encoder = JSONEncoder()
-        func keys<T: Encodable>(_ value: T) throws -> Set<String> {
-            let object = try JSONSerialization.jsonObject(with: encoder.encode(value))
-            let dict = (object as? [String: Any]) ?? [:]
-            return Set(dict.keys)
+        func object<T: Encodable>(_ value: T) throws -> [String: Any] {
+            let json = try JSONSerialization.jsonObject(with: encoder.encode(value))
+            return (json as? [String: Any]) ?? [:]
         }
+        func keys<T: Encodable>(_ value: T) throws -> Set<String> {
+            Set(try object(value).keys)
+        }
+        // Required (non-optional) keys of the nested InfiniteResourceMetrics;
+        // checked because the top-level `keys` helper only sees `resources`
+        // itself, not its sub-fields.
+        let resourceKeys: Set<String> = [
+            "physicalMemoryBytes", "wiredMemoryLimitBytes", "requiredRAMTier",
+        ]
 
         let models = await engine.availableModels()
         let modelInfo = try XCTUnwrap(models.first(where: \.isActive))
@@ -344,19 +366,29 @@ final class InfiniteModuleTests: XCTestCase {
         ]))
 
         let status = await engine.status()
-        XCTAssertTrue(try keys(status).isSuperset(of: [
+        let statusObject = try object(status)
+        XCTAssertTrue(Set(statusObject.keys).isSuperset(of: [
             "loaded", "modelId", "state", "activeSessions", "maxContextTokens",
             "ramTier", "backendKind", "cleanupPolicy", "resources",
         ]))
+        XCTAssertTrue(
+            Set((statusObject["resources"] as? [String: Any] ?? [:]).keys)
+                .isSuperset(of: resourceKeys)
+        )
 
         let session = try await engine.createSession(
             request: InfiniteCreateSessionRequest(label: "contract")
         )
-        XCTAssertTrue(try keys(session).isSuperset(of: [
+        let sessionObject = try object(session)
+        XCTAssertTrue(Set(sessionObject.keys).isSuperset(of: [
             "id", "modelId", "state", "createdAt", "updatedAt", "contextWindowTokens",
             "inputCharacters", "estimatedInputTokens", "checkpointCount",
             "cleanupPolicy", "resources",
         ]))
+        XCTAssertTrue(
+            Set((sessionObject["resources"] as? [String: Any] ?? [:]).keys)
+                .isSuperset(of: resourceKeys)
+        )
     }
 
     // MARK: - Helpers
