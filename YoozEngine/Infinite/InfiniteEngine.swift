@@ -54,6 +54,20 @@ public actor InfiniteEngine {
         self.backendAdapter = backendAdapter
     }
 
+    /// Restore the engine to its freshly-initialized state: no active sessions,
+    /// no prepared backend, no remembered load error, and the default active
+    /// model. The process-wide `shared` actor accumulates state across calls
+    /// (sessions, a preloaded `preparedBackend`), so tests that exercise the
+    /// served routes against `shared` must call this in both `setUp` and
+    /// `tearDown` to stay independent of execution order.
+    public func reset() {
+        sessions.removeAll()
+        preparedBackend = nil
+        loadedModel = nil
+        lastLoadError = nil
+        activeModel = .gemma4E4B1M
+    }
+
     public var isLoaded: Bool {
         loadedModel == activeModel
     }

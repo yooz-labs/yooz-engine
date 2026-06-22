@@ -50,16 +50,23 @@ final class InfinitePickerRouteTests: XCTestCase {
         return (try XCTUnwrap(response as? HTTPURLResponse), data)
     }
 
-    private func resetEngineState() async throws {
+    override func setUp() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    override func tearDown() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    private func requireSupportedTier() throws {
         guard InfiniteRAMTier.current != .belowMinimum else {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
         }
-        _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
     }
 
     @MainActor
     func testGetModelsReturnsCanonicalShape() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let (http, body) = try await get("/v1/infinite/models")
             XCTAssertEqual(http.statusCode, 200)
@@ -73,7 +80,7 @@ final class InfinitePickerRouteTests: XCTestCase {
 
     @MainActor
     func testGetModelsTierAndMetadataMapping() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let (_, body) = try await get("/v1/infinite/models")
             let decoded = try JSONDecoder().decode(InfiniteModelsResponse.self, from: body)
@@ -110,7 +117,7 @@ final class InfinitePickerRouteTests: XCTestCase {
 
     @MainActor
     func testPostModelWithUnknownIdReturns400InvalidModel() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let body = try JSONEncoder().encode(
                 InfiniteSetModelRequest(id: "missing-model", preload: false)
@@ -126,7 +133,7 @@ final class InfinitePickerRouteTests: XCTestCase {
 
     @MainActor
     func testPostModelWithMalformedBodyReturns400InvalidRequest() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let body = Data("not json".utf8)
             let (http, payload) = try await post("/v1/infinite/model", body: body)
@@ -140,7 +147,7 @@ final class InfinitePickerRouteTests: XCTestCase {
 
     @MainActor
     func testPostModelWithoutPreloadReturns200AndActiveRow() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let selection: InfiniteModelSelection =
                 InfiniteRAMTier.current == .full ? .gemma4_26B_A4B1M : .gemma4E4B1M
@@ -158,7 +165,7 @@ final class InfinitePickerRouteTests: XCTestCase {
 
     @MainActor
     func testPostModelWithPreloadReturns200AndAdapterReadyStatus() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let body = try JSONEncoder().encode(
                 InfiniteSetModelRequest(id: "gemma4-e4b-1m", preload: true)

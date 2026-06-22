@@ -57,19 +57,23 @@ final class InfiniteStatusRouteTests: XCTestCase {
         return (try XCTUnwrap(response as? HTTPURLResponse), data)
     }
 
-    private func resetEngineState() async throws {
+    override func setUp() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    override func tearDown() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    private func requireSupportedTier() throws {
         guard InfiniteRAMTier.current != .belowMinimum else {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
         }
-        for session in await InfiniteEngine.shared.listSessions() {
-            _ = try await InfiniteEngine.shared.deleteSession(id: session.id)
-        }
-        _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
     }
 
     @MainActor
     func testGetStatusOnColdEngineReportsActiveModel() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let (http, body) = try await get("/v1/infinite/status")
             XCTAssertEqual(http.statusCode, 200)
@@ -87,7 +91,7 @@ final class InfiniteStatusRouteTests: XCTestCase {
 
     @MainActor
     func testModulesManifestIncludesInfinite() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let (http, body) = try await get("/v1/modules")
             XCTAssertEqual(http.statusCode, 200)
@@ -107,7 +111,7 @@ final class InfiniteStatusRouteTests: XCTestCase {
 
     @MainActor
     func testInfiniteSessionRoutesSurviveRecordingResetAndRejectGenerate() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let createBody = try JSONEncoder().encode(
                 InfiniteCreateSessionRequest(label: "route-session")
