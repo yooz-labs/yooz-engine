@@ -177,4 +177,42 @@ final class InfiniteTypesTests: XCTestCase {
         XCTAssertEqual(generateJSON["prompt"] as? String, "summarize")
         XCTAssertEqual(generateJSON["maxTokens"] as? Int, 16)
     }
+
+    func testInfiniteGenerateSessionResponseDecodesServerJSON() throws {
+        // Mirrors the engine's wire shape for a successful generate (P7);
+        // guards the response DTO without needing a live model.
+        let json = """
+        {
+          "sessionId": "S-1",
+          "text": "hello",
+          "finishReason": "stop",
+          "resources": {
+            "physicalMemoryBytes": 68719476736,
+            "wiredMemoryLimitBytes": 34359738368,
+            "requiredRAMTier": "full",
+            "peakMemoryBytes": null,
+            "prefillTokensPerSecond": null,
+            "decodeTokensPerSecond": 42.5,
+            "draftAcceptanceRate": null
+          }
+        }
+        """
+        let decoded = try JSONDecoder().decode(
+            InfiniteGenerateSessionResponse.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(decoded.sessionId, "S-1")
+        XCTAssertEqual(decoded.text, "hello")
+        XCTAssertEqual(decoded.finishReason, "stop")
+        XCTAssertEqual(decoded.resources.requiredRAMTier, "full")
+        XCTAssertEqual(decoded.resources.decodeTokensPerSecond, 42.5)
+        XCTAssertNil(decoded.resources.peakMemoryBytes)
+
+        let reencoded = try JSONEncoder().encode(decoded)
+        let roundTripped = try JSONDecoder().decode(
+            InfiniteGenerateSessionResponse.self,
+            from: reencoded
+        )
+        XCTAssertEqual(decoded, roundTripped)
+    }
 }

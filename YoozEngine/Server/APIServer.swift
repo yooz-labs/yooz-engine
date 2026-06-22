@@ -541,6 +541,12 @@ final class APIServer: ObservableObject {
                 message: error.localizedDescription,
                 code: "generation_unavailable"
             )
+        case .generationFailed:
+            return errorResponse(
+                status: .internalServerError,
+                message: error.localizedDescription,
+                code: "generation_failed"
+            )
         }
     }
     #endif

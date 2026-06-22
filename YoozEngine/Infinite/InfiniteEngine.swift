@@ -20,6 +20,7 @@ public enum InfiniteError: Error, LocalizedError, Sendable, Equatable {
     case invalidSessionInput(String)
     case sessionLimitExceeded(Int)
     case generationUnavailable(String)
+    case generationFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -37,6 +38,8 @@ public enum InfiniteError: Error, LocalizedError, Sendable, Equatable {
             return "Infinite session limit exceeded: \(limit)"
         case .generationUnavailable(let reason):
             return "Infinite generation is unavailable: \(reason)"
+        case .generationFailed(let reason):
+            return "Infinite generation failed: \(reason)"
         }
     }
 }
@@ -92,6 +95,13 @@ public actor InfiniteEngine {
     /// Load (or reuse) the MLX backend for `selection`, serializing concurrent
     /// first-generate calls through a single in-flight task to avoid loading
     /// the (multi-GB) model more than once.
+    ///
+    /// Invariant: today exactly one model is `swiftRuntimeSupported`
+    /// (`qwen35B1M`), so concurrent loads are always for the *same* selection
+    /// and the in-flight task is always reusable. When a second supported model
+    /// is added, this must serialize per-selection (e.g. keyed in-flight tasks)
+    /// — otherwise a concurrent load of a different model overwrites `loadTask`
+    /// and `loadedModel` can end up out of sync with `loadedBackend`.
     private func loadBackend(
         for selection: InfiniteModelSelection
     ) async throws -> MLXInfiniteBackend {
@@ -267,12 +277,23 @@ public actor InfiniteEngine {
         // Lazily load the real backend on first generate for this model.
         let backend = try await loadBackend(for: selection)
 
-        let result = try await backend.generate(
-            context: record.accumulatedText,
-            prompt: request.prompt ?? "",
-            maxTokens: request.maxTokens ?? 256,
-            nativeContextTokens: selection.nativeContextTokens
-        )
+        // Map any MLX/tokenizer runtime fault to a typed error so the route
+        // returns a structured `generation_failed` 500, not a bare 500 the SDK
+        // can only see as a transport error. Typed InfiniteErrors (e.g. the
+        // native-window bound) pass through unchanged.
+        let result: InfiniteGenerationResult
+        do {
+            result = try await backend.generate(
+                context: record.accumulatedText,
+                prompt: request.prompt ?? "",
+                maxTokens: request.maxTokens ?? 256,
+                nativeContextTokens: selection.nativeContextTokens
+            )
+        } catch let error as InfiniteError {
+            throw error
+        } catch {
+            throw InfiniteError.generationFailed(error.localizedDescription)
+        }
 
         if var updated = sessions[sessionID] {
             updated.updatedAt = Self.timestamp()
