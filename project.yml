@@ -60,8 +60,8 @@ packages:
   # mlx-swift-lm 3.x decoupled from HuggingFace — consuming apps now bring
   # their own concrete tokenizer + downloader. We use Apple's swift-transformers
   # (Tokenizers + Hub) and huggingface/swift-huggingface (HubClient namespace
-  # used by the #huggingFaceTokenizerLoader macro). Pinned to the same versions
-  # SharpAI's SwiftLM ships, with explicit upper caps so `swift package update`
+  # used by the #huggingFaceTokenizerLoader macro). Pinned to the versions our
+  # mlx-swift-lm fork ships, with explicit upper caps so `swift package update`
   # can't pull in a 0.x minor with breaking renames.
   swift-transformers:
     url: https://github.com/huggingface/swift-transformers

@@ -19,10 +19,11 @@ import XCTest
 ///   a reasoning model, so whether the `<|channel>thought` preamble is shown is a
 ///   chat-template difference from Python, not a model-numerics one; the
 ///   assertion is therefore a correct on-task answer, not exact token parity.
-/// - **E4B** (`gemma4`, reduced tier) keeps the stricter exact-greedy-parity
-///   assertion, but its OptiQ-4bit build does not load in the fork yet
-///   (`per_layer_model_projection` ScaledLinear is not `Quantizable`, #186), so
-///   that case is skipped until the fork-fix lands.
+/// - **E4B** (`gemma4`, reduced tier) uses the stricter exact-greedy-parity
+///   assertion: its OptiQ-4bit build loads since the #186 fork fix
+///   (`per_layer_model_projection` made quantizable + KV-shared layers'
+///   projections made `has_kv`-conditional), and its greedy output matches the
+///   Python reference token-for-token.
 ///
 /// Tiered like the other heavy suites (KVCompression / Qwen3ASR): gated by
 /// `INFINITE_LIVE=1` AND the weights being present in the HF cache, so CI — which
