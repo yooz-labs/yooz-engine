@@ -491,6 +491,12 @@ final class APIServer: ObservableObject {
     }
 
     #if canImport(InfiniteModule)
+    /// Maps each `InfiniteError` to its HTTP status + stable machine `code`
+    /// (the SDK surfaces `code` via `YoozEngineError.serverError`): invalid
+    /// model → 400 `invalid_model`, unavailable → 501 `model_unavailable`,
+    /// set-failed → 500 `model_set_failed`, not-found → 404 `session_not_found`,
+    /// invalid input → 400 `invalid_session_input`, limit → 409
+    /// `session_limit_exceeded`, generation → 501 `generation_unavailable`.
     private nonisolated func infiniteErrorResponse(_ error: InfiniteError) -> Response {
         switch error {
         case .invalidModel:

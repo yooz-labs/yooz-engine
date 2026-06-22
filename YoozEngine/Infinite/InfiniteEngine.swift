@@ -5,6 +5,12 @@
 
 import EngineCore
 import Foundation
+import os.log
+
+private let infiniteEngineLogger = Logger(
+    subsystem: "live.yooz.engine",
+    category: "InfiniteEngine"
+)
 
 public enum InfiniteError: Error, LocalizedError, Sendable, Equatable {
     case invalidModel(String)
@@ -44,6 +50,10 @@ public actor InfiniteEngine {
     }
 
     public private(set) var activeModel: InfiniteModelSelection = .gemma4E4B1M
+    /// The model whose weights are actually resident. Assigned by the
+    /// inference backend once a model is fully loaded (Phase 7); until then it
+    /// stays `nil`, so `isLoaded` is `false` and `status().state` never reaches
+    /// `ready` by design.
     private var loadedModel: InfiniteModelSelection?
     private var preparedBackend: InfiniteBackendHandle?
     private var lastLoadError: String?
@@ -171,6 +181,12 @@ public actor InfiniteEngine {
         record.estimatedInputTokens += Self.estimatedTokens(for: request.text)
         record.updatedAt = Self.timestamp()
         sessions[sessionID] = record
+        let contextWindow = record.selection.maxContextTokens
+        if record.estimatedInputTokens > contextWindow {
+            infiniteEngineLogger.warning(
+                "Infinite session \(sessionID, privacy: .public) estimated input \(record.estimatedInputTokens, privacy: .public) tokens exceeds the \(contextWindow, privacy: .public)-token context window for \(record.selection.rawValue, privacy: .public); generation will truncate or refuse once backend inference is wired."
+            )
+        }
         return InfiniteAppendSessionResponse(
             session: sessionInfo(record),
             appendedCharacters: request.text.count,
@@ -329,14 +345,21 @@ public actor InfiniteEngine {
         )
     }
 
+    /// Shared formatter. `ISO8601DateFormatter.string(from:)` is thread-safe
+    /// and the engine is an actor, so a single instance is reused instead of
+    /// allocating + configuring one per session call (mirrors APIServer).
+    private static let isoTimestampFormatter = ISO8601DateFormatter()
+
     private static func timestamp() -> String {
-        ISO8601DateFormatter().string(from: Date())
+        isoTimestampFormatter.string(from: Date())
     }
 
     private static func estimatedTokens(for text: String) -> Int {
         max(1, Int((Double(text.count) / 4.0).rounded(.up)))
     }
 
+    /// Saturates (does not wrap) to `Int64.max`. Physical memory is never
+    /// large enough to fire on real hardware; the clamp is defensive.
     private static func int64Clamping(_ value: UInt64) -> Int64 {
         if value > UInt64(Int64.max) {
             return Int64.max

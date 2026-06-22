@@ -76,6 +76,10 @@ public protocol InfiniteBackendAdapter: Sendable {
     func prepare(_ descriptor: InfiniteBackendDescriptor) async throws -> InfiniteBackendHandle
 }
 
+/// Scaffold adapter: returns a handle describing the selection **without
+/// loading weights or building a KV cache**. Lets the picker/session lifecycle
+/// run end-to-end before real inference exists. Replaced by the real MLX
+/// adapter in Phase 7 (#182); the long-context paged-cache adapter is #180.
 public struct CatalogInfiniteBackendAdapter: InfiniteBackendAdapter {
     public init() {}
 
