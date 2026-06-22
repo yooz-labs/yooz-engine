@@ -91,6 +91,16 @@ final class InfiniteModuleTests: XCTestCase {
         XCTAssertEqual(InfiniteModelSelection.s3Retrieval.adapterKind, "infinite-retrieval-index-v1")
     }
 
+    /// Only architectures the Swift mlx-swift-lm fork implements can load.
+    /// Qwen3.6 (`qwen3_5_moe`) runs; Gemma4 (`gemma4`) needs the Swift port
+    /// (#184); retrieval has no MLX backend wired. load/generate gate on this.
+    func testSwiftRuntimeSupportReflectsMLXBackendCoverage() {
+        XCTAssertTrue(InfiniteModelSelection.qwen35B1M.swiftRuntimeSupported)
+        XCTAssertFalse(InfiniteModelSelection.gemma4E4B1M.swiftRuntimeSupported)
+        XCTAssertFalse(InfiniteModelSelection.gemma4_26B_A4B1M.swiftRuntimeSupported)
+        XCTAssertFalse(InfiniteModelSelection.s3Retrieval.swiftRuntimeSupported)
+    }
+
     func testSetActiveModelWithoutPreloadReturnsActiveRow() async throws {
         try await resetEngine()
         let selection: InfiniteModelSelection =

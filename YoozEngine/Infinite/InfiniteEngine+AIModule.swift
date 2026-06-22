@@ -25,7 +25,8 @@ extension InfiniteEngine: AIModule, SessionResettable {
                 "active_sessions": String(status().activeSessions),
                 "cleanup_policy": Self.cleanupPolicy,
                 "max_context_tokens": String(current.maxContextTokens),
-                "ram_tier": current.ramTier
+                "ram_tier": current.ramTier,
+                "swift_runtime_supported": String(current.swiftRuntimeSupported)
             ]
         )
     }
