@@ -56,6 +56,9 @@ public actor InfiniteEngine {
     /// `ready` by design.
     private var loadedModel: InfiniteModelSelection?
     private var preparedBackend: InfiniteBackendHandle?
+    /// The real MLX backend, lazily loaded on first generate for a
+    /// Swift-runtime-supported model (Phase 7).
+    private var loadedBackend: MLXInfiniteBackend?
     private var lastLoadError: String?
     private var sessions: [String: SessionRecord] = [:]
     private let backendAdapter: any InfiniteBackendAdapter
@@ -73,6 +76,7 @@ public actor InfiniteEngine {
     public func reset() {
         sessions.removeAll()
         preparedBackend = nil
+        loadedBackend = nil
         loadedModel = nil
         lastLoadError = nil
         activeModel = .gemma4E4B1M
@@ -182,6 +186,7 @@ public actor InfiniteEngine {
         }
         record.inputCharacters += request.text.count
         record.estimatedInputTokens += Self.estimatedTokens(for: request.text)
+        record.accumulatedText += request.text
         record.updatedAt = Self.timestamp()
         sessions[sessionID] = record
         let contextWindow = record.selection.maxContextTokens
@@ -200,15 +205,70 @@ public actor InfiniteEngine {
     public func generate(
         sessionID: String,
         request: InfiniteGenerateSessionRequest
-    ) throws -> InfiniteGenerateSessionResponse {
-        guard sessions[sessionID] != nil else {
+    ) async throws -> InfiniteGenerateSessionResponse {
+        guard let record = sessions[sessionID] else {
             throw InfiniteError.sessionNotFound(sessionID)
         }
         if let maxTokens = request.maxTokens, maxTokens <= 0 {
             throw InfiniteError.invalidSessionInput("maxTokens must be greater than zero")
         }
-        throw InfiniteError.generationUnavailable(
-            "backend inference is not wired in this phase; session state is preserved"
+        let selection = record.selection
+        guard isModelSelectable(selection) else {
+            throw InfiniteError.modelUnavailable(selection.rawValue)
+        }
+        // Gemma4 and retrieval modes have no Swift MLX backend yet (#184); fail
+        // clearly here rather than advertise a capability we can't run.
+        guard selection.swiftRuntimeSupported else {
+            throw InfiniteError.generationUnavailable(
+                "model \(selection.rawValue) (\(selection.backendKind)) is not yet runnable by the Swift MLX runtime; tracked in yooz-engine#184"
+            )
+        }
+
+        // Lazily load the real backend on first generate for this model.
+        let backend: MLXInfiniteBackend
+        if let loaded = loadedBackend, loaded.selection == selection {
+            backend = loaded
+        } else {
+            do {
+                backend = try await MLXInfiniteBackend.load(selection.descriptor)
+            } catch let error as InfiniteError {
+                lastLoadError = error.localizedDescription
+                throw error
+            } catch {
+                lastLoadError = error.localizedDescription
+                throw InfiniteError.modelSetFailed(error.localizedDescription)
+            }
+            loadedBackend = backend
+            loadedModel = selection
+        }
+
+        let result = try await backend.generate(
+            context: record.accumulatedText,
+            prompt: request.prompt ?? "",
+            maxTokens: request.maxTokens ?? 256,
+            nativeContextTokens: selection.nativeContextTokens
+        )
+
+        if var updated = sessions[sessionID] {
+            updated.updatedAt = Self.timestamp()
+            sessions[sessionID] = updated
+        }
+
+        let base = resourceMetrics(for: selection)
+        let metrics = InfiniteResourceMetrics(
+            physicalMemoryBytes: base.physicalMemoryBytes,
+            wiredMemoryLimitBytes: base.wiredMemoryLimitBytes,
+            requiredRAMTier: base.requiredRAMTier,
+            peakMemoryBytes: nil,
+            prefillTokensPerSecond: nil,
+            decodeTokensPerSecond: result.decodeTokensPerSecond,
+            draftAcceptanceRate: nil
+        )
+        return InfiniteGenerateSessionResponse(
+            sessionId: sessionID,
+            text: result.text,
+            finishReason: result.finishReason,
+            resources: metrics
         )
     }
 
@@ -380,4 +440,7 @@ private struct SessionRecord: Sendable {
     var inputCharacters: Int = 0
     var estimatedInputTokens: Int = 0
     var checkpoints: [InfiniteSessionCheckpoint] = []
+    /// Raw appended context, fed to the backend at generate time. (Phase 7
+    /// rebuilds the prefill per call; per-session KV reuse is a #182 follow-up.)
+    var accumulatedText: String = ""
 }

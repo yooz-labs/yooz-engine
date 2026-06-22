@@ -165,6 +165,23 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      # MLX inference for the native-context backend (Phase 7). Mirrors
+      # LLMModule: the HF tokenizer/downloader macros expand into
+      # swift-transformers + swift-huggingface types, so both are linked.
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift
+        product: MLXNN
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      - package: mlx-swift-lm
+        product: MLXHuggingFace
+      - package: swift-transformers
+        product: Tokenizers
+      - package: swift-transformers
+        product: Hub
       - package: swift-huggingface
         product: HuggingFace
 
@@ -198,6 +215,10 @@ targets:
       # for the BPE tokenizer.
       - package: swift-transformers
         product: Tokenizers
+      # Hub — Qwen3ASRPipeline calls Tokenizers.AutoTokenizer.from, whose
+      # default arg references Hub.HubApi, so the dylib must link Hub directly.
+      - package: swift-transformers
+        product: Hub
       # HF auto-download support for STT models (#95).
       - package: swift-huggingface
         product: HuggingFace
@@ -429,8 +450,19 @@ targets:
       # framework targets re-export only transitively.
       - package: swift-transformers
         product: Tokenizers
+      # Hub — Qwen3ASR test suites call Tokenizers.AutoTokenizer.from, whose
+      # default arg references Hub.HubApi, so the test bundle must link Hub.
+      - package: swift-transformers
+        product: Hub
       - package: swift-huggingface
         product: HuggingFace
+      # Qwen3ASR decoder structural tests reference MLXLMCommon.LanguageModel /
+      # KVCache directly, so the test bundle must link MLX + MLXLMCommon (a
+      # clean build won't satisfy these via transitive framework re-export).
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift-lm
+        product: MLXLMCommon
 
   EngineCoreTests:
     type: bundle.unit-test
