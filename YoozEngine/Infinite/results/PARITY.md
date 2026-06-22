@@ -25,7 +25,7 @@ the pinned `mlx-swift-lm` fork yet (root cause + fix tracked in **#186**).
   `<|channel>thought` preamble while the engine's chat-template path emits the
   direct answer. That is a **chat-template difference, not a model-numerics one**
   — both produce the correct `2, 3, 5, 7, 11`. So the 26B test asserts a correct
-  on-task answer (`testGemma4_26BA4BLoadsAndGeneratesNativeContext`), which is the
+  on-task answer (`testGemma4_26B_A4B_LoadsAndGeneratesNativeContext`), which is the
   honest proof that the fork loads the weights and computes correctly.
 - **E4B is non-reasoning**, so exact greedy token parity is the right (stricter)
   assertion (`testGemma4E4BGreedyParityVsPython`, `.exactGreedy`). It is gated on

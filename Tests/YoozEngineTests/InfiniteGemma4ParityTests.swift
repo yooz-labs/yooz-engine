@@ -61,7 +61,7 @@ final class InfiniteGemma4ParityTests: XCTestCase {
     }
 
     /// Full-tier 26B-A4B MoE: loads + generates the correct answer.
-    func testGemma4_26BA4BLoadsAndGeneratesNativeContext() async throws {
+    func testGemma4_26B_A4B_LoadsAndGeneratesNativeContext() async throws {
         try XCTSkipUnless(
             InfiniteRAMTier.current == .full,
             "gemma4-26b-a4b needs a full (64 GiB) RAM tier; current tier is "
