@@ -38,21 +38,21 @@ packages:
   #     main is on swift-tools 6.3 (an unreleased toolchain CI lacks), while
   #     0.31.4 needs only the stable toolchain. The Gemma4 APIs we depend on
   #     (ropeOffset / weightedExpertSum) live in mlx-swift-lm, not mlx-swift.
-  #   - mlx-swift-lm @ f4fd39e: yooz-labs/mlx-swift-lm `main` = ml-explore main
-  #     (swift-tools 6.1) plus two deltas not yet in an ml-explore release, each
-  #     with an upstream PR in flight: (1) drop the gemma4_unified
+  #   - mlx-swift-lm @ 0f1865a: yooz-labs/mlx-swift-lm `main` = ml-explore main
+  #     (swift-tools 6.1; E-series KV-sharing is upstream via #342) plus two
+  #     deltas, each with an upstream PR in flight: (1) drop the gemma4_unified
   #     `vision_embedder` weights in sanitize so the multimodal 12B checkpoint
-  #     loads (#187); (2) bring the MLXVLM Gemma4 MoE block + KV-shared-layer
-  #     attention to the MLXLLM text path so 26B-A4B (MoE) and E4B (KV-sharing)
-  #     load through the Infinite backend. Pinned to a revision (not the 3.31.3
-  #     release) because that release predates this Gemma4 work. Re-pin to a
-  #     clean ml-explore tag once both land upstream + ship.
+  #     loads (ml-explore PR #363); (2) bring the MLXVLM Gemma4 MoE block to the
+  #     MLXLLM text path so 26B-A4B loads through the Infinite backend
+  #     (ml-explore PR #364). Pinned to a revision (not the 3.31.3 release)
+  #     because that release predates this Gemma4 work. Re-pin to a clean
+  #     ml-explore tag once both land upstream + ship.
   mlx-swift:
     url: https://github.com/ml-explore/mlx-swift
     exactVersion: "0.31.4"
   mlx-swift-lm:
     url: https://github.com/yooz-labs/mlx-swift-lm
-    revision: "f4fd39e7037574169bbb521f3724b0f71512b498"
+    revision: "0f1865ad8d44824c5ad36ba1e9e4203d74838eb6"
   # mlx-swift-lm 3.x decoupled from HuggingFace — consuming apps now bring
   # their own concrete tokenizer + downloader. We use Apple's swift-transformers
   # (Tokenizers + Hub) and huggingface/swift-huggingface (HubClient namespace
