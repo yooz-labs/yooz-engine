@@ -43,10 +43,9 @@ public struct InfiniteGenerationResult: Sendable {
 /// Real MLX-Swift backend for the InfiniteModule native-context path.
 ///
 /// Loads a model whose architecture the `mlx-swift-lm` fork supports
-/// (`qwen3_5_moe` and Gemma4 26B-A4B today, verified vs Python mlx-lm in
-/// yooz-engine#184; the Gemma4 E4B row stays gated by
-/// `InfiniteModelSelection.swiftRuntimeSupported` on the OptiQ-quant fork-fix
-/// yooz-engine#186) and runs generation with a fresh per-call KV cache.
+/// (`qwen3_5_moe` and both Gemma4 rows — 26B-A4B #184 and the E4B OptiQ-4bit
+/// build #186 — verified vs Python mlx-lm) and runs generation with a fresh
+/// per-call KV cache.
 /// Per-session KV reuse
 /// (append-prefill / generate-decode) is a follow-up optimization within #182;
 /// rebuilding the prefill per call is correct, just not the long-context

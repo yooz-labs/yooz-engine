@@ -1,23 +1,23 @@
-# Gemma4 native-context parity (issue #184)
+# Gemma4 native-context parity (issues #184, #186)
 
-**Status:** Gemma4 **26B-A4B** loads and generates at native context through the
-engine's `MLXInfiniteBackend`, verified against the Python `mlx-lm==0.31.3`
-reference (the version Infinite validated on). Its `swiftRuntimeSupported` gate
-is flipped. Gemma4 **E4B** stays gated — its OptiQ-4bit build does not load in
-the pinned `mlx-swift-lm` fork yet (root cause + fix tracked in **#186**).
+**Status:** Both Gemma4 rows — **26B-A4B** (#184) and **E4B** (#186) — load and
+generate at native context through the engine's `MLXInfiniteBackend`, verified
+against the Python `mlx-lm==0.31.3` reference (the version Infinite validated on).
+Both `swiftRuntimeSupported` gates are flipped. Only retrieval mode has no MLX
+backend.
 
 **Machine:** Apple M4 Pro, 64 GiB (full tier), macOS 26. mlx-swift-lm pinned at
-`38d7ff2`. Reference engine: `mlx-lm==0.31.3` (same as Infinite `research/18`).
+`yooz-labs/mlx-swift-lm@9c73df9` (our fork; SharpAI `38d7ff2` lineage + the #186
+Gemma4 E4B fix). Reference engine: `mlx-lm==0.31.3` (same as Infinite `research/18`).
 
 ## Results
 
 | Model | repo | model_type | Swift load+generate | decode | parity assertion |
 | --- | --- | --- | --- | --- | --- |
-| **26B-A4B** | `mlx-community/gemma-4-26b-a4b-it-4bit` | `gemma4` | **PASS** — `2, 3, 5, 7, 11` (finish=stop, 14 tok) | 29.7 tok/s | contains correct answer |
-| **E4B** | `mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit` | `gemma4` | **BLOCKED** — load fails (#186) | — | exact greedy (gated until #186) |
+| **26B-A4B** | `mlx-community/gemma-4-26b-a4b-it-4bit` | `gemma4` | **PASS** — `2, 3, 5, 7, 11` (finish=stop, 14 tok) | 32.9 tok/s | contains correct answer |
+| **E4B** | `mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit` | `gemma4` | **PASS** — exact greedy match vs Python | 37.2 tok/s | exact greedy parity |
 
-29.7 tok/s on a short prompt is consistent with Infinite `research/18`
-(26B-A4B native-context decode 22–62 tok/s across 8K–262K).
+Decode rates on a short prompt are consistent with Infinite `research/18`.
 
 ## Why the two models assert differently
 
@@ -25,29 +25,31 @@ the pinned `mlx-swift-lm` fork yet (root cause + fix tracked in **#186**).
   `<|channel>thought` preamble while the engine's chat-template path emits the
   direct answer. That is a **chat-template difference, not a model-numerics one**
   — both produce the correct `2, 3, 5, 7, 11`. So the 26B test asserts a correct
-  on-task answer (`testGemma4_26B_A4B_LoadsAndGeneratesNativeContext`), which is the
-  honest proof that the fork loads the weights and computes correctly.
+  on-task answer (`testGemma4_26B_A4B_LoadsAndGeneratesNativeContext`), the honest
+  proof that the fork loads the weights and computes correctly.
 - **E4B is non-reasoning**, so exact greedy token parity is the right (stricter)
-  assertion (`testGemma4E4BGreedyParityVsPython`, `.exactGreedy`). It is gated on
-  `INFINITE_E4B_UNBLOCKED=1` until #186 makes the OptiQ build loadable.
+  assertion (`testGemma4E4BGreedyParityVsPython`, `.exactGreedy`): the Swift
+  output matches the Python reference token-for-token.
 
-## E4B load failure (root cause — #186)
+## E4B fix (#186)
 
-The OptiQ-4bit E4B fails to load with:
+The OptiQ-4bit E4B originally failed to load. Two layered bugs in the fork's
+`Gemma4Text.swift`, both fixed:
 
-```
-Mismatched parameter language_model.model.per_layer_model_projection.weight
-in Gemma4Model...ScaledLinear shape. Actual [10752, 640], expected [10752, 2560]
-```
+1. **`per_layer_model_projection` was not quantizable.** It used a custom
+   `ScaledLinear` (a bare `Module` holding a raw `MLXArray`), which the quantize
+   pass skips — but the OptiQ checkpoint ships that weight quantized, so the shape
+   mismatched. Fixed by using a standard (quantizable) `Linear` and applying the
+   scalar at the call site, matching the Python reference.
+2. **KV-shared layers demanded weights the checkpoint omits.** Attention created
+   `k_proj`/`k_norm`/`v_norm` for every layer, but E4B's KV-shared layers (their
+   KV comes from an earlier layer) carry none — `mlx_lm.convert` drops them. Fixed
+   by making those projections + norms `has_kv`-conditional, matching Python.
 
-Gemma4's per-layer-input projection uses a custom `ScaledLinear` (a bare `Module`
-holding a raw `MLXArray`) that is **not `Quantizable`**, so the fork's quantize
-pass skips it. The OptiQ checkpoint quantizes `per_layer_model_projection` (8-bit),
-so the model expects an unquantized `[10752, 2560]` weight but the checkpoint
-ships the quantized `[10752, 640]` form. The 26B-A4B has no per-layer-input block
-(`hidden_size_per_layer_input: 0`), which is why it loads cleanly. OptiQ is the
-only E4B build that loads even in Python (KV-sharing → 24 k/v layers), so swapping
-builds is not a fix; making `ScaledLinear` quantization-aware in the fork is (#186).
+26B-A4B (`num_kv_shared_layers: 0`, no per-layer-input block) was unaffected by
+both. The same fix was arrived at independently upstream in
+[ml-explore PR #330](https://github.com/ml-explore/mlx-swift-lm/pull/330); when
+that merges and our fork rebases, the custom patch is dropped.
 
 ## How to reproduce
 
@@ -74,7 +76,7 @@ so CI (neither) skips cleanly instead of downloading multi-GB weights.
 ## Reference fixtures
 
 - `gemma4_26b-a4b_parity_reference.json` — greedy reference, 26B-A4B
-- `gemma4_e4b_parity_reference.json` — greedy reference, E4B (for #186)
+- `gemma4_e4b_parity_reference.json` — greedy reference, E4B
 
 Each carries `prompt_token_ids`, `generated_token_ids`, `generated_text`,
 `first_step_top5_token_ids`, and `finish_reason` under `mlx-lm==0.31.3`.

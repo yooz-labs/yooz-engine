@@ -156,7 +156,7 @@ Use the full `YoozEngine` variant for Infinite. Lite and Whisper variants do not
 | Sessions | `GET/POST /v1/infinite/sessions`, `GET/DELETE /v1/infinite/sessions/:id` |
 | Context append | `POST /v1/infinite/sessions/:id/append` |
 | Checkpoints | `POST /v1/infinite/sessions/:id/checkpoint` |
-| Generation | `POST /v1/infinite/sessions/:id/generate`; generates on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B — #184; native window ≤262K). Gemma4 E4B (OptiQ-quant — #186) and retrieval return `501 generation_unavailable` |
+| Generation | `POST /v1/infinite/sessions/:id/generate`; generates on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B and E4B — #184/#186; native window ≤262K). Only retrieval returns `501 generation_unavailable` |
 
 RAM gating is part of the contract. Hosts below 32 GiB cannot select Infinite models. A 32-63 GiB host is the reduced tier and can select `gemma4-e4b-1m`; 64 GiB+ is the full tier and can select the full catalogue. Apps should render `loadState == .unavailable` rows as visible but disabled so users understand the hardware boundary.
 
@@ -289,7 +289,7 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 | Engine starts but shows "port in use" alert | A stale engine instance is holding 19920 | Set `YOOZ_ENGINE_AUTO_RECOVER=1` for dev (SDK will SIGKILL the holder). For ship, surface the error to the user. |
 | MLXHuggingFaceMacros build failure from CLI | Macro requires explicit trust on first use | Pass `-skipMacroValidation` to xcodebuild. Xcode UI handles this prompt automatically; CI / scripts must pass the flag. |
 | `connect()` succeeds but service calls 501 | Active build variant doesn't bundle that module (e.g. Lite has no MLX STT) | Check `client.modules()` — `unavailable` modules return 501 by design. Render the limitation in your UI. |
-| Infinite `generate` returns 501 | The active model has no runnable Swift MLX backend yet (Gemma4 E4B OptiQ-quant — #186; retrieval); session state is preserved | Switch to a Swift-runtime-supported model (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B), or branch on the stable `generation_unavailable` code. Create/append/checkpoint/delete keep working regardless. |
+| Infinite `generate` returns 501 | The active model has no runnable Swift MLX backend (only retrieval today); session state is preserved | Switch to a Swift-runtime-supported model (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B or E4B), or branch on the stable `generation_unavailable` code. Create/append/checkpoint/delete keep working regardless. |
 | Infinite models are visible but disabled | Host RAM tier cannot run that row | Use `loadState == .unavailable`, `ramTier`, and `maxContextTokens` from `/v1/infinite/models` to explain the requirement. |
 | Infinite session creation starts failing after repeated tests | Sessions are engine-owned and capped at 16 | Delete sessions explicitly with `client.infinite.deleteSession(id:)`; `/v1/session/begin` does not clean them up. |
 

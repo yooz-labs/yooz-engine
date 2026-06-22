@@ -41,7 +41,7 @@ The canonical catalogue is `InfiniteModelSelection` in the engine. Consumer apps
 | `GET` | `/v1/infinite/sessions/:id` | `InfiniteSessionInfo` | Returns `404` when the session is gone. |
 | `POST` | `/v1/infinite/sessions/:id/append` | `InfiniteAppendSessionResponse` | Body: `{ "text": String }`; empty text is invalid. |
 | `POST` | `/v1/infinite/sessions/:id/checkpoint` | `InfiniteCheckpointSessionResponse` | Body: `{ "label": String? }`. |
-| `POST` | `/v1/infinite/sessions/:id/generate` | `InfiniteGenerateSessionResponse` | Generates from the session's accumulated context on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe` and Gemma4 26B-A4B today — #184), bounded to the model's native window (≤262K; 1M paging tracked in #180). Models without a runnable Swift backend yet (Gemma4 E4B OptiQ-quant — #186; retrieval) return `501 generation_unavailable`. Session state is preserved either way. |
+| `POST` | `/v1/infinite/sessions/:id/generate` | `InfiniteGenerateSessionResponse` | Generates from the session's accumulated context on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B, and Gemma4 E4B — #184/#186), bounded to the model's native window (≤262K; 1M paging tracked in #180). Only retrieval mode returns `501 generation_unavailable`. Session state is preserved either way. |
 | `DELETE` | `/v1/infinite/sessions/:id` | `InfiniteDeleteSessionResponse` | Releases the engine-owned session. |
 
 The cleanup policy is:
@@ -79,7 +79,7 @@ try await client.infinite.append(
 try await client.infinite.checkpoint(sessionId: session.id, label: "loaded")
 ```
 
-Generation runs on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B — #184). Models without a runnable Swift MLX backend yet (Gemma4 E4B OptiQ-quant — #186; retrieval) throw `generation_unavailable`:
+Generation runs on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B and E4B — #184/#186). Only retrieval mode throws `generation_unavailable`:
 
 ```swift
 do {
@@ -91,8 +91,8 @@ do {
     print(reply.text, reply.finishReason)
     print(reply.resources.decodeTokensPerSecond ?? 0) // measured decode throughput
 } catch YoozEngineError.serverError(_, let code, _) where code == "generation_unavailable" {
-    // The active model has no runnable Swift MLX backend yet (e.g. Gemma4 E4B
-    // OptiQ-quant — see #186). Switch to a supported model, or branch on `code`.
+    // The active model has no runnable Swift MLX backend (only retrieval today).
+    // Switch to a Swift-runtime-supported model, or branch on the stable `code`.
 }
 ```
 
@@ -143,4 +143,4 @@ Consumer-style route proof:
 scripts/run-integration.sh
 ```
 
-The integration suite starts a served engine and drives Infinite through `YoozEngineClient`, including `/v1/modules`, model picker, status, create, append, fetch, checkpoint, generation (`501 generation_unavailable` against the default Gemma4 E4B model, whose OptiQ-4bit build does not load in the Swift fork yet — #186), delete, and deleted-session `404`.
+The integration suite starts a served engine and drives Infinite through `YoozEngineClient`, including `/v1/modules`, model picker, status, create, append, fetch, checkpoint, generation (real text from the default Gemma4 E4B model now that #186 landed; retrieval still returns `501 generation_unavailable`), delete, and deleted-session `404`.

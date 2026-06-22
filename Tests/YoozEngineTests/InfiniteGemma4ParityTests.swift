@@ -5,8 +5,9 @@ import XCTest
 
 @testable import InfiniteModule
 
-/// Live verification for issue #184: the SharpAI `mlx-swift-lm` fork pinned in
-/// `project.yml` loads and greedy-generates Gemma4 at native context. mlx-swift
+/// Live verification for issue #184: the `mlx-swift-lm` fork pinned in
+/// `project.yml` (yooz-labs/mlx-swift-lm) loads and greedy-generates Gemma4 at
+/// native context, including the E4B OptiQ build via the #186 fix. mlx-swift
 /// and mlx-python share the same MLX C++/Metal core, so argmax decoding on
 /// identical quantized weights is expected to match Python `mlx-lm==0.31.3` (the
 /// version Infinite validated on).
@@ -18,10 +19,11 @@ import XCTest
 ///   a reasoning model, so whether the `<|channel>thought` preamble is shown is a
 ///   chat-template difference from Python, not a model-numerics one; the
 ///   assertion is therefore a correct on-task answer, not exact token parity.
-/// - **E4B** (`gemma4`, reduced tier) keeps the stricter exact-greedy-parity
-///   assertion, but its OptiQ-4bit build does not load in the fork yet
-///   (`per_layer_model_projection` ScaledLinear is not `Quantizable`, #186), so
-///   that case is skipped until the fork-fix lands.
+/// - **E4B** (`gemma4`, reduced tier) uses the stricter exact-greedy-parity
+///   assertion: its OptiQ-4bit build loads since the #186 fork fix
+///   (`per_layer_model_projection` made quantizable + KV-shared layers'
+///   projections made `has_kv`-conditional), and its greedy output matches the
+///   Python reference token-for-token.
 ///
 /// Tiered like the other heavy suites (KVCompression / Qwen3ASR): gated by
 /// `INFINITE_LIVE=1` AND the weights being present in the HF cache, so CI — which
@@ -74,15 +76,10 @@ final class InfiniteGemma4ParityTests: XCTestCase {
         )
     }
 
-    /// Reduced-tier E4B: exact greedy parity. Blocked on #186 (the OptiQ-4bit
-    /// build does not load in the fork yet); the assertion is ready and gated.
+    /// Reduced-tier E4B: exact greedy parity vs Python. Non-reasoning, short
+    /// completion, so token-exact greedy is the strong faithfulness signal.
+    /// Loadable since #186 made the per-layer-input projection quantizable.
     func testGemma4E4BGreedyParityVsPython() async throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["INFINITE_E4B_UNBLOCKED"] == "1",
-            "Gemma4 E4B OptiQ-4bit load is blocked on yooz-engine#186 "
-                + "(ScaledLinear quantization in the mlx-swift-lm fork); set "
-                + "INFINITE_E4B_UNBLOCKED=1 once that lands to run exact parity."
-        )
         try await runGenerate(
             .gemma4E4B1M,
             referenceFile: "gemma4_e4b_parity_reference.json",

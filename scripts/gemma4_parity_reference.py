@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate the Python mlx-lm reference for the Swift Gemma4 parity test (#184).
 
-The Swift engine loads Gemma4 through the SharpAI ``mlx-swift-lm`` fork, which
-shares the same MLX C++/Metal core as Python ``mlx``. So greedy (argmax)
+The Swift engine loads Gemma4 through the ``mlx-swift-lm`` fork pinned in
+project.yml (yooz-labs/mlx-swift-lm), which shares the same MLX C++/Metal core
+as Python ``mlx``. So greedy (argmax)
 decoding on identical quantized weights is expected to match token-for-token.
 This script captures that reference so the Swift side can assert parity offline.
 

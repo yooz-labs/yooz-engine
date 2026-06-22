@@ -92,13 +92,13 @@ final class InfiniteModuleTests: XCTestCase {
     }
 
     /// Only architectures the Swift mlx-swift-lm fork can load + generate.
-    /// Qwen3.6 (`qwen3_5_moe`) and Gemma4 26B-A4B (`gemma4`) run, verified vs
-    /// Python mlx-lm (#184). Gemma4 E4B stays gated on the OptiQ-quant fork-fix
-    /// (#186); retrieval has no MLX backend wired. load/generate gate on this.
+    /// Qwen3.6 (`qwen3_5_moe`) and both Gemma4 (`gemma4`) rows run, verified vs
+    /// Python mlx-lm — 26B-A4B (#184) and E4B OptiQ (#186). Only retrieval has
+    /// no MLX backend wired. load/generate gate on this.
     func testSwiftRuntimeSupportReflectsMLXBackendCoverage() {
         XCTAssertTrue(InfiniteModelSelection.qwen35B1M.swiftRuntimeSupported)
         XCTAssertTrue(InfiniteModelSelection.gemma4_26B_A4B1M.swiftRuntimeSupported)
-        XCTAssertFalse(InfiniteModelSelection.gemma4E4B1M.swiftRuntimeSupported)
+        XCTAssertTrue(InfiniteModelSelection.gemma4E4B1M.swiftRuntimeSupported)
         XCTAssertFalse(InfiniteModelSelection.s3Retrieval.swiftRuntimeSupported)
     }
 
@@ -241,14 +241,15 @@ final class InfiniteModuleTests: XCTestCase {
     }
 
     func testGenerateRefusesModelNotSupportedBySwiftRuntime() async throws {
-        guard InfiniteRAMTier.current != .belowMinimum else {
-            throw XCTSkip("Infinite requires at least 32 GB unified memory")
+        // All three MLX rows (Qwen, Gemma4 26B/E4B) run now, so retrieval is the
+        // only model that refuses generate. It is a full-tier row, so this needs
+        // 64 GB to even be selectable.
+        guard InfiniteRAMTier.current == .full else {
+            throw XCTSkip("retrieval mode (the only non-MLX row) is full-tier; needs 64 GB")
         }
         let engine = InfiniteEngine()
-        // Gemma4 E4B passes the RAM/tier gate but its OptiQ-4bit build does not
-        // load in the Swift fork yet (#186), so generate must refuse cleanly and
-        // point at that fork-fix issue.
-        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+        // Retrieval mode has no MLX backend wired, so generate must refuse cleanly.
+        _ = try await engine.setActiveModel(.s3Retrieval, preload: false)
         let created = try await engine.createSession(request: InfiniteCreateSessionRequest())
 
         do {
@@ -258,7 +259,7 @@ final class InfiniteModuleTests: XCTestCase {
             )
             XCTFail("generate should refuse a model the Swift runtime can't run")
         } catch InfiniteError.generationUnavailable(let reason) {
-            XCTAssertTrue(reason.contains("186"), "should cite the Gemma4 E4B OptiQ-quant fork-fix issue #186")
+            XCTAssertTrue(reason.contains("retrieval"), "should cite the retrieval backend not being wired")
         }
 
         let status = await engine.status()
