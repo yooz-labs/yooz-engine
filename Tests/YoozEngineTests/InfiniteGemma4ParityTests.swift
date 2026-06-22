@@ -99,11 +99,20 @@ final class InfiniteGemma4ParityTests: XCTestCase {
         let reference = try Self.loadReference(referenceFile)
         try Self.skipUnlessModelCached(reference.modelRepo)
 
+        // Exact parity must use the reference's token budget; the contains-answer
+        // mode gives generous headroom so a reasoning-style chat template still
+        // reaches the answer even though the Python reference is length-capped.
+        let maxTokens: Int
+        switch mode {
+        case .exactGreedy: maxTokens = reference.maxTokens
+        case .containsAnswer: maxTokens = max(reference.maxTokens, 256)
+        }
+
         let backend = try await MLXInfiniteBackend.load(selection.descriptor)
         let result = try await backend.generate(
             context: "",
             prompt: reference.promptText,
-            maxTokens: reference.maxTokens,
+            maxTokens: maxTokens,
             nativeContextTokens: selection.nativeContextTokens,
             temperature: 0.0  // greedy / argmax — deterministic
         )
@@ -128,6 +137,8 @@ final class InfiniteGemma4ParityTests: XCTestCase {
         let got = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         switch mode {
         case .exactGreedy:
+            // `generatedText` from the fixture is only consumed here (exact
+            // parity); the contains-answer mode ignores it by design.
             let want = reference.generatedText
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             XCTAssertEqual(

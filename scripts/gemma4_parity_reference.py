@@ -39,10 +39,17 @@ def build_reference(repo: str, max_tokens: int) -> dict:
 
     messages = [{"role": "user", "content": PROMPT_TEXT}]
     prompt_ids = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True
+        messages, add_generation_prompt=True, tokenize=True
     )
     if hasattr(prompt_ids, "tolist"):
         prompt_ids = prompt_ids.tolist()
+    if isinstance(prompt_ids, str):
+        # Older tokenizers ignore tokenize=True and return the formatted text;
+        # iterating that would write per-character ordinals as "token ids".
+        raise RuntimeError(
+            "apply_chat_template returned text, not token ids; this tokenizer "
+            "build does not honor tokenize=True."
+        )
     prompt_ids = [int(t) for t in prompt_ids]
 
     # First-step logits: most robust single-shot signal (no sampling/cascade).
@@ -59,6 +66,12 @@ def build_reference(repo: str, max_tokens: int) -> dict:
         generated_ids.append(int(resp.token))
         text += resp.text
         finish_reason = resp.finish_reason
+
+    if not generated_ids:
+        raise RuntimeError(
+            f"stream_generate yielded no tokens for {repo!r}; check the model "
+            "load and max_tokens before writing a degenerate reference."
+        )
 
     return {
         "model_repo": repo,
@@ -78,7 +91,7 @@ def build_reference(repo: str, max_tokens: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", choices=sorted(MODELS) + ["all"], default="e4b"
+        "--model", choices=sorted(MODELS) + ["all"], default="all"
     )
     parser.add_argument("--max-tokens", type=int, default=48)
     args = parser.parse_args()

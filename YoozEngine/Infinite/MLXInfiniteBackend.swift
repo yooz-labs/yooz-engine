@@ -145,7 +145,12 @@ public actor MLXInfiniteBackend {
                 case let .info(completion):
                     info = completion
                 default:
-                    break
+                    // Surface any future stream variant (e.g. a new error or
+                    // tool-call frame) rather than silently dropping it into an
+                    // empty/truncated result with finishReason "stop".
+                    mlxInfiniteLogger.debug(
+                        "MLXInfiniteBackend: unhandled generation stream variant, skipped"
+                    )
                 }
             }
             return (text, info)

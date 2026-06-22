@@ -123,6 +123,11 @@ public actor InfiniteEngine {
             loadedModel = selection
             lastLoadError = nil
             return backend
+        } catch is CancellationError {
+            // `reset()` cancels in-flight loads; surface cooperative cancellation
+            // as-is rather than mislabeling it a model-load failure (which would
+            // also disagree with the CancellationError a concurrent joiner sees).
+            throw CancellationError()
         } catch let error as InfiniteError {
             lastLoadError = error.localizedDescription
             throw error
@@ -292,7 +297,11 @@ public actor InfiniteEngine {
                 context: record.accumulatedText,
                 prompt: request.prompt ?? "",
                 maxTokens: request.maxTokens ?? 256,
-                nativeContextTokens: selection.nativeContextTokens
+                nativeContextTokens: selection.nativeContextTokens,
+                // Production sampling is fixed at 0.7; the `temperature` arg
+                // exists so the parity test can request greedy (0.0) decoding.
+                // `InfiniteGenerateSessionRequest` has no temperature field yet.
+                temperature: 0.7
             )
         } catch let error as InfiniteError {
             throw error
