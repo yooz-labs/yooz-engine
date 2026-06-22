@@ -192,11 +192,12 @@ final class EndToEndTests: IntegrationTestCase {
                         maxTokens: 16
                     )
                 }
-                XCTFail("Infinite generate on the default Gemma4 model should return 501 (no Swift backend yet, #184)")
+                XCTFail("Infinite generate on the default Gemma4 E4B model should return 501 (OptiQ-quant load blocked on #186)")
             } catch YoozEngineError.serverError(let statusCode, let code, _) {
-                // The default model is Gemma4, which has no Swift MLX backend yet
-                // (#184); generation refuses cleanly while session state stays durable.
-                // Swift-runtime-supported models (Qwen3.6 qwen3_5_moe) do generate.
+                // The default model is Gemma4 E4B, whose OptiQ-4bit build does not
+                // load in the Swift fork yet (#186); generation refuses cleanly
+                // while session state stays durable. Swift-runtime-supported models
+                // (Qwen3.6 qwen3_5_moe, Gemma4 26B-A4B — #184) do generate.
                 XCTAssertEqual(statusCode, 501)
                 XCTAssertEqual(code, "generation_unavailable")
             }

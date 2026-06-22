@@ -62,11 +62,15 @@ public actor InfiniteEngine {
     /// The real MLX backend, lazily loaded on first generate for a
     /// Swift-runtime-supported model (Phase 7).
     private var loadedBackend: MLXInfiniteBackend?
-    /// In-flight load, so concurrent first-generate calls await one load
-    /// rather than each loading the (multi-GB) model — the actor releases
-    /// isolation across the `await`, so without this two callers could both
-    /// see `loadedBackend == nil` and double-load.
-    private var loadTask: Task<MLXInfiniteBackend, Error>?
+    /// In-flight loads keyed by selection, so concurrent first-generate calls
+    /// for the same model await one load rather than each loading the (multi-GB)
+    /// model — the actor releases isolation across the `await`, so without this
+    /// two callers could both see `loadedBackend == nil` and double-load. Keyed
+    /// (not a single slot) because more than one model is now
+    /// `swiftRuntimeSupported` (Qwen + Gemma4 26B): a single slot let a
+    /// concurrent load of a *different* model clobber it and trigger duplicate
+    /// multi-GB loads.
+    private var loadTasks: [InfiniteModelSelection: Task<MLXInfiniteBackend, Error>] = [:]
     private var lastLoadError: String?
     private var sessions: [String: SessionRecord] = [:]
     private let backendAdapter: any InfiniteBackendAdapter
@@ -85,37 +89,34 @@ public actor InfiniteEngine {
         sessions.removeAll()
         preparedBackend = nil
         loadedBackend = nil
-        loadTask?.cancel()
-        loadTask = nil
+        for task in loadTasks.values { task.cancel() }
+        loadTasks.removeAll()
         loadedModel = nil
         lastLoadError = nil
         activeModel = .gemma4E4B1M
     }
 
     /// Load (or reuse) the MLX backend for `selection`, serializing concurrent
-    /// first-generate calls through a single in-flight task to avoid loading
-    /// the (multi-GB) model more than once.
+    /// first-generate calls for the same model through one keyed in-flight task
+    /// so the (multi-GB) weights load at most once.
     ///
-    /// Invariant: today exactly one model is `swiftRuntimeSupported`
-    /// (`qwen35B1M`), so concurrent loads are always for the *same* selection
-    /// and the in-flight task is always reusable. When a second supported model
-    /// is added, this must serialize per-selection (e.g. keyed in-flight tasks)
-    /// — otherwise a concurrent load of a different model overwrites `loadTask`
-    /// and `loadedModel` can end up out of sync with `loadedBackend`.
+    /// In-flight loads are keyed by selection because more than one model is now
+    /// `swiftRuntimeSupported` (`qwen35B1M` + Gemma4 26B): a single in-flight
+    /// slot let a concurrent load of a *different* model clobber it and trigger
+    /// duplicate loads. Only one model stays resident in `loadedBackend`; a load
+    /// for a different selection evicts the previous one (last write wins).
     private func loadBackend(
         for selection: InfiniteModelSelection
     ) async throws -> MLXInfiniteBackend {
         if let loaded = loadedBackend, loaded.selection == selection {
             return loaded
         }
-        if let inFlight = loadTask,
-           let backend = try? await inFlight.value,
-           backend.selection == selection {
-            return backend
+        if let inFlight = loadTasks[selection] {
+            return try await inFlight.value
         }
         let task = Task { try await MLXInfiniteBackend.load(selection.descriptor) }
-        loadTask = task
-        defer { loadTask = nil }
+        loadTasks[selection] = task
+        defer { loadTasks[selection] = nil }
         do {
             let backend = try await task.value
             loadedBackend = backend
@@ -266,11 +267,15 @@ public actor InfiniteEngine {
         guard isModelSelectable(selection) else {
             throw InfiniteError.modelUnavailable(selection.rawValue)
         }
-        // Gemma4 and retrieval modes have no Swift MLX backend yet (#184); fail
-        // clearly here rather than advertise a capability we can't run.
+        // The Gemma4 E4B row (OptiQ mixed-quant, #186) and retrieval mode have
+        // no runnable Swift MLX backend yet; fail clearly here rather than
+        // advertise a capability we can't run. (Gemma4 26B + Qwen do run, #184.)
         guard selection.swiftRuntimeSupported else {
+            let tracking = selection == .gemma4E4B1M
+                ? "tracked in yooz-engine#186 (Gemma4 E4B OptiQ quantization)"
+                : "the retrieval backend is not yet wired"
             throw InfiniteError.generationUnavailable(
-                "model \(selection.rawValue) (\(selection.backendKind)) is not yet runnable by the Swift MLX runtime; tracked in yooz-engine#184"
+                "model \(selection.rawValue) (\(selection.backendKind)) is not yet runnable by the Swift MLX runtime; \(tracking)"
             )
         }
 
