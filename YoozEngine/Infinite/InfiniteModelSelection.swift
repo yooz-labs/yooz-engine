@@ -77,13 +77,17 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
     public var description: String {
         switch self {
         case .gemma4E4B1M:
-            return "Reduced-tier long-context model, proven at ~1M tokens."
+            return "Reduced-tier long-context model. Single-needle retrieval "
+                + "validated near 1M tokens; interactive tier ~256K (multi-hop degrades beyond)."
         case .gemma4_26B_A4B1M:
-            return "Full-tier Gemma4 long-context model, proven at ~1M tokens."
+            return "Full-tier Gemma4 long-context model. Single-needle retrieval "
+                + "validated near 1M tokens; interactive tier ~256K (multi-hop degrades beyond)."
         case .qwen35B1M:
-            return "Paged-cache Qwen3.6 flagship path for 1M-token contexts."
+            return "Paged-cache Qwen3.6 flagship path. 1M context is memory-feasible "
+                + "but latency-bound; interactive tier ~256K."
         case .s3Retrieval:
-            return "Fast retrieval-backed long-context mode for lexical and semantic recall."
+            return "Fast retrieval-backed mode for lexical and semantic recall. "
+                + "The 10M figure is retrieval index capacity, not an attention window."
         }
     }
 

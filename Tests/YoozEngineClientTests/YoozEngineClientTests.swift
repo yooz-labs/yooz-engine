@@ -80,6 +80,28 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(health.version, "0.1.0")
         XCTAssertTrue(health.modules.stt)
         XCTAssertFalse(health.modules.llm)
+        // Back-compat: older engines omit `infinite`, which decodes to nil.
+        XCTAssertNil(health.modules.infinite)
+    }
+
+    func testHealthStatusDecodesInfiniteField() throws {
+        func decodeInfinite(_ value: String) throws -> Bool? {
+            let json = """
+            {
+                "status": "ok",
+                "version": "0.1.0",
+                "modules": {
+                    "stt": false, "llm": false, "touchup": false,
+                    "grammar": false, "vad": false, "tts": false,
+                    "infinite": \(value)
+                }
+            }
+            """
+            let health = try JSONDecoder().decode(HealthStatus.self, from: Data(json.utf8))
+            return health.modules.infinite
+        }
+        XCTAssertEqual(try decodeInfinite("true"), true)
+        XCTAssertEqual(try decodeInfinite("false"), false)
     }
 
     func testTouchUpRequestEncoding() throws {

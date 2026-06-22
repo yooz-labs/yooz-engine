@@ -12,7 +12,7 @@ final class InfiniteTypesTests: XCTestCase {
         let original = InfiniteModelInfo(
             id: "gemma4-e4b-1m",
             displayName: "Gemma4 E4B 1M",
-            description: "Reduced-tier long-context model, proven at ~1M tokens.",
+            description: "Reduced-tier long-context model. Single-needle retrieval validated near 1M tokens; interactive tier ~256K (multi-hop degrades beyond).",
             tier: .light,
             sizeBytes: 3_221_225_472,
             loadState: .available,
@@ -40,7 +40,7 @@ final class InfiniteTypesTests: XCTestCase {
             {
               "id": "gemma4-e4b-1m",
               "displayName": "Gemma4 E4B 1M",
-              "description": "Reduced-tier long-context model, proven at ~1M tokens.",
+              "description": "Reduced-tier long-context model. Single-needle retrieval validated near 1M tokens; interactive tier ~256K (multi-hop degrades beyond).",
               "tier": "light",
               "sizeBytes": 3221225472,
               "loadState": "available",

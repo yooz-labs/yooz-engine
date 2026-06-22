@@ -16,7 +16,7 @@ extension InfiniteEngine: AIModule, SessionResettable {
         let current = activeModel
         return ModuleHealth(
             loaded: isLoaded,
-            error: isLoaded ? nil : "Infinite generation backend not loaded; sessions and adapter readiness are available",
+            error: isLoaded ? nil : "Infinite generation backend is not wired in this phase; sessions, picker, and adapter readiness are available",
             detail: [
                 "active_model": current.rawValue,
                 "backend_kind": current.backendKind,

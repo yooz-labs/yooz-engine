@@ -193,8 +193,10 @@ final class EndToEndTests: IntegrationTestCase {
                     )
                 }
                 XCTFail("Infinite generate should return 501 until backend inference is wired")
-            } catch YoozEngineError.httpError(statusCode: let statusCode) where statusCode == 501 {
+            } catch YoozEngineError.serverError(let statusCode, let code, _) {
                 // Current served contract: session state is durable, inference is not wired yet.
+                XCTAssertEqual(statusCode, 501)
+                XCTAssertEqual(code, "generation_unavailable")
             }
 
             let deleted = try await measureEndpoint("DELETE /v1/infinite/sessions/:id") {
@@ -206,8 +208,9 @@ final class EndToEndTests: IntegrationTestCase {
             do {
                 _ = try await client.infinite.session(id: created.id)
                 XCTFail("deleted Infinite session should not be fetchable")
-            } catch YoozEngineError.httpError(statusCode: let statusCode) where statusCode == 404 {
-                // expected
+            } catch YoozEngineError.serverError(let statusCode, let code, _) {
+                XCTAssertEqual(statusCode, 404)
+                XCTAssertEqual(code, "session_not_found")
             }
         } catch {
             _ = try? await client.infinite.deleteSession(id: created.id)

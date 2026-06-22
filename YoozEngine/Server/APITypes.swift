@@ -28,6 +28,10 @@ struct EngineModules: Codable {
     let grammar: Bool
     let vad: Bool
     let tts: Bool
+    /// True once the Infinite long-context module is bundled and loaded.
+    /// Present on every variant; `false` where InfiniteModule isn't bundled
+    /// (Lite/Whisper) or no model is loaded yet.
+    let infinite: Bool
     let detail: ModuleDetailMap
 }
 

@@ -14,16 +14,20 @@ Infinite is bundled only in the full `YoozEngine` variant. `YoozEngineLite` and 
 
 All Infinite rows require Apple Silicon. Model weights use the normal HuggingFace cache path (`~/.cache/huggingface/hub/`) and are never committed to the repository.
 
+Whether the module is bundled and loaded is reported by `/v1/health` as `modules.infinite` (and in full per-module detail via `/v1/modules`). It is `false` on the Lite/Whisper variants (module not bundled) and until a model is loaded.
+
 ## Model Catalogue
 
 The canonical catalogue is `InfiniteModelSelection` in the engine. Consumer apps should read `/v1/infinite/models` rather than duplicating this table.
 
-| ID | Display name | Tier | Backend | Adapter | Context | RAM | Evidence |
-|---|---|---|---|---|---:|---|---|
-| `gemma4-e4b-1m` | Gemma4 E4B 1M | `light` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 1,000,000 | `reduced` | `infinite:research/18-gemma-support-matrix.md` |
-| `gemma4-26b-a4b-1m` | Gemma4 26B-A4B 1M | `quality` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 1,000,000 | `full` | `infinite:research/18-gemma-support-matrix.md` |
-| `qwen3-35b-1m` | Qwen3.6 35B-A3B 1M | `premium` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 1,000,000 | `full` | `infinite:research/26-flagship-1m.md` |
-| `s3-retrieval` | S3 Retrieval | `quality` | `retrieval` | `infinite-retrieval-index-v1` | 10,000,000 | `full` | `infinite:research/24-dense-retrieval.md` |
+`Native` is the model's trained attention window; `Max` is the memory-feasible ceiling via paged cache + position extension. The `Max` figure is single-needle-validated; multi-hop accuracy degrades well below it and the **interactive tier is ~256K** (1M is latency-bound). Never quote `Max` as a demonstrated end-to-end capability without the harness caveats (`infinite:research/18,26,27`). For `s3-retrieval`, `Max` is retrieval **index capacity**, not an attention window.
+
+| ID | Display name | Tier | Backend | Adapter | Native | Max | RAM | Evidence |
+|---|---|---|---|---|---:|---:|---|---|
+| `gemma4-e4b-1m` | Gemma4 E4B 1M | `light` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 131,072 | 1,000,000 | `reduced` | `infinite:research/18-gemma-support-matrix.md` |
+| `gemma4-26b-a4b-1m` | Gemma4 26B-A4B 1M | `quality` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 262,144 | 1,000,000 | `full` | `infinite:research/18-gemma-support-matrix.md` |
+| `qwen3-35b-1m` | Qwen3.6 35B-A3B 1M | `premium` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 262,144 | 1,000,000 | `full` | `infinite:research/26-flagship-1m.md` |
+| `s3-retrieval` | S3 Retrieval | `quality` | `retrieval` | `infinite-retrieval-index-v1` | n/a | 10,000,000 (index) | `full` | `infinite:research/24-dense-retrieval.md` |
 
 ## Endpoints
 
@@ -84,8 +88,9 @@ do {
         prompt: "Summarize the loaded context",
         maxTokens: 256
     )
-} catch YoozEngineError.httpError(statusCode: 501) {
+} catch YoozEngineError.serverError(_, let code, _) where code == "generation_unavailable" {
     // Current expected boundary: backend inference is not wired yet.
+    // Branch on the stable `code`, not the bare 501 status.
 }
 ```
 

@@ -5,6 +5,12 @@
 
 import EngineCore
 import Foundation
+import os.log
+
+private let infiniteEngineLogger = Logger(
+    subsystem: "live.yooz.engine",
+    category: "InfiniteEngine"
+)
 
 public enum InfiniteError: Error, LocalizedError, Sendable, Equatable {
     case invalidModel(String)
@@ -44,6 +50,10 @@ public actor InfiniteEngine {
     }
 
     public private(set) var activeModel: InfiniteModelSelection = .gemma4E4B1M
+    /// The model whose weights are actually resident. Assigned by the
+    /// inference backend once a model is fully loaded (Phase 7); until then it
+    /// stays `nil`, so `isLoaded` is `false` and `status().state` never reaches
+    /// `ready` by design.
     private var loadedModel: InfiniteModelSelection?
     private var preparedBackend: InfiniteBackendHandle?
     private var lastLoadError: String?
@@ -52,6 +62,20 @@ public actor InfiniteEngine {
 
     init(backendAdapter: any InfiniteBackendAdapter = CatalogInfiniteBackendAdapter()) {
         self.backendAdapter = backendAdapter
+    }
+
+    /// Restore the engine to its freshly-initialized state: no active sessions,
+    /// no prepared backend, no remembered load error, and the default active
+    /// model. The process-wide `shared` actor accumulates state across calls
+    /// (sessions, a preloaded `preparedBackend`), so tests that exercise the
+    /// served routes against `shared` must call this in both `setUp` and
+    /// `tearDown` to stay independent of execution order.
+    public func reset() {
+        sessions.removeAll()
+        preparedBackend = nil
+        loadedModel = nil
+        lastLoadError = nil
+        activeModel = .gemma4E4B1M
     }
 
     public var isLoaded: Bool {
@@ -147,16 +171,25 @@ public actor InfiniteEngine {
         sessionID: String,
         request: InfiniteAppendSessionRequest
     ) throws -> InfiniteAppendSessionResponse {
-        guard !request.text.isEmpty else {
-            throw InfiniteError.invalidSessionInput("append text must not be empty")
-        }
+        // Session existence is checked first so a bad id maps to 404
+        // session_not_found rather than 400 invalid_session_input (matches
+        // generate()'s ordering).
         guard var record = sessions[sessionID] else {
             throw InfiniteError.sessionNotFound(sessionID)
+        }
+        guard !request.text.isEmpty else {
+            throw InfiniteError.invalidSessionInput("append text must not be empty")
         }
         record.inputCharacters += request.text.count
         record.estimatedInputTokens += Self.estimatedTokens(for: request.text)
         record.updatedAt = Self.timestamp()
         sessions[sessionID] = record
+        let contextWindow = record.selection.maxContextTokens
+        if record.estimatedInputTokens > contextWindow {
+            infiniteEngineLogger.warning(
+                "Infinite session \(sessionID, privacy: .public) has accumulated ~\(record.estimatedInputTokens, privacy: .public) tokens (context window: \(contextWindow, privacy: .public)) for \(record.selection.rawValue, privacy: .public); generation may truncate or refuse once backend inference is wired."
+            )
+        }
         return InfiniteAppendSessionResponse(
             session: sessionInfo(record),
             appendedCharacters: request.text.count,
@@ -175,7 +208,7 @@ public actor InfiniteEngine {
             throw InfiniteError.invalidSessionInput("maxTokens must be greater than zero")
         }
         throw InfiniteError.generationUnavailable(
-            "backend inference is not wired in Phase 3; session state is preserved"
+            "backend inference is not wired in this phase; session state is preserved"
         )
     }
 
@@ -315,14 +348,21 @@ public actor InfiniteEngine {
         )
     }
 
+    /// Shared formatter. `ISO8601DateFormatter.string(from:)` is thread-safe
+    /// and the engine is an actor, so a single instance is reused instead of
+    /// allocating + configuring one per session call (mirrors APIServer).
+    private static let isoTimestampFormatter = ISO8601DateFormatter()
+
     private static func timestamp() -> String {
-        ISO8601DateFormatter().string(from: Date())
+        isoTimestampFormatter.string(from: Date())
     }
 
     private static func estimatedTokens(for text: String) -> Int {
         max(1, Int((Double(text.count) / 4.0).rounded(.up)))
     }
 
+    /// Saturates (does not wrap) to `Int64.max`. Physical memory is never
+    /// large enough to fire on real hardware; the clamp is defensive.
     private static func int64Clamping(_ value: UInt64) -> Int64 {
         if value > UInt64(Int64.max) {
             return Int64.max

@@ -9,14 +9,20 @@ import XCTest
 
 final class InfiniteModuleTests: XCTestCase {
 
+    override func setUp() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    override func tearDown() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    /// Resets `InfiniteEngine.shared` to a clean baseline (clears the leaked
+    /// `preparedBackend`/sessions that order-dependent flakes came from) and
+    /// skips on unsupported tiers. setUp/tearDown also reset for belt-and-braces.
     private func resetEngine() async throws {
-        guard InfiniteRAMTier.current != .belowMinimum else {
-            throw XCTSkip("Infinite requires at least 32 GB unified memory")
-        }
-        for session in await InfiniteEngine.shared.listSessions() {
-            _ = try await InfiniteEngine.shared.deleteSession(id: session.id)
-        }
-        _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
+        try requireSupportedTier()
+        await InfiniteEngine.shared.reset()
     }
 
     func testAIModuleName() {
@@ -200,10 +206,221 @@ final class InfiniteModuleTests: XCTestCase {
             )
             XCTFail("generate should not report synthetic text before inference is wired")
         } catch InfiniteError.generationUnavailable(let reason) {
-            XCTAssertTrue(reason.contains("Phase 3"))
+            // Assert the typed case + a non-empty reason, not a phase label that
+            // changes when inference lands.
+            XCTAssertFalse(reason.isEmpty)
         }
 
         let status = await engine.status()
         XCTAssertEqual(status.activeSessions, 1)
+    }
+
+    // MARK: - RAM-tier gating (runs on any machine — no skip)
+
+    func testRAMTierSupportsPredicate() {
+        XCTAssertTrue(InfiniteRAMTier.full.supports(required: .full))
+        XCTAssertTrue(InfiniteRAMTier.full.supports(required: .reduced))
+        XCTAssertTrue(InfiniteRAMTier.reduced.supports(required: .reduced))
+        XCTAssertFalse(InfiniteRAMTier.reduced.supports(required: .full))
+        XCTAssertFalse(InfiniteRAMTier.belowMinimum.supports(required: .reduced))
+        XCTAssertFalse(InfiniteRAMTier.belowMinimum.supports(required: .full))
+    }
+
+    func testRAMTierMinimumPhysicalMemoryThresholds() {
+        XCTAssertEqual(InfiniteRAMTier.belowMinimum.minimumPhysicalMemoryBytes, 0)
+        XCTAssertEqual(InfiniteRAMTier.reduced.minimumPhysicalMemoryBytes, 32 * 1024 * 1024 * 1024)
+        XCTAssertEqual(InfiniteRAMTier.full.minimumPhysicalMemoryBytes, 64 * 1024 * 1024 * 1024)
+    }
+
+    // MARK: - Error branches (fresh engine instances for isolation)
+
+    func testUnknownSessionIdThrowsSessionNotFound() async throws {
+        let engine = InfiniteEngine()
+        let missing = "does-not-exist"
+        await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
+            _ = try await engine.session(id: missing)
+        }
+        await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
+            _ = try await engine.append(
+                sessionID: missing,
+                request: InfiniteAppendSessionRequest(text: "x")
+            )
+        }
+        // Even with otherwise-invalid input, an unknown session is a 404, not a
+        // 400 — session existence is checked before input validation.
+        await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
+            _ = try await engine.append(
+                sessionID: missing,
+                request: InfiniteAppendSessionRequest(text: "")
+            )
+        }
+        await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
+            _ = try await engine.checkpoint(
+                sessionID: missing,
+                request: InfiniteCheckpointSessionRequest(label: nil)
+            )
+        }
+        await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
+            _ = try await engine.generate(
+                sessionID: missing,
+                request: InfiniteGenerateSessionRequest(prompt: "x", maxTokens: 4)
+            )
+        }
+        await XCTAssertThrowsInfiniteError(.sessionNotFound(missing)) {
+            _ = try await engine.deleteSession(id: missing)
+        }
+    }
+
+    func testSessionLimitRejectsBeyondMax() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+        for _ in 0..<InfiniteEngine.maxActiveSessions {
+            _ = try await engine.createSession(request: InfiniteCreateSessionRequest())
+        }
+        await XCTAssertThrowsInfiniteError(.sessionLimitExceeded(InfiniteEngine.maxActiveSessions)) {
+            _ = try await engine.createSession(request: InfiniteCreateSessionRequest())
+        }
+    }
+
+    func testInvalidSessionInputs() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+        let created = try await engine.createSession(request: InfiniteCreateSessionRequest())
+
+        await XCTAssertThrowsInfiniteError(.invalidSessionInput("append text must not be empty")) {
+            _ = try await engine.append(
+                sessionID: created.id,
+                request: InfiniteAppendSessionRequest(text: "")
+            )
+        }
+        // maxTokens <= 0 is validated before the generation-unavailable boundary.
+        for badMax in [0, -1] {
+            await XCTAssertThrowsInfiniteError(
+                .invalidSessionInput("maxTokens must be greater than zero")
+            ) {
+                _ = try await engine.generate(
+                    sessionID: created.id,
+                    request: InfiniteGenerateSessionRequest(prompt: "x", maxTokens: badMax)
+                )
+            }
+        }
+    }
+
+    func testModelSetFailedSurfacesAdapterError() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine(backendAdapter: FailingInfiniteBackendAdapter())
+        do {
+            _ = try await engine.setActiveModel(.gemma4E4B1M, preload: true)
+            XCTFail("preload with a failing adapter should throw modelSetFailed")
+        } catch InfiniteError.modelSetFailed {
+            // expected: adapter.prepare error is surfaced as modelSetFailed (HTTP 500)
+        }
+    }
+
+    func testFullTierModelRefusedOnReducedTier() async throws {
+        try XCTSkipUnless(
+            InfiniteRAMTier.current == .reduced,
+            "Exercises the reduced-tier refusal of a full-tier model"
+        )
+        let engine = InfiniteEngine()
+        await XCTAssertThrowsInfiniteError(.modelUnavailable(InfiniteModelSelection.qwen35B1M.rawValue)) {
+            _ = try await engine.setActiveModel(.qwen35B1M, preload: false)
+        }
+    }
+
+    // MARK: - Wire contract (engine half of the drift guard)
+
+    /// Asserts the engine encodes the contract keys the SDK decodes
+    /// (`Tests/YoozEngineClientTests/InfiniteTypesTests.swift`). The two DTO
+    /// definitions are hand-maintained copies; if the engine drops or renames a
+    /// field the SDK requires, this superset check fails. (Adding a field is
+    /// non-breaking — the SDK ignores unknown keys.)
+    func testEngineWireShapeContainsContractKeys() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+
+        let encoder = JSONEncoder()
+        func object<T: Encodable>(_ value: T) throws -> [String: Any] {
+            let json = try JSONSerialization.jsonObject(with: encoder.encode(value))
+            return (json as? [String: Any]) ?? [:]
+        }
+        func keys<T: Encodable>(_ value: T) throws -> Set<String> {
+            Set(try object(value).keys)
+        }
+        // Required (non-optional) keys of the nested InfiniteResourceMetrics;
+        // checked because the top-level `keys` helper only sees `resources`
+        // itself, not its sub-fields.
+        let resourceKeys: Set<String> = [
+            "physicalMemoryBytes", "wiredMemoryLimitBytes", "requiredRAMTier",
+        ]
+
+        let models = await engine.availableModels()
+        let modelInfo = try XCTUnwrap(models.first(where: \.isActive))
+        XCTAssertTrue(try keys(modelInfo).isSuperset(of: [
+            "id", "displayName", "description", "tier", "loadState", "isActive",
+            "maxContextTokens", "nativeContextTokens", "ramTier",
+            "requiresAppleSilicon", "evidenceRef",
+        ]))
+
+        let status = await engine.status()
+        let statusObject = try object(status)
+        XCTAssertTrue(Set(statusObject.keys).isSuperset(of: [
+            "loaded", "modelId", "state", "activeSessions", "maxContextTokens",
+            "ramTier", "backendKind", "cleanupPolicy", "resources",
+        ]))
+        XCTAssertTrue(
+            Set((statusObject["resources"] as? [String: Any] ?? [:]).keys)
+                .isSuperset(of: resourceKeys)
+        )
+
+        let session = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(label: "contract")
+        )
+        let sessionObject = try object(session)
+        XCTAssertTrue(Set(sessionObject.keys).isSuperset(of: [
+            "id", "modelId", "state", "createdAt", "updatedAt", "contextWindowTokens",
+            "inputCharacters", "estimatedInputTokens", "checkpointCount",
+            "cleanupPolicy", "resources",
+        ]))
+        XCTAssertTrue(
+            Set((sessionObject["resources"] as? [String: Any] ?? [:]).keys)
+                .isSuperset(of: resourceKeys)
+        )
+    }
+
+    // MARK: - Helpers
+
+    private func requireSupportedTier() throws {
+        guard InfiniteRAMTier.current != .belowMinimum else {
+            throw XCTSkip("Infinite requires at least 32 GB unified memory")
+        }
+    }
+
+    private func XCTAssertThrowsInfiniteError(
+        _ expected: InfiniteError,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ body: () async throws -> Void
+    ) async {
+        do {
+            try await body()
+            XCTFail("expected \(expected) but no error was thrown", file: file, line: line)
+        } catch let error as InfiniteError {
+            XCTAssertEqual(error, expected, file: file, line: line)
+        } catch {
+            XCTFail("expected InfiniteError.\(expected) but got \(error)", file: file, line: line)
+        }
+    }
+}
+
+/// Real adapter whose `prepare` always throws — exercises the
+/// `modelSetFailed` path (no fabricated data; a genuine failing code path).
+private struct FailingInfiniteBackendAdapter: InfiniteBackendAdapter {
+    struct PrepareFailure: Error {}
+    func prepare(_ descriptor: InfiniteBackendDescriptor) async throws -> InfiniteBackendHandle {
+        throw PrepareFailure()
     }
 }

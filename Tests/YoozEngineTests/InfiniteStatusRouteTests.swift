@@ -57,19 +57,23 @@ final class InfiniteStatusRouteTests: XCTestCase {
         return (try XCTUnwrap(response as? HTTPURLResponse), data)
     }
 
-    private func resetEngineState() async throws {
+    override func setUp() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    override func tearDown() async throws {
+        await InfiniteEngine.shared.reset()
+    }
+
+    private func requireSupportedTier() throws {
         guard InfiniteRAMTier.current != .belowMinimum else {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
         }
-        for session in await InfiniteEngine.shared.listSessions() {
-            _ = try await InfiniteEngine.shared.deleteSession(id: session.id)
-        }
-        _ = try await InfiniteEngine.shared.setActiveModel(.gemma4E4B1M, preload: false)
     }
 
     @MainActor
     func testGetStatusOnColdEngineReportsActiveModel() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let (http, body) = try await get("/v1/infinite/status")
             XCTAssertEqual(http.statusCode, 200)
@@ -78,6 +82,8 @@ final class InfiniteStatusRouteTests: XCTestCase {
             XCTAssertEqual(status.modelId, "gemma4-e4b-1m")
             XCTAssertNil(status.progress)
             XCTAssertEqual(status.state, "idle")
+            // The default active model (gemma4-e4b-1m) is a `reduced`-tier model
+            // regardless of the host machine's tier, so this is host-independent.
             XCTAssertEqual(status.activeSessions, 0)
             XCTAssertEqual(status.maxContextTokens, 1_000_000)
             XCTAssertEqual(status.ramTier, "reduced")
@@ -87,7 +93,7 @@ final class InfiniteStatusRouteTests: XCTestCase {
 
     @MainActor
     func testModulesManifestIncludesInfinite() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let (http, body) = try await get("/v1/modules")
             XCTAssertEqual(http.statusCode, 200)
@@ -107,7 +113,7 @@ final class InfiniteStatusRouteTests: XCTestCase {
 
     @MainActor
     func testInfiniteSessionRoutesSurviveRecordingResetAndRejectGenerate() async throws {
-        try await resetEngineState()
+        try requireSupportedTier()
         try await withServer { _ in
             let createBody = try JSONEncoder().encode(
                 InfiniteCreateSessionRequest(label: "route-session")
@@ -166,6 +172,37 @@ final class InfiniteStatusRouteTests: XCTestCase {
                 from: deletePayload
             )
             XCTAssertTrue(deleted.deleted)
+        }
+    }
+
+    @MainActor
+    func testSessionLimitReturns409() async throws {
+        try requireSupportedTier()
+        try await withServer { _ in
+            let body = try JSONEncoder().encode(InfiniteCreateSessionRequest(label: "limit"))
+            for _ in 0..<InfiniteEngine.maxActiveSessions {
+                let (http, _) = try await post("/v1/infinite/sessions", body: body)
+                XCTAssertEqual(http.statusCode, 200)
+            }
+            let (overflow, payload) = try await post("/v1/infinite/sessions", body: body)
+            XCTAssertEqual(overflow.statusCode, 409)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "session_limit_exceeded")
+        }
+    }
+
+    @MainActor
+    func testGetUnknownSessionReturns404() async throws {
+        try requireSupportedTier()
+        try await withServer { _ in
+            let (http, payload) = try await get("/v1/infinite/sessions/nonexistent-id")
+            XCTAssertEqual(http.statusCode, 404)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "session_not_found")
         }
     }
 }

@@ -11,6 +11,13 @@ public enum YoozEngineError: LocalizedError, Sendable, Equatable {
     case portHeldByStaleEngine(port: Int)
     case invalidResponse
     case httpError(statusCode: Int)
+    /// A non-2xx response that carried the engine's structured error body
+    /// (`{"error": ..., "code": ...}`). `code` is the stable machine-readable
+    /// identifier (e.g. `generation_unavailable`, `session_not_found`,
+    /// `session_limit_exceeded`, `module_not_bundled`) callers should branch on;
+    /// `message` is the human-readable text. Falls back to `httpError` when the
+    /// body is absent or not the structured shape.
+    case serverError(statusCode: Int, code: String, message: String)
     case decodingError(String)
     case webSocketError(String)
 
@@ -31,6 +38,8 @@ public enum YoozEngineError: LocalizedError, Sendable, Equatable {
             return "Invalid response from Yooz Engine"
         case .httpError(let code):
             return "HTTP error \(code) from Yooz Engine"
+        case .serverError(let statusCode, let code, let message):
+            return "Yooz Engine error \(statusCode) [\(code)]: \(message)"
         case .decodingError(let message):
             return "Failed to decode response: \(message)"
         case .webSocketError(let message):

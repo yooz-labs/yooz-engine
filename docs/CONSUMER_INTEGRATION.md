@@ -181,6 +181,7 @@ The full API, model catalogue, RAM tiers, evidence references, and verification 
 | `engineLaunchFailed` | ✓ | |
 | `portHeldByStaleEngine` | ✓ | |
 | `webSocketError` | ✓ | |
+| `serverError(statusCode:code:message:)` | | ✓ |
 | `httpError(statusCode:)` | | ✓ |
 | `invalidResponse` | | ✓ |
 | `decodingError` | | ✓ |
