@@ -172,4 +172,17 @@ final class InfiniteStatusRouteTests: XCTestCase {
             XCTAssertTrue(deleted.deleted)
         }
     }
+
+    @MainActor
+    func testGetUnknownSessionReturns404() async throws {
+        try requireSupportedTier()
+        try await withServer { _ in
+            let (http, payload) = try await get("/v1/infinite/sessions/nonexistent-id")
+            XCTAssertEqual(http.statusCode, 404)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "session_not_found")
+        }
+    }
 }

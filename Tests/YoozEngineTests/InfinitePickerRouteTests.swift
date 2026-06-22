@@ -181,4 +181,27 @@ final class InfinitePickerRouteTests: XCTestCase {
             XCTAssertEqual(status.state, "adapter_ready")
         }
     }
+
+    /// When the module isn't bundled, every `/v1/infinite/*` route returns
+    /// 501 `module_not_bundled` (the Lite/Whisper-variant behaviour). Runs on
+    /// any tier — the not-bundled guard precedes any RAM-tier logic.
+    @MainActor
+    func testInfiniteRoutesReturn501WhenModuleNotBundled() async throws {
+        UniqueEnginePort.assignFreshPort()
+        await ModuleRegistry.shared.reset()
+        let server = APIServer()
+        try await server.start()
+        do {
+            let (http, payload) = try await get("/v1/infinite/models")
+            XCTAssertEqual(http.statusCode, 501)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(json["code"] as? String, "module_not_bundled")
+        } catch {
+            await server.stop()
+            throw error
+        }
+        await server.stop()
+    }
 }

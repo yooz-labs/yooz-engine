@@ -205,7 +205,7 @@ public actor InfiniteEngine {
             throw InfiniteError.invalidSessionInput("maxTokens must be greater than zero")
         }
         throw InfiniteError.generationUnavailable(
-            "backend inference is not wired in Phase 3; session state is preserved"
+            "backend inference is not wired in this phase; session state is preserved"
         )
     }
 
