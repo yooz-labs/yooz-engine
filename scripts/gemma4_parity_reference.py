@@ -13,9 +13,11 @@ Run with the exact version Infinite validated on:
 
 The 12B ``gemma4_unified_text`` row has no implementation in mlx-lm (only
 ``gemma4`` / ``gemma4_text``); its only Python reference is mlx-vlm's text path,
-so that row is generated through mlx-vlm instead:
+so that row is generated through mlx-vlm instead. The two engines need different
+``--with`` envs, so ``--model all`` covers only the mlx-lm rows; request the 12B
+row explicitly:
 
-    uv run --with mlx-vlm python scripts/gemma4_parity_reference.py --model 12b
+    uv run --with mlx-vlm==0.6.3 python scripts/gemma4_parity_reference.py --model 12b
 
 Writes ``YoozEngine/Infinite/results/gemma4_<tag>_parity_reference.json``.
 """
@@ -135,6 +137,12 @@ def build_reference_vlm(repo: str, max_tokens: int) -> dict:
             f"mlx-vlm stream_generate yielded no tokens for {repo!r}; check the "
             "model load and max_tokens before writing a degenerate reference."
         )
+    if finish_reason is None:
+        raise RuntimeError(
+            f"mlx-vlm stream_generate completed without setting finish_reason for "
+            f"{repo!r}; the fixture would record null. Check the mlx-vlm version's "
+            "response-object contract before writing the reference."
+        )
 
     return {
         "model_repo": repo,
@@ -163,7 +171,10 @@ def main() -> None:
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tags = all_tags if args.model == "all" else [args.model]
+    # `all` covers only the mlx-lm rows: the VLM rows need a different `--with`
+    # env (mlx-vlm), so importing mlx_vlm under an mlx-lm-only run would crash
+    # mid-batch. Request VLM rows (e.g. 12b) explicitly.
+    tags = sorted(MODELS) if args.model == "all" else [args.model]
     for tag in tags:
         if tag in VLM_MODELS:
             ref = build_reference_vlm(VLM_MODELS[tag], args.max_tokens)

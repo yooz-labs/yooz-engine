@@ -9,7 +9,7 @@ All three `swiftRuntimeSupported` gates are flipped. Only retrieval mode has no 
 backend.
 
 **Machine:** Apple M4 Pro, 64 GiB (full tier), macOS 26. mlx-swift-lm pinned at
-`yooz-labs/mlx-swift-lm@413c372` (our fork; SharpAI `38d7ff2` lineage + the #186
+`yooz-labs/mlx-swift-lm@e4259c6` (our fork; SharpAI `38d7ff2` lineage + the #186
 Gemma4 E4B fix + the #187 `gemma4_unified` registration and K-eq-V value-path fix).
 Reference engines: `mlx-lm==0.31.3` (`gemma4` rows) and `mlx-vlm==0.6.3`
 (`gemma4_unified`).
@@ -97,7 +97,7 @@ The reference fixtures are produced by `scripts/gemma4_parity_reference.py`. The
 uv run --with mlx-lm==0.31.3 python scripts/gemma4_parity_reference.py --model e4b
 uv run --with mlx-lm==0.31.3 python scripts/gemma4_parity_reference.py --model 26b-a4b
 # gemma4_unified row (12b) — mlx-vlm reference
-uv run --with mlx-vlm python scripts/gemma4_parity_reference.py --model 12b
+uv run --with mlx-vlm==0.6.3 python scripts/gemma4_parity_reference.py --model 12b
 ```
 
 The Swift side runs through a dedicated scheme + test plan (`InfiniteLive`) that
