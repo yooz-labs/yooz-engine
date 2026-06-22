@@ -316,6 +316,49 @@ final class InfiniteModuleTests: XCTestCase {
         }
     }
 
+    // MARK: - Wire contract (engine half of the drift guard)
+
+    /// Asserts the engine encodes the contract keys the SDK decodes
+    /// (`Tests/YoozEngineClientTests/InfiniteTypesTests.swift`). The two DTO
+    /// definitions are hand-maintained copies; if the engine drops or renames a
+    /// field the SDK requires, this superset check fails. (Adding a field is
+    /// non-breaking — the SDK ignores unknown keys.)
+    func testEngineWireShapeContainsContractKeys() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
+
+        let encoder = JSONEncoder()
+        func keys<T: Encodable>(_ value: T) throws -> Set<String> {
+            let object = try JSONSerialization.jsonObject(with: encoder.encode(value))
+            let dict = (object as? [String: Any]) ?? [:]
+            return Set(dict.keys)
+        }
+
+        let models = await engine.availableModels()
+        let modelInfo = try XCTUnwrap(models.first(where: \.isActive))
+        XCTAssertTrue(try keys(modelInfo).isSuperset(of: [
+            "id", "displayName", "description", "tier", "loadState", "isActive",
+            "maxContextTokens", "nativeContextTokens", "ramTier",
+            "requiresAppleSilicon", "evidenceRef",
+        ]))
+
+        let status = await engine.status()
+        XCTAssertTrue(try keys(status).isSuperset(of: [
+            "loaded", "modelId", "state", "activeSessions", "maxContextTokens",
+            "ramTier", "backendKind", "cleanupPolicy", "resources",
+        ]))
+
+        let session = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(label: "contract")
+        )
+        XCTAssertTrue(try keys(session).isSuperset(of: [
+            "id", "modelId", "state", "createdAt", "updatedAt", "contextWindowTokens",
+            "inputCharacters", "estimatedInputTokens", "checkpointCount",
+            "cleanupPolicy", "resources",
+        ]))
+    }
+
     // MARK: - Helpers
 
     private func requireSupportedTier() throws {
