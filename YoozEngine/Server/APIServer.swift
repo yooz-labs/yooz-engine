@@ -1151,6 +1151,12 @@ final class APIServer: ObservableObject {
             let sttLoaded = false
             #endif
 
+            #if canImport(InfiniteModule)
+            let infiniteLoaded = await InfiniteEngine.shared.isLoaded
+            #else
+            let infiniteLoaded = false
+            #endif
+
             func isReady(_ id: ModuleID, fallback: Bool) -> Bool {
                 if detail[id.rawValue]?.state == .ready { return true }
                 return fallback
@@ -1169,6 +1175,7 @@ final class APIServer: ObservableObject {
                     ),
                     vad: isReady(.vad, fallback: vadLoaded),
                     tts: isReady(.tts, fallback: false),
+                    infinite: infiniteLoaded,
                     detail: detail
                 )
             )

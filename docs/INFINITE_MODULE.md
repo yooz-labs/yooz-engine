@@ -14,6 +14,8 @@ Infinite is bundled only in the full `YoozEngine` variant. `YoozEngineLite` and 
 
 All Infinite rows require Apple Silicon. Model weights use the normal HuggingFace cache path (`~/.cache/huggingface/hub/`) and are never committed to the repository.
 
+Whether the module is bundled and loaded is reported by `/v1/health` as `modules.infinite` (and in full per-module detail via `/v1/modules`). It is `false` on the Lite/Whisper variants (module not bundled) and until a model is loaded.
+
 ## Model Catalogue
 
 The canonical catalogue is `InfiniteModelSelection` in the engine. Consumer apps should read `/v1/infinite/models` rather than duplicating this table.
