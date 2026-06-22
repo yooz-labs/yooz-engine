@@ -133,6 +133,23 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         requiredRAMTier.rawValue
     }
 
+    /// Whether the model can actually be loaded + run by the engine's
+    /// MLX-Swift runtime today. The catalog advertises models proven in the
+    /// Python harness, but the Swift `mlx-swift-lm` fork only implements some
+    /// architectures: `qwen3_5_moe` (this Qwen row) loads; `gemma4`/`gemma4_text`
+    /// (the Gemma4 rows) do NOT yet — that needs the gemma4 Swift port
+    /// (yooz-engine#184). Retrieval mode has no MLX backend wired here. A row
+    /// is selectable in the picker for discovery, but load/generate refuses
+    /// cleanly when this is false.
+    public var swiftRuntimeSupported: Bool {
+        switch self {
+        case .qwen35B1M:
+            return true
+        case .gemma4E4B1M, .gemma4_26B_A4B1M, .s3Retrieval:
+            return false
+        }
+    }
+
     public var backendKind: String {
         descriptor.backendKind.rawValue
     }
