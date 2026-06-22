@@ -11,6 +11,12 @@ Run with the exact version Infinite validated on:
 
     uv run --with mlx-lm==0.31.3 python scripts/gemma4_parity_reference.py
 
+The 12B ``gemma4_unified_text`` row has no implementation in mlx-lm (only
+``gemma4`` / ``gemma4_text``); its only Python reference is mlx-vlm's text path,
+so that row is generated through mlx-vlm instead:
+
+    uv run --with mlx-vlm python scripts/gemma4_parity_reference.py --model 12b
+
 Writes ``YoozEngine/Infinite/results/gemma4_<tag>_parity_reference.json``.
 """
 from __future__ import annotations
@@ -29,9 +35,16 @@ from mlx_lm.sample_utils import make_sampler
 PROMPT_TEXT = "List the first five prime numbers, separated by commas."
 
 # Catalog rows the engine gates behind swiftRuntimeSupported (issue #184).
+# `gemma4` / `gemma4_text` models reference through mlx-lm.
 MODELS = {
     "e4b": "mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit",
     "26b-a4b": "mlx-community/gemma-4-26b-a4b-it-4bit",
+}
+
+# `gemma4_unified_text` (the 12B family, #187) is absent from mlx-lm, so its
+# reference comes from mlx-vlm's text path instead. Same prompt + greedy decode.
+VLM_MODELS = {
+    "12b": "mlx-community/gemma-4-12B-it-4bit",
 }
 
 
@@ -89,10 +102,58 @@ def build_reference(repo: str, max_tokens: int) -> dict:
     }
 
 
+def build_reference_vlm(repo: str, max_tokens: int) -> dict:
+    """Reference for `gemma4_unified_text` via mlx-vlm's text path.
+
+    mlx-lm has no `gemma4_unified_text`, so the 12B family is referenced through
+    mlx-vlm. mlx-vlm reads the same HF tokenizer_config the Swift engine's
+    swift-transformers stack does, so the chat template matches (unlike the
+    mlx-lm-vs-swift-transformers preamble difference seen on the 26B row).
+    """
+    import mlx_vlm
+    from mlx_vlm import load as vlm_load, stream_generate as vlm_stream
+    from mlx_vlm.prompt_utils import apply_chat_template
+
+    model, processor = vlm_load(repo)
+    formatted = apply_chat_template(
+        processor, model.config, PROMPT_TEXT, num_images=0
+    )
+
+    generated_ids: list[int] = []
+    text = ""
+    finish_reason = None
+    for resp in vlm_stream(
+        model, processor, formatted, max_tokens=max_tokens, temperature=0.0
+    ):
+        text += resp.text
+        if resp.token is not None:
+            generated_ids.append(int(resp.token))
+        finish_reason = resp.finish_reason
+
+    if not generated_ids:
+        raise RuntimeError(
+            f"mlx-vlm stream_generate yielded no tokens for {repo!r}; check the "
+            "model load and max_tokens before writing a degenerate reference."
+        )
+
+    return {
+        "model_repo": repo,
+        "prompt_text": PROMPT_TEXT,
+        "prompt_formatted": formatted if isinstance(formatted, str) else None,
+        "max_tokens": max_tokens,
+        "generated_token_ids": generated_ids,
+        "generated_text": text,
+        "finish_reason": finish_reason,
+        "sampler": "greedy/argmax (temperature=0.0)",
+        "reference_engine": f"mlx-vlm=={mlx_vlm.__version__}",
+    }
+
+
 def main() -> None:
+    all_tags = sorted(MODELS) + sorted(VLM_MODELS)
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", choices=sorted(MODELS) + ["all"], default="all"
+        "--model", choices=all_tags + ["all"], default="all"
     )
     parser.add_argument("--max-tokens", type=int, default=48)
     args = parser.parse_args()
@@ -102,14 +163,18 @@ def main() -> None:
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tags = sorted(MODELS) if args.model == "all" else [args.model]
+    tags = all_tags if args.model == "all" else [args.model]
     for tag in tags:
-        ref = build_reference(MODELS[tag], args.max_tokens)
+        if tag in VLM_MODELS:
+            ref = build_reference_vlm(VLM_MODELS[tag], args.max_tokens)
+            gen_count = len(ref["generated_token_ids"])
+        else:
+            ref = build_reference(MODELS[tag], args.max_tokens)
+            gen_count = len(ref["generated_token_ids"])
         out_path = out_dir / f"gemma4_{tag}_parity_reference.json"
         out_path.write_text(json.dumps(ref, indent=2) + "\n")
         print(f"[{tag}] wrote {out_path}")
-        print(f"[{tag}] prompt_tokens={ref['prompt_token_count']} "
-              f"gen_tokens={len(ref['generated_token_ids'])}")
+        print(f"[{tag}] gen_tokens={gen_count} finish={ref['finish_reason']}")
         print(f"[{tag}] text: {ref['generated_text']!r}")
 
 

@@ -1,23 +1,59 @@
-# Gemma4 native-context parity (issues #184, #186)
+# Gemma4 native-context parity (issues #184, #186, #187)
 
-**Status:** Both Gemma4 rows — **26B-A4B** (#184) and **E4B** (#186) — load and
-generate at native context through the engine's `MLXInfiniteBackend`, verified
-against the Python `mlx-lm==0.31.3` reference (the version Infinite validated on).
-Both `swiftRuntimeSupported` gates are flipped. Only retrieval mode has no MLX
+**Status:** Three Gemma4-family rows — **26B-A4B** (#184), **E4B** (#186), and the
+dense **12B** (`gemma4_unified`, #187) — load and generate at native context
+through the engine's `MLXInfiniteBackend`. The `gemma4` rows are verified against
+`mlx-lm==0.31.3` (the version Infinite validated on); the 12B `gemma4_unified_text`
+row has no mlx-lm implementation, so it is verified against the `mlx-vlm` text path.
+All three `swiftRuntimeSupported` gates are flipped. Only retrieval mode has no MLX
 backend.
 
 **Machine:** Apple M4 Pro, 64 GiB (full tier), macOS 26. mlx-swift-lm pinned at
-`yooz-labs/mlx-swift-lm@9c73df9` (our fork; SharpAI `38d7ff2` lineage + the #186
-Gemma4 E4B fix). Reference engine: `mlx-lm==0.31.3` (same as Infinite `research/18`).
+`yooz-labs/mlx-swift-lm@413c372` (our fork; SharpAI `38d7ff2` lineage + the #186
+Gemma4 E4B fix + the #187 `gemma4_unified` registration and K-eq-V value-path fix).
+Reference engines: `mlx-lm==0.31.3` (`gemma4` rows) and `mlx-vlm==0.6.3`
+(`gemma4_unified`).
 
 ## Results
 
-| Model | repo | model_type | Swift load+generate | decode | parity assertion |
-| --- | --- | --- | --- | --- | --- |
-| **26B-A4B** | `mlx-community/gemma-4-26b-a4b-it-4bit` | `gemma4` | **PASS** — `2, 3, 5, 7, 11` (finish=stop, 14 tok) | 32.9 tok/s | contains correct answer |
-| **E4B** | `mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit` | `gemma4` | **PASS** — exact greedy match vs Python | 37.2 tok/s | exact greedy parity |
+| Model | repo | model_type | Swift load+generate | parity assertion |
+| --- | --- | --- | --- | --- |
+| **26B-A4B** | `mlx-community/gemma-4-26b-a4b-it-4bit` | `gemma4` | **PASS** — `2, 3, 5, 7, 11` (finish=stop) | contains correct answer |
+| **E4B** | `mlx-community/gemma-4-e4b-it-qat-OptiQ-4bit` | `gemma4` | **PASS** — exact greedy match vs Python | exact greedy parity |
+| **12B** | `mlx-community/gemma-4-12B-it-4bit` | `gemma4_unified` | **PASS** — exact greedy match vs mlx-vlm | exact greedy parity |
 
 Decode rates on a short prompt are consistent with Infinite `research/18`.
+
+## 12B `gemma4_unified` onboarding (#187)
+
+`gemma4_unified_text` is *not* a new architecture: the multimodal model reuses
+gemma4's `LanguageModel`, and the 12B text config is a dense gemma4 —
+`num_kv_shared_layers: 0`, `hidden_size_per_layer_input: 0`, `attention_k_eq_v:
+true`, `num_global_key_value_heads: 1`, dense MLP, proportional RoPE
+(`partial_rotary_factor: 0.25`), `layer_types` explicit. So the fork registers
+`gemma4_unified` / `gemma4_unified_text` against the existing
+`Gemma4Configuration`/`Gemma4Model` + `Gemma4TextModel` rather than duplicating a
+port; the multimodal checkpoint's `model.language_model.` prefixes and
+vision/audio tensors are handled by the existing `Gemma4Model.sanitize`.
+
+The reference engine for this row is `mlx-vlm`, not `mlx-lm`. mlx-vlm reads the
+same HF `tokenizer_config` chat template the engine's swift-transformers stack
+does (including the `<|channel>thought` reasoning preamble), so the template
+matches token-for-token — which is why 12B can use the strict **exact-greedy**
+assertion where 26B (referenced via mlx-lm) could only assert "contains answer".
+
+### K-eq-V value-path fix
+
+Onboarding 12B surfaced a latent numerics bug in the fork's `Gemma4Text.swift`
+K-eq-V attention path (used by every full-attention layer when `attention_k_eq_v`
+is set — 12B *and* 26B). The Python reference takes `values = keys` from the raw
+`k_proj` output **before** `k_norm` and **before** RoPE, applying only `v_norm`
+(`mlx_vlm/models/gemma4/language.py`). The Swift port instead derived values from
+the already-normed + RoPE'd keys (`v = vNorm(k)`), incorrectly applying both
+`k_norm` and a rotation to the values. The fix captures the raw `k_proj` output
+and applies only `v_norm` + transpose, matching the reference. 26B's prior
+"contains answer" assertion was too weak to catch this; the 12B exact-greedy test
+pins it.
 
 ## Why the two models assert differently
 
@@ -53,10 +89,15 @@ that merges and our fork rebases, the custom patch is dropped.
 
 ## How to reproduce
 
-The reference fixtures are produced by `scripts/gemma4_parity_reference.py`:
+The reference fixtures are produced by `scripts/gemma4_parity_reference.py`. The
+`gemma4` rows use mlx-lm; the 12B `gemma4_unified` row uses mlx-vlm:
 
 ```bash
-uv run --with mlx-lm==0.31.3 python scripts/gemma4_parity_reference.py --model all
+# gemma4 rows (e4b, 26b-a4b)
+uv run --with mlx-lm==0.31.3 python scripts/gemma4_parity_reference.py --model e4b
+uv run --with mlx-lm==0.31.3 python scripts/gemma4_parity_reference.py --model 26b-a4b
+# gemma4_unified row (12b) — mlx-vlm reference
+uv run --with mlx-vlm python scripts/gemma4_parity_reference.py --model 12b
 ```
 
 The Swift side runs through a dedicated scheme + test plan (`InfiniteLive`) that
@@ -75,8 +116,12 @@ so CI (neither) skips cleanly instead of downloading multi-GB weights.
 
 ## Reference fixtures
 
-- `gemma4_26b-a4b_parity_reference.json` — greedy reference, 26B-A4B
-- `gemma4_e4b_parity_reference.json` — greedy reference, E4B
+- `gemma4_26b-a4b_parity_reference.json` — greedy reference, 26B-A4B (`mlx-lm==0.31.3`)
+- `gemma4_e4b_parity_reference.json` — greedy reference, E4B (`mlx-lm==0.31.3`)
+- `gemma4_12b_parity_reference.json` — greedy reference, 12B (`mlx-vlm==0.6.3`)
 
-Each carries `prompt_token_ids`, `generated_token_ids`, `generated_text`,
-`first_step_top5_token_ids`, and `finish_reason` under `mlx-lm==0.31.3`.
+The mlx-lm fixtures carry `prompt_token_ids`, `generated_token_ids`,
+`generated_text`, `first_step_top5_token_ids`, and `finish_reason`. The mlx-vlm
+fixture carries `prompt_formatted`, `generated_token_ids`, `generated_text`, and
+`finish_reason` (mlx-vlm's streaming API exposes per-step tokens but not the
+first-step top-5 logits the mlx-lm path captures).

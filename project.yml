@@ -46,17 +46,19 @@ packages:
   # mlx-swift commit is therefore pinned via `Package.resolved` (committed
   # to the repo, un-gitignored) rather than here. Currently resolved:
   #   mlx-swift:    35191a6c3533765ee591130159c769ff5ddbd5f4 (via Package.resolved)
-  #   mlx-swift-lm: 9c73df914777d36686f8078ed4cac700b96ad94c (revision below)
+  #   mlx-swift-lm: e4259c61e9940027bf9eb3de6146851c560e7125 (revision below)
   #
   # See issue #10 / `results/PHASE1_FEASIBILITY.md` for the TurboQuant rationale.
   # Re-pin policy: when ml-explore PR #330 (Gemma4 E4B) merges upstream and our
   # fork rebases onto it, drop our custom patch and re-pin to the rebased commit.
+  # The e4259c6 pin adds gemma4_unified (12B) registration + the K-eq-V value
+  # path fix on top of the #186 E4B fix (yooz-engine#187).
   mlx-swift:
     url: https://github.com/yooz-labs/mlx-swift
     branch: "main"
   mlx-swift-lm:
     url: https://github.com/yooz-labs/mlx-swift-lm
-    revision: "9c73df914777d36686f8078ed4cac700b96ad94c"
+    revision: "e4259c61e9940027bf9eb3de6146851c560e7125"
   # mlx-swift-lm 3.x decoupled from HuggingFace — consuming apps now bring
   # their own concrete tokenizer + downloader. We use Apple's swift-transformers
   # (Tokenizers + Hub) and huggingface/swift-huggingface (HubClient namespace

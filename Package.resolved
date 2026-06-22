@@ -60,7 +60,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/yooz-labs/mlx-swift-lm",
       "state" : {
-        "revision" : "9c73df914777d36686f8078ed4cac700b96ad94c"
+        "revision" : "e4259c61e9940027bf9eb3de6146851c560e7125"
       }
     },
     {

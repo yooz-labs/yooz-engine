@@ -87,6 +87,25 @@ final class InfiniteGemma4ParityTests: XCTestCase {
         )
     }
 
+    /// Dense 12B (`gemma4_unified`, #187): exact greedy parity vs the mlx-vlm
+    /// reference. mlx-vlm and the Swift engine share the same HF tokenizer_config
+    /// chat template (including the `<|channel>thought` preamble), so token-exact
+    /// greedy is the right assertion — and it exercises the K-eq-V value path
+    /// fixed in this issue (values from the raw k_proj output, pre-k_norm/RoPE).
+    /// Reduced-tier model, so it runs on reduced (32 GiB) or full hardware.
+    func testGemma4_12B_GreedyParityVsPython() async throws {
+        try XCTSkipUnless(
+            InfiniteRAMTier.current.supports(required: .reduced),
+            "gemma4-12b needs at least a reduced (32 GiB) RAM tier; current tier "
+                + "is \(InfiniteRAMTier.current.rawValue)."
+        )
+        try await runGenerate(
+            .gemma4_12B1M,
+            referenceFile: "gemma4_12b_parity_reference.json",
+            mode: .exactGreedy
+        )
+    }
+
     private func runGenerate(
         _ selection: InfiniteModelSelection,
         referenceFile: String,
