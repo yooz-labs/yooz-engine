@@ -101,6 +101,42 @@ final class InfiniteModuleTests: XCTestCase {
         XCTAssertFalse(InfiniteModelSelection.s3Retrieval.swiftRuntimeSupported)
     }
 
+    /// Real end-to-end MLX generation on a small supported model (`qwen3_5`),
+    /// proving the native-context backend produces actual tokens. Gated behind
+    /// YOOZ_INFINITE_LIVE=1 because it downloads ~0.6 GB on first run; not a
+    /// mock — real weights, real decode. Run:
+    ///   YOOZ_INFINITE_LIVE=1 xcodebuild ... -only-testing:InfiniteModuleTests/InfiniteModuleTests/testRealNativeContextGenerationProducesTokens test
+    func testRealNativeContextGenerationProducesTokens() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["YOOZ_INFINITE_LIVE"] == "1",
+            "set YOOZ_INFINITE_LIVE=1 to run the live MLX generation test (downloads a model)"
+        )
+        // A small, definitely-supported model (qwen3_5). Reuses the real load
+        // path via a descriptor; the selection label is cosmetic here.
+        let descriptor = InfiniteBackendDescriptor(
+            selection: .qwen35B1M,
+            repository: InfiniteModelRepository(
+                id: "mlx-community/Qwen3.5-0.8B-MLX-4bit",
+                revision: "5d894f8cc4ef3e6c88537bf3746ed262f549da6a"
+            ),
+            backendKind: .pagedKV,
+            adapterKind: .pagedKVMLX,
+            nativeContextTokens: 32_768,
+            targetContextTokens: 32_768,
+            requiredRAMTier: .reduced
+        )
+        let backend = try await MLXInfiniteBackend.load(descriptor)
+        let result = try await backend.generate(
+            context: "",
+            prompt: "Reply with exactly one word: hello.",
+            maxTokens: 8,
+            nativeContextTokens: 32_768
+        )
+        XCTAssertFalse(result.text.isEmpty, "generation should produce real tokens")
+        XCTAssertGreaterThan(result.tokenCount, 0)
+        XCTAssertGreaterThan(result.decodeTokensPerSecond, 0)
+    }
+
     func testSetActiveModelWithoutPreloadReturnsActiveRow() async throws {
         try await resetEngine()
         let selection: InfiniteModelSelection =
