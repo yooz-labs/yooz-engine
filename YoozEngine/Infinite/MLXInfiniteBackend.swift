@@ -43,9 +43,11 @@ public struct InfiniteGenerationResult: Sendable {
 /// Real MLX-Swift backend for the InfiniteModule native-context path.
 ///
 /// Loads a model whose architecture the `mlx-swift-lm` fork supports
-/// (`qwen3_5_moe` today; gemma4 is gated upstream by
-/// `InfiniteModelSelection.swiftRuntimeSupported` until yooz-engine#184) and
-/// runs generation with a fresh per-call KV cache. Per-session KV reuse
+/// (`qwen3_5_moe` and Gemma4 26B-A4B today, verified vs Python mlx-lm in
+/// yooz-engine#184; the Gemma4 E4B row stays gated by
+/// `InfiniteModelSelection.swiftRuntimeSupported` on the OptiQ-quant fork-fix
+/// yooz-engine#186) and runs generation with a fresh per-call KV cache.
+/// Per-session KV reuse
 /// (append-prefill / generate-decode) is a follow-up optimization within #182;
 /// rebuilding the prefill per call is correct, just not the long-context
 /// optimum. Reuses the proven load/generate pattern from `MLXLLMBackend`.
@@ -106,7 +108,8 @@ public actor MLXInfiniteBackend {
         context: String,
         prompt: String,
         maxTokens: Int,
-        nativeContextTokens: Int
+        nativeContextTokens: Int,
+        temperature: Double = 0.7
     ) async throws -> InfiniteGenerationResult {
         #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
         let userText = context.isEmpty ? prompt : context + "\n\n" + prompt
@@ -120,7 +123,11 @@ public actor MLXInfiniteBackend {
             )
         }
 
-        let params = GenerateParameters(maxTokens: maxTokens, temperature: 0.7, topP: 0.95)
+        // temperature 0 makes MLXLMCommon select argmax (greedy) and ignore
+        // topP, giving deterministic output for the gemma4 parity test (#184).
+        let params = GenerateParameters(
+            maxTokens: maxTokens, temperature: Float(temperature), topP: 0.95
+        )
         let collected = try await container.perform { ctx -> (String, GenerateCompletionInfo?) in
             let cache = ctx.model.newCache(parameters: params)
             let stream = try MLXLMCommon.generate(

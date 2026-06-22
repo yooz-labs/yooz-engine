@@ -616,3 +616,25 @@ schemes:
           defaultPlan: true
       targets:
         - IntegrationTests
+
+  # Live gemma4 parity (#184). Separate scheme + test plan so the gate var
+  # INFINITE_LIVE=1 reaches the xctest process (xcodebuild does not propagate
+  # CLI env to the hosted test runner — see scripts/run-integration.sh). The
+  # default YoozEngine scheme never loads this plan, so CI skips the heavy
+  # model-loading test. Run locally with cached weights:
+  #   xcodebuild -project YoozEngine.xcodeproj -scheme InfiniteLive \
+  #     -skipMacroValidation -derivedDataPath build \
+  #     -destination 'platform=macOS' test
+  InfiniteLive:
+    build:
+      targets:
+        YoozEngine: all
+        YoozEngineTests: [test]
+    test:
+      config: Debug
+      gatherCoverageData: false
+      testPlans:
+        - path: TestPlans/InfiniteLive.xctestplan
+          defaultPlan: true
+      targets:
+        - YoozEngineTests
