@@ -49,7 +49,7 @@
     {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/SharpAI/mlx-swift",
+      "location" : "https://github.com/yooz-labs/mlx-swift",
       "state" : {
         "branch" : "main",
         "revision" : "35191a6c3533765ee591130159c769ff5ddbd5f4"
@@ -58,9 +58,9 @@
     {
       "identity" : "mlx-swift-lm",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/SharpAI/mlx-swift-lm",
+      "location" : "https://github.com/yooz-labs/mlx-swift-lm",
       "state" : {
-        "revision" : "38d7ff2840ab6b91a84b8f168c3cc2539f9356e1"
+        "revision" : "9c73df914777d36686f8078ed4cac700b96ad94c"
       }
     },
     {
