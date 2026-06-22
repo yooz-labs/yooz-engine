@@ -41,7 +41,7 @@ The canonical catalogue is `InfiniteModelSelection` in the engine. Consumer apps
 | `GET` | `/v1/infinite/sessions/:id` | `InfiniteSessionInfo` | Returns `404` when the session is gone. |
 | `POST` | `/v1/infinite/sessions/:id/append` | `InfiniteAppendSessionResponse` | Body: `{ "text": String }`; empty text is invalid. |
 | `POST` | `/v1/infinite/sessions/:id/checkpoint` | `InfiniteCheckpointSessionResponse` | Body: `{ "label": String? }`. |
-| `POST` | `/v1/infinite/sessions/:id/generate` | `InfiniteGenerateSessionResponse` | Returns `501 generation_unavailable` until backend inference is wired. Session state is preserved. |
+| `POST` | `/v1/infinite/sessions/:id/generate` | `InfiniteGenerateSessionResponse` | Generates from the session's accumulated context on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe` today), bounded to the model's native window (≤262K; 1M paging tracked in #180). Models without a Swift backend yet (Gemma4, retrieval) return `501 generation_unavailable` citing #184. Session state is preserved either way. |
 | `DELETE` | `/v1/infinite/sessions/:id` | `InfiniteDeleteSessionResponse` | Releases the engine-owned session. |
 
 The cleanup policy is:
@@ -79,18 +79,20 @@ try await client.infinite.append(
 try await client.infinite.checkpoint(sessionId: session.id, label: "loaded")
 ```
 
-Generation is intentionally exposed but not yet backed by inference:
+Generation runs on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`). Models without a Swift MLX backend yet (Gemma4, retrieval) throw `generation_unavailable` until the gemma4 port lands (#184):
 
 ```swift
 do {
-    _ = try await client.infinite.generate(
+    let reply = try await client.infinite.generate(
         sessionId: session.id,
         prompt: "Summarize the loaded context",
         maxTokens: 256
     )
+    print(reply.text, reply.finishReason)
+    print(reply.resources.decodeTokensPerSecond ?? 0) // measured decode throughput
 } catch YoozEngineError.serverError(_, let code, _) where code == "generation_unavailable" {
-    // Current expected boundary: backend inference is not wired yet.
-    // Branch on the stable `code`, not the bare 501 status.
+    // The active model has no Swift MLX backend yet (e.g. Gemma4 — see #184).
+    // Switch to a supported model, or branch on the stable `code`.
 }
 ```
 
@@ -109,12 +111,12 @@ try await client.infinite.deleteSession(id: session.id)
 | `physicalMemoryBytes` | Host physical memory. |
 | `wiredMemoryLimitBytes` | Process-visible wired memory ceiling used by the module. |
 | `requiredRAMTier` | RAM tier required by the active model or session model. |
-| `peakMemoryBytes` | Reserved for measured peak memory once backend inference is active. |
+| `peakMemoryBytes` | Reserved for measured peak memory. |
 | `prefillTokensPerSecond` | Reserved for measured prefill throughput. |
-| `decodeTokensPerSecond` | Reserved for measured decode throughput. |
+| `decodeTokensPerSecond` | Measured decode throughput from the last generation (populated on Swift-runtime-supported models; decode-only, from the engine's own generation stats). |
 | `draftAcceptanceRate` | Reserved for speculative decode runs. |
 
-Do not publish benchmark claims from these fields until they are populated by a real backend run. Infinite research claims must include the machine spec, peak memory, accuracy, and throughput evidence from the shared harness.
+`decodeTokensPerSecond` is populated from real runs; `peakMemoryBytes`, `prefillTokensPerSecond`, and `draftAcceptanceRate` remain reserved. Infinite research claims must still include the machine spec, peak memory, accuracy, and throughput evidence from the shared harness, not just this single live number.
 
 ## Verification
 
@@ -141,4 +143,4 @@ Consumer-style route proof:
 scripts/run-integration.sh
 ```
 
-The integration suite starts a served engine and drives Infinite through `YoozEngineClient`, including `/v1/modules`, model picker, status, create, append, fetch, checkpoint, expected `501` generation, delete, and deleted-session `404`.
+The integration suite starts a served engine and drives Infinite through `YoozEngineClient`, including `/v1/modules`, model picker, status, create, append, fetch, checkpoint, generation (`501 generation_unavailable` against the default Gemma4 model, which has no Swift backend yet — #184), delete, and deleted-session `404`.

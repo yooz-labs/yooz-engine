@@ -192,9 +192,11 @@ final class EndToEndTests: IntegrationTestCase {
                         maxTokens: 16
                     )
                 }
-                XCTFail("Infinite generate should return 501 until backend inference is wired")
+                XCTFail("Infinite generate on the default Gemma4 model should return 501 (no Swift backend yet, #184)")
             } catch YoozEngineError.serverError(let statusCode, let code, _) {
-                // Current served contract: session state is durable, inference is not wired yet.
+                // The default model is Gemma4, which has no Swift MLX backend yet
+                // (#184); generation refuses cleanly while session state stays durable.
+                // Swift-runtime-supported models (Qwen3.6 qwen3_5_moe) do generate.
                 XCTAssertEqual(statusCode, 501)
                 XCTAssertEqual(code, "generation_unavailable")
             }

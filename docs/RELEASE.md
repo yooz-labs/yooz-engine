@@ -108,8 +108,9 @@ scripts/run-integration.sh
 
 The integration suite drives the served app through `YoozEngineClient` and
 checks `/v1/modules`, `/v1/infinite/models`, `/v1/infinite/status`, session
-create/append/fetch/checkpoint/delete, expected `501 generation_unavailable`,
-and deleted-session `404`.
+create/append/fetch/checkpoint/delete, generation (`501 generation_unavailable`
+against the default Gemma4 model — no Swift backend yet, #184), and
+deleted-session `404`.
 
 ## Known limitations (A6)
 
