@@ -76,8 +76,9 @@ public actor MLXInfiniteBackend {
                 "model \(descriptor.selection.rawValue) has no model repository to load"
             )
         }
+        let repoRef = "\(repository.id)@\(repository.revision)"
         mlxInfiniteLogger.info(
-            "Loading Infinite model \(descriptor.selection.rawValue, privacy: .public) from HF \(repository.id, privacy: .public)@\(repository.revision, privacy: .public)"
+            "Loading Infinite \(descriptor.selection.rawValue, privacy: .public) from \(repoRef, privacy: .public)"
         )
         do {
             let configuration = ModelConfiguration(

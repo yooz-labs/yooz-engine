@@ -230,8 +230,9 @@ public actor InfiniteEngine {
         sessions[sessionID] = record
         let contextWindow = record.selection.maxContextTokens
         if record.estimatedInputTokens > contextWindow {
+            let detail = "~\(record.estimatedInputTokens) tokens vs \(contextWindow)-token native window for \(record.selection.rawValue)"
             infiniteEngineLogger.warning(
-                "Infinite session \(sessionID, privacy: .public) has accumulated ~\(record.estimatedInputTokens, privacy: .public) tokens against the \(contextWindow, privacy: .public)-token native window for \(record.selection.rawValue, privacy: .public); input beyond the native window is truncated at prefill (1M paging tracked in #180)."
+                "Infinite session \(sessionID, privacy: .public) over context: \(detail, privacy: .public); excess truncated at prefill (#180)."
             )
         }
         return InfiniteAppendSessionResponse(
