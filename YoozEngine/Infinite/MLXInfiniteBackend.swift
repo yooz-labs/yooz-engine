@@ -120,8 +120,7 @@ public actor MLXInfiniteBackend {
         }
 
         let params = GenerateParameters(maxTokens: maxTokens, temperature: 0.7, topP: 0.95)
-        let start = Date()
-        let collected = try await container.perform { ctx -> (String, Int) in
+        let collected = try await container.perform { ctx -> (String, GenerateCompletionInfo?) in
             let cache = ctx.model.newCache(parameters: params)
             let stream = try MLXLMCommon.generate(
                 input: preparedInput,
@@ -130,24 +129,33 @@ public actor MLXInfiniteBackend {
                 context: ctx
             )
             var text = ""
-            var count = 0
+            var info: GenerateCompletionInfo?
             for await generation in stream {
-                if case let .chunk(chunk, _) = generation {
+                switch generation {
+                case let .chunk(chunk, _):
                     text += chunk
-                    count += 1
+                case let .info(completion):
+                    info = completion
+                default:
+                    break
                 }
             }
-            return (text, count)
+            return (text, info)
         }
-        let elapsed = max(Date().timeIntervalSince(start), 0.0001)
-        let tokensPerSecond = Double(collected.1) / elapsed
-        // Approximation: each generation event ≈ one token; `count >= maxTokens`
-        // means we hit the budget rather than an EOS stop.
-        let finishReason = collected.1 >= maxTokens ? "length" : "stop"
+        // Prefer the engine's own decode-only stats (tokensPerSecond divides
+        // generationTokenCount by generateTime, excluding prefill) and exact
+        // stop reason over chunk-count proxies.
+        let info = collected.1
+        let finishReason: String
+        switch info?.stopReason {
+        case .length: finishReason = "length"
+        case .cancelled: finishReason = "cancelled"
+        case .stop, nil: finishReason = "stop"
+        }
         return InfiniteGenerationResult(
             text: collected.0,
-            tokenCount: collected.1,
-            decodeTokensPerSecond: tokensPerSecond,
+            tokenCount: info?.generationTokenCount ?? 0,
+            decodeTokensPerSecond: info?.tokensPerSecond ?? 0,
             finishReason: finishReason
         )
         #else

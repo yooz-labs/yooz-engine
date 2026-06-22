@@ -112,7 +112,9 @@ final class InfiniteModuleTests: XCTestCase {
             "set YOOZ_INFINITE_LIVE=1 to run the live MLX generation test (downloads a model)"
         )
         // A small, definitely-supported model (qwen3_5). Reuses the real load
-        // path via a descriptor; the selection label is cosmetic here.
+        // path via a descriptor. The selection label (.qwen35B1M) is cosmetic:
+        // this backend is used directly here and never stored in
+        // InfiniteEngine.loadedBackend, so the label/weights mismatch is inert.
         let descriptor = InfiniteBackendDescriptor(
             selection: .qwen35B1M,
             repository: InfiniteModelRepository(
@@ -237,11 +239,13 @@ final class InfiniteModuleTests: XCTestCase {
         XCTAssertEqual(fetched.id, created.id)
     }
 
-    func testGenerateOperationIsExplicitlyUnavailableUntilBackendInferenceLands() async throws {
+    func testGenerateRefusesModelNotSupportedBySwiftRuntime() async throws {
         guard InfiniteRAMTier.current != .belowMinimum else {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
         }
         let engine = InfiniteEngine()
+        // gemma4 passes the RAM/tier gate but has no Swift MLX backend yet,
+        // so generate must refuse cleanly and point at the gemma4 port (#184).
         _ = try await engine.setActiveModel(.gemma4E4B1M, preload: false)
         let created = try await engine.createSession(request: InfiniteCreateSessionRequest())
 
@@ -250,11 +254,9 @@ final class InfiniteModuleTests: XCTestCase {
                 sessionID: created.id,
                 request: InfiniteGenerateSessionRequest(prompt: "summarize", maxTokens: 16)
             )
-            XCTFail("generate should not report synthetic text before inference is wired")
+            XCTFail("generate should refuse a model the Swift runtime can't run")
         } catch InfiniteError.generationUnavailable(let reason) {
-            // Assert the typed case + a non-empty reason, not a phase label that
-            // changes when inference lands.
-            XCTAssertFalse(reason.isEmpty)
+            XCTAssertTrue(reason.contains("184"), "should cite the gemma4 Swift-port issue #184")
         }
 
         let status = await engine.status()

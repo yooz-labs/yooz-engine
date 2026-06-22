@@ -59,6 +59,11 @@ public actor InfiniteEngine {
     /// The real MLX backend, lazily loaded on first generate for a
     /// Swift-runtime-supported model (Phase 7).
     private var loadedBackend: MLXInfiniteBackend?
+    /// In-flight load, so concurrent first-generate calls await one load
+    /// rather than each loading the (multi-GB) model — the actor releases
+    /// isolation across the `await`, so without this two callers could both
+    /// see `loadedBackend == nil` and double-load.
+    private var loadTask: Task<MLXInfiniteBackend, Error>?
     private var lastLoadError: String?
     private var sessions: [String: SessionRecord] = [:]
     private let backendAdapter: any InfiniteBackendAdapter
@@ -77,9 +82,43 @@ public actor InfiniteEngine {
         sessions.removeAll()
         preparedBackend = nil
         loadedBackend = nil
+        loadTask?.cancel()
+        loadTask = nil
         loadedModel = nil
         lastLoadError = nil
         activeModel = .gemma4E4B1M
+    }
+
+    /// Load (or reuse) the MLX backend for `selection`, serializing concurrent
+    /// first-generate calls through a single in-flight task to avoid loading
+    /// the (multi-GB) model more than once.
+    private func loadBackend(
+        for selection: InfiniteModelSelection
+    ) async throws -> MLXInfiniteBackend {
+        if let loaded = loadedBackend, loaded.selection == selection {
+            return loaded
+        }
+        if let inFlight = loadTask,
+           let backend = try? await inFlight.value,
+           backend.selection == selection {
+            return backend
+        }
+        let task = Task { try await MLXInfiniteBackend.load(selection.descriptor) }
+        loadTask = task
+        defer { loadTask = nil }
+        do {
+            let backend = try await task.value
+            loadedBackend = backend
+            loadedModel = selection
+            lastLoadError = nil
+            return backend
+        } catch let error as InfiniteError {
+            lastLoadError = error.localizedDescription
+            throw error
+        } catch {
+            lastLoadError = error.localizedDescription
+            throw InfiniteError.modelSetFailed(error.localizedDescription)
+        }
     }
 
     public var isLoaded: Bool {
@@ -192,7 +231,7 @@ public actor InfiniteEngine {
         let contextWindow = record.selection.maxContextTokens
         if record.estimatedInputTokens > contextWindow {
             infiniteEngineLogger.warning(
-                "Infinite session \(sessionID, privacy: .public) has accumulated ~\(record.estimatedInputTokens, privacy: .public) tokens (context window: \(contextWindow, privacy: .public)) for \(record.selection.rawValue, privacy: .public); generation may truncate or refuse once backend inference is wired."
+                "Infinite session \(sessionID, privacy: .public) has accumulated ~\(record.estimatedInputTokens, privacy: .public) tokens against the \(contextWindow, privacy: .public)-token native window for \(record.selection.rawValue, privacy: .public); input beyond the native window is truncated at prefill (1M paging tracked in #180)."
             )
         }
         return InfiniteAppendSessionResponse(
@@ -225,22 +264,7 @@ public actor InfiniteEngine {
         }
 
         // Lazily load the real backend on first generate for this model.
-        let backend: MLXInfiniteBackend
-        if let loaded = loadedBackend, loaded.selection == selection {
-            backend = loaded
-        } else {
-            do {
-                backend = try await MLXInfiniteBackend.load(selection.descriptor)
-            } catch let error as InfiniteError {
-                lastLoadError = error.localizedDescription
-                throw error
-            } catch {
-                lastLoadError = error.localizedDescription
-                throw InfiniteError.modelSetFailed(error.localizedDescription)
-            }
-            loadedBackend = backend
-            loadedModel = selection
-        }
+        let backend = try await loadBackend(for: selection)
 
         let result = try await backend.generate(
             context: record.accumulatedText,
