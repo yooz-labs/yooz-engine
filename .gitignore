@@ -62,3 +62,6 @@ __pycache__/
 
 # Reference repos cloned for research (issue #10 TurboQuant)
 external/
+
+# Epic workflow state
+.claude/*.local.md

@@ -4,6 +4,9 @@ import AppleSTTModule
 #endif
 import EngineCore
 import GrammarModule
+#if canImport(InfiniteModule)
+import InfiniteModule
+#endif
 import SwiftUI
 #if canImport(LLMModule)
 import LLMModule
@@ -103,6 +106,9 @@ final class EngineAppDelegate: NSObject, NSApplicationDelegate {
     private func registerModules() async {
         #if canImport(GrammarModule)
         await ModuleRegistry.shared.register(GrammarEngine.shared)
+        #endif
+        #if canImport(InfiniteModule)
+        await ModuleRegistry.shared.register(InfiniteEngine.shared)
         #endif
         #if canImport(LLMModule)
         await ModuleRegistry.shared.register(TouchUpEngine.shared)

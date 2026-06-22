@@ -1,5 +1,8 @@
 import EngineCore
 import Hummingbird
+#if canImport(InfiniteModule)
+import InfiniteModule
+#endif
 #if canImport(LLMModule)
 import LLMModule
 #endif
@@ -25,6 +28,10 @@ struct EngineModules: Codable {
     let grammar: Bool
     let vad: Bool
     let tts: Bool
+    /// True once the Infinite long-context module is bundled and loaded.
+    /// Present on every variant; `false` where InfiniteModule isn't bundled
+    /// (Lite/Whisper) or no model is loaded yet.
+    let infinite: Bool
     let detail: ModuleDetailMap
 }
 
@@ -504,6 +511,20 @@ struct TouchUpServerResponse: ResponseCodable {
 // concern belongs here, not in LLMModule.
 extension TouchUpModelInfo: ResponseEncodable {}
 extension TouchUpModelsResponse: ResponseEncodable {}
+
+// MARK: - Infinite Picker (engine-owned long-context module)
+
+#if canImport(InfiniteModule)
+extension InfiniteModelInfo: ResponseEncodable {}
+extension InfiniteModelsResponse: ResponseEncodable {}
+extension InfiniteStatus: ResponseEncodable {}
+extension InfiniteSessionInfo: ResponseEncodable {}
+extension InfiniteSessionsResponse: ResponseEncodable {}
+extension InfiniteAppendSessionResponse: ResponseEncodable {}
+extension InfiniteGenerateSessionResponse: ResponseEncodable {}
+extension InfiniteCheckpointSessionResponse: ResponseEncodable {}
+extension InfiniteDeleteSessionResponse: ResponseEncodable {}
+#endif
 
 // MARK: - Grammar Types
 
