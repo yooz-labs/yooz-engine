@@ -27,14 +27,20 @@ public actor EngineInProcessHost {
 
     /// Register the linked engine modules. Idempotent; safe to call on every
     /// `connect()`.
+    ///
+    /// `didBootstrap` is set only AFTER all registrations complete, so the host
+    /// is never marked bootstrapped with a partial registry. `register` is
+    /// non-throwing and replaces by module name, so a second caller racing in
+    /// before the flag is set merely re-registers the same actors idempotently.
     public func bootstrap() async {
         guard !didBootstrap else { return }
-        didBootstrap = true
 
         await ModuleRegistry.shared.register(GrammarEngine.shared)
         await ModuleRegistry.shared.register(TouchUpEngine.shared)
         await ModuleRegistry.shared.register(YoozSTTEngine.shared)
         await ModuleRegistry.shared.register(AppleSTTEngine.shared)
         await ModuleRegistry.shared.register(VADEngine.shared)
+
+        didBootstrap = true
     }
 }

@@ -23,14 +23,46 @@ final class InProcessTransportTests: XCTestCase {
         XCTAssertTrue(health.modules.grammar)
     }
 
-    func testModulesManifestIncludesGrammarInProcess() async throws {
+    func testModulesManifestIncludesAllRegisteredModulesInProcess() async throws {
         let client = makeClient()
         try await client.connect()
         let modules = try await client.modules()
-        XCTAssertFalse(modules.modules.isEmpty)
+        // Every module `EngineInProcessHost.bootstrap()` registers must appear.
+        let names = Set(modules.modules.map(\.name))
+        XCTAssertTrue(
+            names.isSuperset(of: ["grammar", "llm", "stt", "apple_stt", "vad"]),
+            "expected all registered modules, got \(names.sorted())"
+        )
         let grammar = modules.modules.first { $0.name == "grammar" }
         XCTAssertNotNil(grammar, "grammar module should be registered")
         XCTAssertTrue(grammar?.loaded ?? false, "grammar should be loaded (FFI rules present)")
+    }
+
+    func testInProcessFactoryWiresInProcessTransport() {
+        let client = YoozEngineClient.inProcess()
+        XCTAssertTrue(client.transport is InProcessTransport)
+        XCTAssertEqual(client.port, 0)
+    }
+
+    func testDeleteAndWebSocketThrowUnsupportedInProcess() async throws {
+        let transport = InProcessTransport()
+
+        do {
+            _ = try await transport.delete("/v1/infinite/sessions/x")
+            XCTFail("delete should throw unsupportedInProcess")
+        } catch let error as YoozEngineError {
+            guard case .unsupportedInProcess = error else {
+                XCTFail("expected unsupportedInProcess, got \(error)")
+                return
+            }
+        }
+
+        XCTAssertThrowsError(try transport.webSocketURL(path: "v1/stt/stream")) { error in
+            guard case YoozEngineError.unsupportedInProcess = error else {
+                XCTFail("expected unsupportedInProcess, got \(error)")
+                return
+            }
+        }
     }
 
     func testGrammarCheckRoundTripsThroughTheSeam() async throws {

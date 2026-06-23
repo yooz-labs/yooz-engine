@@ -195,8 +195,27 @@ public final class InProcessTransport: EngineTransport {
                 message: "Unknown STT language '\(request.language)'"
             )
         }
+        // Unknown mode falls back to `.normal` for parity with the loopback
+        // server (APIServer `/v1/stt/batch`), which also coerces rather than 400s.
         let mode = STTModule.AudioMode(rawValue: request.mode) ?? .normal
         try await YoozSTTEngine.shared.start(language: language)
+
+        // `batchTranscribe` is non-throwing and returns `ParakeetResult.empty`
+        // when no model is loaded — indistinguishable from genuine silence. The
+        // throwing `start()` above normally guarantees a loaded model, but guard
+        // explicitly so a load-state inconsistency surfaces as an error instead
+        // of a misleading empty transcript.
+        //
+        // (When qwen3 becomes selectable in-process, this path must add the
+        // qwen3 dispatch the loopback server uses; qwen3 is not reachable
+        // in-process in Phase 2a because the backend picker is deferred.)
+        guard YoozSTTEngine.shared.isRunning else {
+            throw YoozEngineError.serverError(
+                statusCode: 503,
+                code: "stt_not_loaded",
+                message: "STT model failed to load for language '\(request.language)'"
+            )
+        }
 
         if request.aligned == true {
             let result = try await YoozSTTEngine.shared.batchTranscribeAligned(
@@ -232,7 +251,22 @@ public final class InProcessTransport: EngineTransport {
 
     private func handleLLM(_ body: Data) async throws -> Data {
         let request = try JSONDecoder().decode(LLMBody.self, from: body)
-        let modelType = LLMModelType(rawValue: request.model ?? "") ?? .yoozLight
+        // An unrecognized model name is a hard error (parity with the loopback
+        // server's `invalid_model` 400) — never a silent downgrade to Light,
+        // which would return a response whose `model` field lies about what ran.
+        let modelType: LLMModelType
+        if let name = request.model, !name.isEmpty {
+            guard let resolved = LLMModelType(rawValue: name) else {
+                throw YoozEngineError.serverError(
+                    statusCode: 400,
+                    code: "invalid_model",
+                    message: "Unknown LLM model '\(name)'"
+                )
+            }
+            modelType = resolved
+        } else {
+            modelType = .yoozLight
+        }
         let text = try await TouchUpEngine.shared.generate(
             prompt: request.prompt,
             systemPrompt: request.systemPrompt ?? "",
