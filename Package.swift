@@ -52,7 +52,7 @@ let package = Package(
         // toolchain. Kept in lockstep with project.yml.
         .package(
             url: "https://github.com/ml-explore/mlx-swift",
-            .upToNextMinor(from: "0.31.4")
+            exact: "0.31.4"
         ),
         // Phase 4: Qwen3 text decoder + tokenizer-aware chat template
         // are reused from mlx-swift-lm + swift-transformers. The
