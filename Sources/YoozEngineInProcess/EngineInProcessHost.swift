@@ -16,7 +16,7 @@ import VADModule
 /// module target.
 ///
 /// Infinite is intentionally absent: its consumer is the loopback super-yooz
-/// host, and the in-process transport reports `unsupportedInProcess` for that
+/// host, and the in-process transport reports `unsupportedOperation` for that
 /// API (epic #192).
 public actor EngineInProcessHost {
     public static let shared = EngineInProcessHost()

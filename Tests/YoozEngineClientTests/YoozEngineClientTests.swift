@@ -1093,6 +1093,6 @@ private final class SpyTransport: EngineTransport, @unchecked Sendable {
 
     @available(macOS 14.0, iOS 17.0, *)
     func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
-        throw YoozEngineError.unsupportedInProcess(operation: "spy stream")
+        throw YoozEngineError.unsupportedOperation(operation: "spy stream")
     }
 }
