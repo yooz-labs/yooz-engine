@@ -14,6 +14,8 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
     public let port = 0
 
     private let connection: NSXPCConnection
+    /// Client-exported callback router the service pushes streaming results to.
+    private let streamClient = XPCStreamClient()
 
     /// Connect to a sandboxed XPC service by name
     /// (`Contents/XPCServices/<serviceName>.xpc`). `codeSigningRequirement`, when
@@ -31,6 +33,14 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
     /// tests and by callers that build the connection themselves.
     public init(connection: NSXPCConnection) {
         connection.remoteObjectInterface = NSXPCInterface(with: YoozEngineXPCProtocol.self)
+        // Bidirectional: export the streaming callback so the service can push
+        // results back (harmless for the request-only path). Fail any in-flight
+        // streams if the connection drops.
+        connection.exportedInterface = NSXPCInterface(with: YoozEngineXPCStreamClientProtocol.self)
+        let streamClient = self.streamClient
+        connection.exportedObject = streamClient
+        connection.interruptionHandler = { streamClient.finishAll(error: YoozEngineError.engineNotReachable) }
+        connection.invalidationHandler = { streamClient.finishAll(error: YoozEngineError.engineNotReachable) }
         self.connection = connection
         connection.resume()
     }
@@ -65,7 +75,44 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
 
     @available(macOS 14.0, iOS 17.0, *)
     public func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
-        throw YoozEngineError.unsupportedOperation(operation: "XPC streaming STT (epic #192 Phase 3b)")
+        // Generate the id and register the receiving session BEFORE telling the
+        // service to open, so an immediate partial from a fast backend routes
+        // even if it arrives before this call returns.
+        let streamID = UUID().uuidString
+        let session = XPCSTTStreamSession(streamID: streamID, connection: connection)
+        streamClient.register(session, for: streamID)
+        do {
+            try await openStream(streamID: streamID, language: language, mode: mode)
+        } catch {
+            streamClient.unregister(streamID)
+            throw error
+        }
+        return session
+    }
+
+    private func openStream(streamID: String, language: String, mode: String) async throws {
+        let state = SendState<Void>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard state.register(continuation) else { return }
+                let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                    state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
+                }
+                guard let service = proxy as? YoozEngineXPCProtocol else {
+                    state.resume(.failure(YoozEngineError.engineNotReachable))
+                    return
+                }
+                service.openSTTStream(streamID: streamID, language: language, mode: mode) { error in
+                    if let error {
+                        state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
+                    } else {
+                        state.resume(.success(()))
+                    }
+                }
+            }
+        } onCancel: {
+            state.cancel()
+        }
     }
 
     private func send(_ method: String, _ path: String, _ body: Data?) async throws -> Data {
@@ -73,7 +120,7 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
         // the proxy error handler, the reply block, AND task cancellation (which
         // NSXPCConnection does not surface on its own — without this a cancelled
         // caller would leak the continuation, trapping on dealloc).
-        let state = SendState()
+        let state = SendState<Data>()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
                 guard state.register(continuation) else {
@@ -106,15 +153,15 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
 
 /// Resolves a single XPC request's continuation exactly once, whether the
 /// outcome arrives from XPC (reply / error handler) or from task cancellation.
-private final class SendState: @unchecked Sendable {
+private final class SendState<Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<Data, Error>?
+    private var continuation: CheckedContinuation<Value, Error>?
     private var resumed = false
     private var cancelledEarly = false
 
     /// Register the continuation. Returns false (and resumes with
     /// `CancellationError`) if cancellation already fired before registration.
-    func register(_ continuation: CheckedContinuation<Data, Error>) -> Bool {
+    func register(_ continuation: CheckedContinuation<Value, Error>) -> Bool {
         lock.lock()
         if cancelledEarly {
             lock.unlock()
@@ -126,7 +173,7 @@ private final class SendState: @unchecked Sendable {
         return true
     }
 
-    func resume(_ result: Result<Data, Error>) {
+    func resume(_ result: Result<Value, Error>) {
         lock.lock()
         guard !resumed, let continuation else { lock.unlock(); return }
         resumed = true
