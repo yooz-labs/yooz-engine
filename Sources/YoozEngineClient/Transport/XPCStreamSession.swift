@@ -85,12 +85,15 @@ final class XPCStreamClient: NSObject, YoozEngineXPCStreamClientProtocol, @unche
     }
 
     func streamDidProduce(streamID: String, resultData: Data) {
+        // Single lookup so a concurrent streamDidFinish/finishAll can't change the
+        // session between the decode-failure branch and delivery.
+        guard let session = session(streamID) else { return }
         guard let result = try? JSONDecoder().decode(StreamingSTTResult.self, from: resultData) else {
             // A malformed result is a real failure, not something to drop silently.
-            session(streamID)?.finish(error: YoozEngineError.decodingError("Malformed streaming result over XPC"))
+            session.finish(error: YoozEngineError.decodingError("Malformed streaming result over XPC"))
             return
         }
-        session(streamID)?.deliver(result)
+        session.deliver(result)
     }
 
     func streamDidFinish(streamID: String, error: Error?) {

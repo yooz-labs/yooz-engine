@@ -29,11 +29,17 @@ import Foundation
     // returns the id; audio flows in as chunked `Data`; results flow back via the
     // callback until `closeStream`.
 
-    /// Open a streaming STT session; replies with a `streamID` (or an error).
+    /// Open a streaming STT session under a client-generated `streamID`.
+    ///
+    /// The client registers its receiving session under `streamID` BEFORE
+    /// calling this, so a fast backend that produces a partial immediately can't
+    /// race the registration (the result routes regardless). Replies with an
+    /// error on failure, or `nil` on success.
     func openSTTStream(
+        streamID: String,
         language: String,
         mode: String,
-        withReply reply: @escaping (String?, Error?) -> Void
+        withReply reply: @escaping (Error?) -> Void
     )
 
     /// Feed Float32-at-16kHz PCM (little-endian bytes) into the stream.

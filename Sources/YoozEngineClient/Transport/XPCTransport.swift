@@ -75,16 +75,25 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
 
     @available(macOS 14.0, iOS 17.0, *)
     public func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
-        let streamID = try await openStream(language: language, mode: mode)
+        // Generate the id and register the receiving session BEFORE telling the
+        // service to open, so an immediate partial from a fast backend routes
+        // even if it arrives before this call returns.
+        let streamID = UUID().uuidString
         let session = XPCSTTStreamSession(streamID: streamID, connection: connection)
         streamClient.register(session, for: streamID)
+        do {
+            try await openStream(streamID: streamID, language: language, mode: mode)
+        } catch {
+            streamClient.unregister(streamID)
+            throw error
+        }
         return session
     }
 
-    private func openStream(language: String, mode: String) async throws -> String {
-        let state = SendState<String>()
+    private func openStream(streamID: String, language: String, mode: String) async throws {
+        let state = SendState<Void>()
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 guard state.register(continuation) else { return }
                 let proxy = connection.remoteObjectProxyWithErrorHandler { error in
                     state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
@@ -93,13 +102,11 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
                     state.resume(.failure(YoozEngineError.engineNotReachable))
                     return
                 }
-                service.openSTTStream(language: language, mode: mode) { streamID, error in
+                service.openSTTStream(streamID: streamID, language: language, mode: mode) { error in
                     if let error {
                         state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
-                    } else if let streamID {
-                        state.resume(.success(streamID))
                     } else {
-                        state.resume(.failure(YoozEngineError.invalidResponse))
+                        state.resume(.success(()))
                     }
                 }
             }

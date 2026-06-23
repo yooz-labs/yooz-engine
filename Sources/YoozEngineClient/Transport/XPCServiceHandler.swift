@@ -59,24 +59,24 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
     // MARK: - Streaming (epic #192 Phase 3b)
 
     public func openSTTStream(
+        streamID: String,
         language: String,
         mode: String,
-        withReply reply: @escaping (String?, Error?) -> Void
+        withReply reply: @escaping (Error?) -> Void
     ) {
         // Capture the connection now — `NSXPCConnection.current()` is only valid
         // inside an incoming call, not later from the drain task.
         guard let connection = NSXPCConnection.current() else {
-            reply(nil, XPCErrorBridge.toNSError(YoozEngineError.engineNotReachable))
+            reply(XPCErrorBridge.toNSError(YoozEngineError.engineNotReachable))
             return
         }
         let transport = self.transport
         Task { [weak self] in
             do {
                 let session = try await transport.openSTTStream(language: language, mode: mode)
-                let streamID = UUID().uuidString
                 guard let self else {
                     session.close()
-                    reply(nil, XPCErrorBridge.toNSError(YoozEngineError.engineNotReachable))
+                    reply(XPCErrorBridge.toNSError(YoozEngineError.engineNotReachable))
                     return
                 }
                 let drainTask = Task { [weak self] in
@@ -87,9 +87,9 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
                     StreamEntry(session: session, connection: connection, drainTask: drainTask),
                     id: streamID
                 )
-                reply(streamID, nil)
+                reply(nil)
             } catch {
-                reply(nil, XPCErrorBridge.toNSError(error))
+                reply(XPCErrorBridge.toNSError(error))
             }
         }
     }
@@ -104,10 +104,11 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
             do {
                 try await session.sendAudio(samples)
             } catch {
-                // A send error surfaces to the client through the drain's
-                // receive() path when the session finalizes; log it here so a
-                // mid-stream feed failure is observable.
-                logger.debug("xpc: sendAudio(\(streamID, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+                // A feed failure must end the stream rather than silently drop
+                // audio: close the session so the drain delivers a terminal
+                // result instead of leaving a ghost stream.
+                logger.error("xpc: sendAudio(\(streamID, privacy: .public)) failed — closing stream: \(error.localizedDescription, privacy: .public)")
+                session.close()
             }
         }
     }
@@ -121,16 +122,41 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
         session?.close()
     }
 
+    /// Cancel + close every active stream — called when the client connection
+    /// drops, so orphaned drain tasks and engine sessions don't leak.
+    public func cancelAllStreams() {
+        streamLock.lock()
+        let entries = streams
+        streams.removeAll()
+        streamLock.unlock()
+        for entry in entries.values {
+            entry.drainTask.cancel()
+            entry.session.close()
+        }
+    }
+
     /// Drains a session's results to the client callback over `connection`.
     private func drain(streamID: String, session: any STTStreamSession, connection: NSXPCConnection) async {
-        let callback = connection.remoteObjectProxy as? YoozEngineXPCStreamClientProtocol
+        let encoder = JSONEncoder()
+        // Error handler: if the callback connection fails, stop draining and
+        // release the session (otherwise the drain runs to completion pushing
+        // results into a dead connection).
+        let proxy = connection.remoteObjectProxyWithErrorHandler { [weak self] error in
+            self?.logger.error("xpc: stream \(streamID, privacy: .public) callback failed: \(error.localizedDescription, privacy: .public)")
+            self?.cancelAndRemoveStream(streamID)
+        }
+        let callback = proxy as? YoozEngineXPCStreamClientProtocol
         do {
             while let result = try await session.receive() {
-                let data = (try? JSONEncoder().encode(result)) ?? Data()
+                // A `StreamingSTTResult` is plain Codable strings; let an encode
+                // failure surface as a stream error rather than pushing empty Data
+                // (which the client would mis-report as a decode error).
+                let data = try encoder.encode(result)
                 callback?.streamDidProduce(streamID: streamID, resultData: data)
             }
             callback?.streamDidFinish(streamID: streamID, error: nil)
         } catch {
+            logger.error("xpc: drain \(streamID, privacy: .public) error: \(error.localizedDescription, privacy: .public)")
             callback?.streamDidFinish(streamID: streamID, error: XPCErrorBridge.toNSError(error))
         }
         removeStream(streamID)
@@ -146,6 +172,15 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
         streamLock.lock()
         streams[streamID] = nil
         streamLock.unlock()
+    }
+
+    private func cancelAndRemoveStream(_ streamID: String) {
+        streamLock.lock()
+        let entry = streams[streamID]
+        streams[streamID] = nil
+        streamLock.unlock()
+        entry?.drainTask.cancel()
+        entry?.session.close()
     }
 
     /// Decode Float32 little-endian PCM bytes into `[Float]` (alignment-safe).
@@ -194,23 +229,25 @@ public final class XPCServiceListenerDelegate: NSObject, NSXPCListenerDelegate, 
         _ listener: NSXPCListener,
         shouldAcceptNewConnection newConnection: NSXPCConnection
     ) -> Bool {
+        let handler = makeHandler()
         newConnection.exportedInterface = NSXPCInterface(with: YoozEngineXPCProtocol.self)
-        newConnection.exportedObject = makeHandler()
+        newConnection.exportedObject = handler
         // The service pushes streaming results back to the client's exported
         // callback object, so the connection's remote interface must be the
         // client-callback protocol. Without this, `connection.remoteObjectProxy`
         // on the service side resolves to nothing and streaming callbacks are
         // dropped (the client's receive() would hang).
         newConnection.remoteObjectInterface = NSXPCInterface(with: YoozEngineXPCStreamClientProtocol.self)
-        // Surface lifecycle events so a mid-request peer drop isn't silent — any
-        // engine work already in flight on the service side runs to completion
-        // but with no one waiting; logging makes that observable.
+        // On peer drop, cancel + close the handler's active streams so orphaned
+        // drain tasks and engine sessions don't leak (and log the event).
         let logger = self.logger
         newConnection.interruptionHandler = {
             logger.debug("xpc: connection interrupted (peer crashed or restarted)")
+            handler.cancelAllStreams()
         }
         newConnection.invalidationHandler = {
             logger.debug("xpc: connection invalidated")
+            handler.cancelAllStreams()
         }
         newConnection.resume()
         return true
