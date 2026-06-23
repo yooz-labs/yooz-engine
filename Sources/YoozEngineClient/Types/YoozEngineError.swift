@@ -20,6 +20,12 @@ public enum YoozEngineError: LocalizedError, Sendable, Equatable {
     case serverError(statusCode: Int, code: String, message: String)
     case decodingError(String)
     case webSocketError(String)
+    /// The active transport cannot serve this operation. Raised by the
+    /// in-process transport for endpoints it does not implement yet — chiefly
+    /// streaming STT (epic #192 Phase 2b) and the Infinite long-context API
+    /// (whose consumer is the loopback super-yooz host). `operation` names the
+    /// path/feature so the caller can fall back or surface a clear message.
+    case unsupportedInProcess(operation: String)
 
     public var errorDescription: String? {
         switch self {
@@ -44,6 +50,10 @@ public enum YoozEngineError: LocalizedError, Sendable, Equatable {
             return "Failed to decode response: \(message)"
         case .webSocketError(let message):
             return "WebSocket error: \(message)"
+        case .unsupportedInProcess(let operation):
+            return "Operation '\(operation)' is not available on the in-process "
+                + "engine transport yet. Use the loopback (HTTP) transport, or "
+                + "wait for the in-process implementation."
         }
     }
 }

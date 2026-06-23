@@ -21,6 +21,18 @@ public struct LLMGenerateResponse: Codable, Sendable {
     public let model: String
     public let tokensGenerated: Int?
     public let processingTimeMs: Int?
+
+    public init(
+        text: String,
+        model: String,
+        tokensGenerated: Int? = nil,
+        processingTimeMs: Int? = nil
+    ) {
+        self.text = text
+        self.model = model
+        self.tokensGenerated = tokensGenerated
+        self.processingTimeMs = processingTimeMs
+    }
 }
 
 // MARK: - Model management
