@@ -39,7 +39,7 @@ public enum EngineConfig {
     }
 
     public static let host: String = "127.0.0.1"
-    public static let version: String = "0.6.0"
+    public static let version: String = "0.7.0"
 
     /// Convenience accessor for the active build variant. Mirrors
     /// `BuildVariant.current` so callers reading other engine config
