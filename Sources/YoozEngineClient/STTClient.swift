@@ -286,6 +286,13 @@ public final class STTStream: @unchecked Sendable {
         self.session = session
     }
 
+    deinit {
+        // Release transport resources if the caller dropped the stream without
+        // calling close() — cancels the WebSocket (loopback) or finalizes the
+        // engine transcriber / Apple buffer (in-process). close() is idempotent.
+        session.close()
+    }
+
     /// Send audio samples (Float32 at 16kHz) to the engine.
     public func sendAudio(_ samples: [Float]) async throws {
         try await session.sendAudio(samples)

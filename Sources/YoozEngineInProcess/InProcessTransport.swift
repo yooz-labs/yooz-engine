@@ -119,11 +119,19 @@ public final class InProcessTransport: EngineTransport {
                 message: "Unknown STT language '\(language)'"
             )
         }
+        // Unknown mode falls back to .normal for parity with the loopback WS
+        // handler (which also coerces). normal/whispered are the only cases and
+        // share rawValues across the SDK and engine enums.
         let audioMode = STTModule.AudioMode(rawValue: mode) ?? .normal
 
         switch YoozSTTEngine.shared.currentBackend {
         case .appleSTT:
-            let appleLang = AppleSTTLanguage.from(rawCode: language) ?? .english
+            guard let appleLang = AppleSTTLanguage.from(rawCode: language) else {
+                throw YoozEngineError.serverError(
+                    statusCode: 400, code: "invalid_language",
+                    message: "Language '\(language)' is not supported by Apple STT"
+                )
+            }
             try await AppleSTTEngine.shared.start(language: appleLang)
             return InProcessSTTStreamSession(backend: .apple(AppleSTTEngine.shared))
 
@@ -442,6 +450,10 @@ public final class InProcessTransport: EngineTransport {
     private func handleLLMModels() async throws -> Data {
         let models = await TouchUpEngine.shared.availableModels()
         let active = await TouchUpEngine.shared.activeModel
+        // `LLMModelInfo.loaded` is a Bool, so the engine's four-state lifecycle
+        // collapses here: `.cached` (on disk, not resident) reports `loaded:false`.
+        // This matches the SDK type; the full lifecycle is on the TouchUp picker
+        // (`/v1/touchup/models` -> `TouchUpModelInfo.loadState`).
         let available = models.map {
             SDKLLMModelInfo(
                 id: $0.id, displayName: $0.displayName,
@@ -465,25 +477,35 @@ public final class InProcessTransport: EngineTransport {
         let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         try await TouchUpEngine.shared.preloadModel(modelType)
-        return try JSONEncoder().encode(llmModelInfo(modelType, loaded: true))
+        return try JSONEncoder().encode(await llmModelInfo(modelType))
     }
 
     private func handleLLMUnload(_ body: Data) async throws -> Data {
         let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         await TouchUpEngine.shared.unload(modelType)
-        return try JSONEncoder().encode(llmModelInfo(modelType, loaded: false))
+        return try JSONEncoder().encode(await llmModelInfo(modelType))
     }
 
     private func handleTouchUp(_ body: Data) async throws -> Data {
         let request = try JSONDecoder().decode(TouchUpBody.self, from: body)
-        let engineMode = LLMModule.TouchUpMode(rawValue: request.mode) ?? .standard
+        // The requested mode is explicit caller intent (off/light/standard/full),
+        // not a forward-compat wire value — an unknown mode is a hard error, never
+        // a silent run at a different cleanup level. (Both enums share rawValues.)
+        guard let engineMode = LLMModule.TouchUpMode(rawValue: request.mode),
+              let sdkMode = SDKTouchUpMode(rawValue: request.mode)
+        else {
+            throw YoozEngineError.serverError(
+                statusCode: 400, code: "invalid_mode",
+                message: "Unknown TouchUp mode '\(request.mode)'"
+            )
+        }
         let result = await TouchUpEngine.shared.process(
             text: request.text, mode: engineMode, replacements: []
         )
         let response = SDKTouchUpResponse(
             result: result.text,
-            mode: SDKTouchUpMode(rawValue: request.mode) ?? .standard,
+            mode: sdkMode,
             processingTimeMs: Int(result.latencyMs),
             modelUsed: result.modelUsed.rawValue,
             warnings: result.fallbackReason.map { [$0] }
@@ -527,10 +549,21 @@ public final class InProcessTransport: EngineTransport {
         return modelType
     }
 
-    private func llmModelInfo(_ modelType: LLMModelType, loaded: Bool) -> SDKLLMModelInfo {
-        SDKLLMModelInfo(
+    /// Real post-operation model info for the preload/unload responses: re-query
+    /// `availableModels()` so `displayName` / `sizeBytes` / `loaded` reflect the
+    /// actual state rather than a fabricated row.
+    private func llmModelInfo(_ modelType: LLMModelType) async -> SDKLLMModelInfo {
+        let models = await TouchUpEngine.shared.availableModels()
+        if let match = models.first(where: { $0.id == modelType.rawValue }) {
+            return SDKLLMModelInfo(
+                id: match.id, displayName: match.displayName,
+                sizeBytes: match.sizeBytes, loaded: match.loadState == .loaded,
+                latencyHintMs: nil
+            )
+        }
+        return SDKLLMModelInfo(
             id: modelType.rawValue, displayName: modelType.rawValue,
-            sizeBytes: nil, loaded: loaded, latencyHintMs: nil
+            sizeBytes: nil, loaded: false, latencyHintMs: nil
         )
     }
 

@@ -74,11 +74,49 @@ final class InProcessSTTStreamSession: STTStreamSession, @unchecked Sendable {
             if let pendingError { throw pendingError }
             return nil
         }
+        lock.unlock()
+
         // No data yet and not finished: suspend until the next deliver/finish.
         // Single consumer, so at most one waiter exists at a time.
-        return try await withCheckedThrowingContinuation { continuation in
-            waiter = continuation
+        // `withTaskCancellationHandler` (plus the in-closure re-checks) makes
+        // this cancellation-safe: a consumer whose task is cancelled while
+        // suspended is resumed with `CancellationError` rather than leaking the
+        // continuation (which would trap on deallocation).
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                // Re-check under the lock: deliver/finish may have run between
+                // the unlock above and here.
+                if !queue.isEmpty {
+                    let result = queue.removeFirst()
+                    lock.unlock()
+                    continuation.resume(returning: result)
+                    return
+                }
+                if finished {
+                    let pendingError = failure
+                    lock.unlock()
+                    if let pendingError {
+                        continuation.resume(throwing: pendingError)
+                    } else {
+                        continuation.resume(returning: nil)
+                    }
+                    return
+                }
+                if Task.isCancelled {
+                    lock.unlock()
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                waiter = continuation
+                lock.unlock()
+            }
+        } onCancel: {
+            lock.lock()
+            let pending = waiter
+            waiter = nil
             lock.unlock()
+            pending?.resume(throwing: CancellationError())
         }
     }
 
