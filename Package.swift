@@ -52,6 +52,8 @@ let package = Package(
         .library(name: "EngineCore", targets: ["EngineCore"]),
         .library(name: "AppleSTTModule", targets: ["AppleSTTModule"]),
         .library(name: "VADModule", targets: ["VADModule"]),
+        .library(name: "LLMModule", targets: ["LLMModule"]),
+        .library(name: "GrammarModule", targets: ["GrammarModule"]),
     ],
     dependencies: [
         // mlx-swift 0.31.4 release (what mlx-swift-lm main declares). Pin the
@@ -75,7 +77,13 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/huggingface/swift-transformers",
-            from: "1.1.6"
+            "1.2.0" ..< "1.3.0"
+        ),
+        // swift-huggingface (HubClient) — used by the #huggingFaceTokenizerLoader
+        // macro that LLM/Infinite expand. Matches project.yml.
+        .package(
+            url: "https://github.com/huggingface/swift-huggingface",
+            "0.9.0" ..< "0.10.0"
         ),
     ],
     targets: [
@@ -98,6 +106,40 @@ let package = Package(
             name: "VADModule",
             dependencies: ["EngineCore"],
             path: "YoozEngine/VAD"
+        ),
+        // LLM + TouchUp are mutually referential (one module in xcodegen), so a
+        // single SPM target spans both dirs. The #huggingFaceTokenizerLoader
+        // macro builds natively under SwiftPM (the xcodegen-only
+        // -skipMacroValidation flag is an xcodebuild flag, not a swiftc one, and
+        // isn't needed here), so this stays a usable versioned dependency.
+        .target(
+            name: "LLMModule",
+            dependencies: [
+                "EngineCore",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Hub", package: "swift-transformers"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+            ],
+            path: "YoozEngine",
+            sources: ["LLM", "TouchUp"]
+        ),
+        // Grammar depends on the vendored Rust text-cleanup xcframework. It's
+        // gitignored; for external consumers it must be hosted as a remote
+        // .binaryTarget(url:checksum:) (publish like the helper release) —
+        // tracked as a follow-up. Local path here proves the in-repo integration.
+        .target(
+            name: "GrammarModule",
+            dependencies: ["EngineCore", "YoozTextCleanup"],
+            path: "YoozEngine/Grammar"
+        ),
+        .binaryTarget(
+            name: "YoozTextCleanup",
+            path: "Vendor/YoozTextCleanup/YoozTextCleanup.xcframework"
         ),
         .target(
             name: "Qwen3ASRMelFrontend",
