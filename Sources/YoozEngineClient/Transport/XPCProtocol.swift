@@ -20,6 +20,41 @@ import Foundation
         body: Data?,
         withReply reply: @escaping (Data?, Error?) -> Void
     )
+
+    // MARK: - Streaming STT (epic #192 Phase 3b)
+    //
+    // A reply block fires once-and-only-once, so streaming uses a bidirectional
+    // callback proxy: the client exports a `YoozEngineXPCStreamClientProtocol`,
+    // the service pushes results to it keyed by `streamID`. `openSTTStream`
+    // returns the id; audio flows in as chunked `Data`; results flow back via the
+    // callback until `closeStream`.
+
+    /// Open a streaming STT session; replies with a `streamID` (or an error).
+    func openSTTStream(
+        language: String,
+        mode: String,
+        withReply reply: @escaping (String?, Error?) -> Void
+    )
+
+    /// Feed Float32-at-16kHz PCM (little-endian bytes) into the stream.
+    /// Fire-and-forget; results arrive via the client callback.
+    func sendAudio(streamID: String, data: Data)
+
+    /// Finalize and close the stream. The service delivers the `final` result
+    /// (if any) then a `streamDidFinish` callback.
+    func closeStream(streamID: String)
+}
+
+/// Client-exported callback the service pushes streaming results to (epic #192
+/// Phase 3b). Set as the connection's `exportedObject` so the service can call
+/// back. Results are JSON-encoded `StreamingSTTResult`; errors are `NSError`
+/// (bridged from `YoozEngineError`).
+@objc public protocol YoozEngineXPCStreamClientProtocol {
+    /// A partial/final `StreamingSTTResult` (JSON `Data`) for `streamID`.
+    func streamDidProduce(streamID: String, resultData: Data)
+
+    /// The stream ended: `error == nil` is a clean close, otherwise the failure.
+    func streamDidFinish(streamID: String, error: Error?)
 }
 
 /// Maps `YoozEngineError` to/from `NSError` so the SDK's typed errors survive the
