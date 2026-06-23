@@ -47,8 +47,10 @@ let package = Package(
         .library(name: "Qwen3ASR", targets: ["Qwen3ASR"]),
 
         // Engine modules exposed for in-process linking by standalone App Store
-        // apps (epic #192). Same source files the xcodegen helper-`.app` targets
-        // ingest via project.yml, so SwiftPM and xcodegen share one source of truth.
+        // apps (epic #192). Same source dirs the xcodegen module-framework targets
+        // (STTModule, LLMModule, …) ingest via project.yml — the app targets
+        // (YoozEngine*) exclude those dirs and just link the frameworks — so
+        // SwiftPM and xcodegen share one source of truth.
         .library(name: "EngineCore", targets: ["EngineCore"]),
         .library(name: "AppleSTTModule", targets: ["AppleSTTModule"]),
         .library(name: "VADModule", targets: ["VADModule"]),
@@ -129,10 +131,12 @@ let package = Package(
             path: "YoozEngine",
             sources: ["LLM", "TouchUp"]
         ),
-        // Grammar depends on the vendored Rust text-cleanup xcframework. It's
-        // gitignored; for external consumers it must be hosted as a remote
-        // .binaryTarget(url:checksum:) (publish like the helper release) —
-        // tracked as a follow-up. Local path here proves the in-repo integration.
+        // Grammar depends on the vendored Rust text-cleanup xcframework. The whole
+        // Vendor/ tree is gitignored (build output, regenerated from the Rust
+        // source), so on a clean checkout this path is absent and `swift build`
+        // fails until the xcframework is built. For external consumers it must
+        // become a remote .binaryTarget(url:checksum:) (publish like the helper
+        // release) — tracked as a follow-up. Local path proves the in-repo integration.
         .target(
             name: "GrammarModule",
             dependencies: ["EngineCore", "YoozTextCleanup"],
@@ -143,9 +147,11 @@ let package = Package(
             path: "Vendor/YoozTextCleanup/YoozTextCleanup.xcframework"
         ),
         // STTModule is the whole YoozEngine/STT EXCEPT Models/Qwen3ASR, which
-        // stays its own target (re-used by the headless parity tests). The STT
-        // engine references Qwen3ASR types (public, one-directional), bridged by
-        // a `#if canImport(Qwen3ASR)` import in the few referencing files.
+        // stays its own SPM target so the 606 MB parity tests can run headlessly
+        // via `swift test` (see the file-header comment for why xcodebuild
+        // deadlocks). The STT engine references Qwen3ASR types (public,
+        // one-directional), bridged by a `#if canImport(Qwen3ASR)` import in the
+        // few referencing files.
         .target(
             name: "STTModule",
             dependencies: [

@@ -2,8 +2,9 @@
 
 import EngineCore
 import Foundation
-// SPM exposes Qwen3ASR as its own module; xcodegen compiles it into STTModule
-// (canImport is false there). Conditional import bridges both (epic #192).
+// Under SPM, Qwen3ASR is its own module (canImport true, import needed). Under
+// xcodegen its sources compile into STTModule (canImport false, already in
+// scope). The conditional handles both builds (epic #192).
 #if canImport(Qwen3ASR)
     import Qwen3ASR
 #endif
