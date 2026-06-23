@@ -150,7 +150,7 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
             while let result = try await session.receive() {
                 // A `StreamingSTTResult` is plain Codable strings; let an encode
                 // failure surface as a stream error rather than pushing empty Data
-                // (which the client would mis-report as a decode error).
+                // (which the client would misreport as a decode error).
                 let data = try encoder.encode(result)
                 callback?.streamDidProduce(streamID: streamID, resultData: data)
             }
