@@ -71,6 +71,26 @@ final class InProcessLiveModelTests: XCTestCase {
         XCTAssertTrue(status.loaded, "model should be loaded after a batch transcribe")
     }
 
+    /// Explicit pre-load via `/v1/stt/load` (the route Whisper's `preloadModel`
+    /// drives at launch). Proves the in-process transport pre-warms the model
+    /// and returns a loaded status without first running a transcribe — i.e. the
+    /// endpoint is no longer `unsupportedOperation` in-process.
+    func testInProcessLoadModelPrewarmsAndReportsLoaded() async throws {
+        try XCTSkipUnless(sttEnabled,
+                          "Set YOOZ_STT_LOAD_MODELS=1 to exercise the in-process Parakeet load path")
+        let client = makeClient()
+        try await client.connect()
+
+        // Blocking pre-load (`/v1/stt/load?wait=true`) — must return a fully
+        // loaded status, not throw unsupportedOperation.
+        let loaded = try await client.stt.loadModel(language: .english)
+        XCTAssertTrue(loaded.loaded, "loadModel must return a loaded status in-process")
+
+        // Status endpoint agrees the model is warm before any transcribe ran.
+        let status = try await client.stt.status()
+        XCTAssertTrue(status.loaded, "model should remain loaded after explicit pre-load")
+    }
+
     func testInProcessAlignedTranscribeKeepsTokensInWindow() async throws {
         try XCTSkipUnless(sttEnabled,
                           "Set YOOZ_STT_LOAD_MODELS=1 to exercise the in-process aligned path")

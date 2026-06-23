@@ -14,17 +14,19 @@ import YoozEngineClient
 /// `YoozEngineClient(transport: InProcessTransport())`, and gets the identical
 /// SDK API in-sandbox.
 ///
-/// ## Scope (Phase 2a)
+/// ## Scope
 ///
-/// Implemented (non-streaming app surface): `GET /v1/health`, `GET /v1/modules`,
-/// `POST /v1/grammar/check`, `POST /v1/vad/detect`, `POST /v1/stt/batch`,
-/// `POST /v1/llm/generate`.
+/// Implemented (the full standalone-app surface): `GET /v1/health`,
+/// `GET /v1/modules`; STT `GET /v1/stt/{status,languages,engine}`,
+/// `POST /v1/stt/{batch,engine,load}`, and streaming via `openSTTStream`;
+/// `POST /v1/grammar/check`; `POST /v1/vad/detect`; LLM
+/// `GET /v1/llm/{status,models}`, `POST /v1/llm/{generate,model,preload,unload}`;
+/// TouchUp `GET /v1/touchup/models`, `POST /v1/touchup{,/model}`.
 ///
-/// Reported as `unsupportedOperation` until a later cut:
-///   - **Streaming STT** (`webSocketURL`) — Phase 2b.
-///   - **Pickers / status / load** (`/v1/stt/engine`, `/v1/stt/status`,
-///     `/v1/stt/load`, `/v1/stt/languages`, `/v1/llm/*` model management,
-///     `/v1/touchup*`) — a Phase 2a follow-up.
+/// Reported as `unsupportedOperation`:
+///   - **Streaming qwen3 preview** — loopback/dev only (unstable; engine#154).
+///   - **Per-recording session reset** (`/v1/session/*`) — the in-process
+///     consumer resets module state directly; not yet routed here.
 ///   - **Infinite** (`/v1/infinite/*`) — its consumer is the loopback host.
 ///
 /// Each handler decodes the same wire body the SDK sub-client encoded and emits
@@ -86,6 +88,8 @@ public final class InProcessTransport: EngineTransport {
             return try await handleVAD(body)
         case "/v1/stt/batch":
             return try await handleBatch(body)
+        case "/v1/stt/load":
+            return try await handleSTTLoad(body)
         case "/v1/stt/engine":
             return try await handleSetSTTEngine(body)
         case "/v1/llm/generate":
@@ -308,6 +312,41 @@ public final class InProcessTransport: EngineTransport {
             tokens: nil
         )
         return try JSONEncoder().encode(response)
+    }
+
+    /// Pre-load the active backend's STT model for a language and return the
+    /// resulting status. Backs both `loadModel` (`/v1/stt/load?wait=true`) and
+    /// `loadModelAsync` (`/v1/stt/load`): in-process there is no HTTP timeout to
+    /// dodge, so there is no async dispatch — `route()` strips the query and we
+    /// always load synchronously before returning a fully-loaded status. The
+    /// backend switch mirrors `openSTTStream`. The same lazy `start()` also runs
+    /// on the first `batch`/stream call, so this endpoint is a pre-warm, not a
+    /// prerequisite, for transcription.
+    private func handleSTTLoad(_ body: Data) async throws -> Data {
+        let request = try JSONDecoder().decode(STTLoadBody.self, from: body)
+        guard let language = STTModule.STTLanguage.fromCode(request.language) else {
+            throw YoozEngineError.serverError(
+                statusCode: 400,
+                code: "invalid_language",
+                message: "Unknown STT language '\(request.language)'"
+            )
+        }
+        switch YoozSTTEngine.shared.currentBackend {
+        case .appleSTT:
+            guard let appleLang = AppleSTTLanguage.from(rawCode: request.language) else {
+                throw YoozEngineError.serverError(
+                    statusCode: 400, code: "invalid_language",
+                    message: "Language '\(request.language)' is not supported by Apple STT"
+                )
+            }
+            try await AppleSTTEngine.shared.start(language: appleLang)
+        case .qwen3ASRPreview:
+            // The preview backend is loopback/dev only (unstable; engine#154).
+            throw YoozEngineError.unsupportedOperation(operation: "load qwen3 preview")
+        case .parakeet, .fastConformer:
+            try await YoozSTTEngine.shared.start(language: language)
+        }
+        return try await handleSTTStatus()
     }
 
     private func handleLLM(_ body: Data) async throws -> Data {
@@ -602,6 +641,10 @@ private struct BatchBody: Decodable {
     let language: String
     let mode: String
     let aligned: Bool?
+}
+
+private struct STTLoadBody: Decodable {
+    let language: String
 }
 
 private struct LLMBody: Decodable {
