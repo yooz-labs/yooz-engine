@@ -25,6 +25,20 @@ public struct TouchUpResponse: Codable, Sendable {
     public let processingTimeMs: Int?
     public let modelUsed: String?
     public let warnings: [String]?
+
+    public init(
+        result: String,
+        mode: TouchUpMode,
+        processingTimeMs: Int? = nil,
+        modelUsed: String? = nil,
+        warnings: [String]? = nil
+    ) {
+        self.result = result
+        self.mode = mode
+        self.processingTimeMs = processingTimeMs
+        self.modelUsed = modelUsed
+        self.warnings = warnings
+    }
 }
 
 // MARK: - Picker (canonical module-picker pattern)

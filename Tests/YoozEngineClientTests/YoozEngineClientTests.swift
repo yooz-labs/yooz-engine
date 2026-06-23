@@ -13,11 +13,37 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(client.baseURL.absoluteString, "http://127.0.0.1:8080")
     }
 
+    func testDefaultClientUsesHTTPTransport() {
+        // Backward compat: the no-arg / host+port initializers must still build
+        // a loopback HTTP transport (epic #192 Phase 2 seam).
+        let client = YoozEngineClient()
+        XCTAssertTrue(client.transport is HTTPTransport)
+        XCTAssertEqual(client.port, 19920)
+    }
+
+    /// The core seam guarantee: every SDK call routes through the injected
+    /// `EngineTransport`, not a hardcoded HTTP path. A spy records the path
+    /// and returns canned JSON; if `YoozEngineClient` ignored its transport
+    /// this would not see the request.
+    func testClientDelegatesToInjectedTransport() async throws {
+        let spy = SpyTransport()
+        let client = YoozEngineClient(transport: spy)
+        XCTAssertEqual(client.baseURL.absoluteString, "spy://test")
+        XCTAssertEqual(client.port, 0)
+
+        let health = try await client.health()
+        XCTAssertTrue(health.isHealthy)
+        XCTAssertEqual(spy.getPaths, ["/v1/health"])
+    }
+
+    // Helper-launch internals moved from `YoozEngineClient` to `HTTPTransport`
+    // behind the transport seam (epic #192 Phase 2). The contract is unchanged;
+    // the tests now target the transport directly.
     #if canImport(AppKit)
     func testHelperLaunchEnvironmentIncludesCustomPort() {
-        let client = YoozEngineClient(port: 19921)
-        XCTAssertEqual(client.helperLaunchEnvironment[YoozEngineClient.headlessEnvVar], "1")
-        XCTAssertEqual(client.helperLaunchEnvironment[YoozEngineClient.portEnvVar], "19921")
+        let transport = HTTPTransport(port: 19921)
+        XCTAssertEqual(transport.helperLaunchEnvironment[HTTPTransport.headlessEnvVar], "1")
+        XCTAssertEqual(transport.helperLaunchEnvironment[HTTPTransport.portEnvVar], "19921")
     }
 
     /// The argv channel is the reliable headless signal on macOS 26
@@ -26,17 +52,17 @@ final class YoozEngineClientTests: XCTestCase {
     /// spelling so the SDK and the engine-side detector
     /// (`EngineConfig.helperModeArg`) cannot drift apart silently.
     func testHelperLaunchArgumentsCarryHeadlessFlag() {
-        let client = YoozEngineClient(port: 19921)
-        XCTAssertEqual(client.helperLaunchArguments, [YoozEngineClient.helperModeArg])
-        XCTAssertEqual(YoozEngineClient.helperModeArg, "--headless")
+        let transport = HTTPTransport(port: 19921)
+        XCTAssertEqual(transport.helperLaunchArguments, [HTTPTransport.helperModeArg])
+        XCTAssertEqual(HTTPTransport.helperModeArg, "--headless")
     }
 
     func testBundledHelperLaunchConfigurationCanCreateNewInstance() {
-        let client = YoozEngineClient(port: 19921)
-        let config = client.helperOpenConfiguration(createsNewInstance: true)
+        let transport = HTTPTransport(port: 19921)
+        let config = transport.helperOpenConfiguration(createsNewInstance: true)
         XCTAssertFalse(config.activates)
         XCTAssertTrue(config.createsNewApplicationInstance)
-        XCTAssertEqual(config.environment[YoozEngineClient.portEnvVar], "19921")
+        XCTAssertEqual(config.environment[HTTPTransport.portEnvVar], "19921")
     }
 
     /// `helperOpenConfiguration` must populate BOTH channels — the
@@ -45,15 +71,15 @@ final class YoozEngineClientTests: XCTestCase {
     /// macOS 26 launch path. Verifies the belt-and-suspenders contract
     /// the engine's `EngineConfig.isHelperMode` expects (#117).
     func testHelperOpenConfigurationPopulatesBothHeadlessChannels() {
-        let client = YoozEngineClient(port: 19921)
-        let config = client.helperOpenConfiguration(createsNewInstance: true)
+        let transport = HTTPTransport(port: 19921)
+        let config = transport.helperOpenConfiguration(createsNewInstance: true)
         XCTAssertEqual(
-            config.environment[YoozEngineClient.headlessEnvVar],
+            config.environment[HTTPTransport.headlessEnvVar],
             "1",
             "env channel kept for backward compat with engine builds pre-#117"
         )
         XCTAssertTrue(
-            config.arguments.contains(YoozEngineClient.helperModeArg),
+            config.arguments.contains(HTTPTransport.helperModeArg),
             "argv channel is the reliable headless signal on macOS 26 (#117)"
         )
     }
@@ -1034,5 +1060,39 @@ final class YoozEngineClientTests: XCTestCase {
         }
 
         XCTAssertEqual(decoded, originalSamples)
+    }
+}
+
+/// Minimal in-memory `EngineTransport` for verifying `YoozEngineClient`
+/// delegation. Not a mock of behavior — it records the path and returns a
+/// canned health body so the test can assert the request actually reached the
+/// injected transport.
+private final class SpyTransport: EngineTransport, @unchecked Sendable {
+    let baseURL = URL(string: "spy://test")!
+    let port = 0
+    private(set) var getPaths: [String] = []
+
+    func connect() async throws {}
+    func isReachable() async throws -> Bool { true }
+
+    func get(_ path: String) async throws -> Data {
+        getPaths.append(path)
+        let health = HealthStatus(
+            status: "ok",
+            version: "spy",
+            modules: ModuleStatus(
+                stt: false, llm: false, touchup: false,
+                grammar: false, vad: false, tts: false, infinite: nil
+            )
+        )
+        return try JSONEncoder().encode(health)
+    }
+
+    func post(_ path: String, body: Data) async throws -> Data { Data() }
+    func delete(_ path: String) async throws -> Data { Data() }
+
+    @available(macOS 14.0, iOS 17.0, *)
+    func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
+        throw YoozEngineError.unsupportedOperation(operation: "spy stream")
     }
 }

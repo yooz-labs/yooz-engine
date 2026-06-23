@@ -52,8 +52,9 @@ final class ConnectTests: XCTestCase {
         // Pick a port that is almost certainly not in use in a test
         // environment. Port 1 requires root to bind, so regular
         // processes will not hold it.
-        let client = YoozEngineClient(port: 1)
-        let outcome = await client.probeEngine()
+        // probeEngine() moved to HTTPTransport behind the transport seam (#192).
+        let transport = HTTPTransport(port: 1)
+        let outcome = await transport.probeEngine()
         XCTAssertEqual(outcome, .refused)
     }
 

@@ -6,6 +6,12 @@ public struct HealthStatus: Codable, Sendable {
     public let modules: ModuleStatus
 
     public var isHealthy: Bool { status == "ok" }
+
+    public init(status: String, version: String, modules: ModuleStatus) {
+        self.status = status
+        self.version = version
+        self.modules = modules
+    }
 }
 
 public struct ModuleStatus: Codable, Sendable {
@@ -19,4 +25,22 @@ public struct ModuleStatus: Codable, Sendable {
     /// module omit this key, decoding to `nil`. `true` once Infinite is
     /// bundled and loaded.
     public let infinite: Bool?
+
+    public init(
+        stt: Bool,
+        llm: Bool,
+        touchup: Bool,
+        grammar: Bool,
+        vad: Bool,
+        tts: Bool,
+        infinite: Bool?
+    ) {
+        self.stt = stt
+        self.llm = llm
+        self.touchup = touchup
+        self.grammar = grammar
+        self.vad = vad
+        self.tts = tts
+        self.infinite = infinite
+    }
 }

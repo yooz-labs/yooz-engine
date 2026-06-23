@@ -19,6 +19,12 @@ public struct GrammarCheckResponse: Codable, Sendable {
     public let correctionsApplied: Int
     /// Total rule count used for this check (nil if server does not report it).
     public let ruleCount: Int?
+
+    public init(result: String, correctionsApplied: Int, ruleCount: Int?) {
+        self.result = result
+        self.correctionsApplied = correctionsApplied
+        self.ruleCount = ruleCount
+    }
 }
 
 /// Grammar tier identifiers matching engine-side tiers.
