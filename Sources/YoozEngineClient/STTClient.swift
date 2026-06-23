@@ -153,14 +153,11 @@ public struct STTClient: Sendable {
         language: STTLanguage = .english,
         mode: AudioMode = .normal
     ) async throws -> STTStream {
-        let wsURL = engine.baseURL
-            .appendingPathComponent("v1/stt/stream")
-        var urlComponents = URLComponents(url: wsURL, resolvingAgainstBaseURL: false)!
-        urlComponents.scheme = "ws"
-
-        guard let url = urlComponents.url else {
-            throw YoozEngineError.invalidResponse
-        }
+        // Resolve the streaming URL via the transport. The loopback transport
+        // returns a `ws://` URL; an in-process transport throws
+        // `unsupportedInProcess` until the in-process streaming path lands
+        // (epic #192 Phase 2b).
+        let url = try engine.webSocketURL(path: "v1/stt/stream")
 
         let session = URLSession(configuration: .default)
         let wsTask = session.webSocketTask(with: url)

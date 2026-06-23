@@ -24,8 +24,8 @@ final class QueryStringResolutionTests: XCTestCase {
     /// path with a `?` suffix must produce a URL whose `.query`
     /// equals the suffix (no percent-encoding into the path).
     func testQuerySuffixSurfacesAsRealQuery() {
-        let client = YoozEngineClient(host: "127.0.0.1", port: 19920)
-        let url = client.resolveURLForTesting("/v1/stt/load?wait=true")
+        let transport = HTTPTransport(host: "127.0.0.1", port: 19920)
+        let url = transport.resolveURLForTesting("/v1/stt/load?wait=true")
         XCTAssertEqual(url.path, "/v1/stt/load",
                        "Path must not include the query string")
         XCTAssertEqual(url.query, "wait=true",
@@ -37,8 +37,8 @@ final class QueryStringResolutionTests: XCTestCase {
     /// A path without a `?` must produce a clean URL — no spurious
     /// `?` or empty query.
     func testPathWithoutQuerySuffixIsUnchanged() {
-        let client = YoozEngineClient(host: "127.0.0.1", port: 19920)
-        let url = client.resolveURLForTesting("/v1/stt/status")
+        let transport = HTTPTransport(host: "127.0.0.1", port: 19920)
+        let url = transport.resolveURLForTesting("/v1/stt/status")
         XCTAssertEqual(url.path, "/v1/stt/status")
         XCTAssertNil(url.query)
         XCTAssertEqual(url.absoluteString,
@@ -49,14 +49,14 @@ final class QueryStringResolutionTests: XCTestCase {
     /// Not used by any current SDK call site but the contract is
     /// stable so future endpoints can rely on it.
     func testMultipleQueryParamsAreParsed() {
-        let client = YoozEngineClient(host: "127.0.0.1", port: 19920)
-        let url = client.resolveURLForTesting("/v1/stt/load?wait=true&lang=en")
+        let transport = HTTPTransport(host: "127.0.0.1", port: 19920)
+        let url = transport.resolveURLForTesting("/v1/stt/load?wait=true&lang=en")
         XCTAssertEqual(url.path, "/v1/stt/load")
         XCTAssertEqual(url.query, "wait=true&lang=en")
     }
 }
 
-extension YoozEngineClient {
+extension HTTPTransport {
     /// Test-only thin alias for `resolveURL` so the asserts read
     /// naturally without exposing a public surface change.
     func resolveURLForTesting(_ path: String) -> URL {
