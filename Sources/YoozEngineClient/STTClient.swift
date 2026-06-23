@@ -153,49 +153,15 @@ public struct STTClient: Sendable {
         language: STTLanguage = .english,
         mode: AudioMode = .normal
     ) async throws -> STTStream {
-        // Resolve the streaming URL via the transport. The loopback transport
-        // returns a `ws://` URL; an in-process transport throws
-        // `unsupportedInProcess` until the in-process streaming path lands
-        // (epic #192 Phase 2b).
-        let url = try engine.webSocketURL(path: "v1/stt/stream")
-
-        let session = URLSession(configuration: .default)
-        let wsTask = session.webSocketTask(with: url)
-        wsTask.resume()
-
-        do {
-            // Send config
-            let config = STTStreamConfig(
-                type: "config",
-                language: language.rawValue,
-                mode: mode.rawValue
-            )
-            let configData = try JSONEncoder().encode(config)
-            let configStr = String(data: configData, encoding: .utf8)!
-            try await wsTask.send(.string(configStr))
-
-            // Wait for ready response
-            let readyMsg = try await wsTask.receive()
-            switch readyMsg {
-            case .string(let text):
-                if let data = text.data(using: .utf8) {
-                    let response = try JSONDecoder().decode(WSReadyResponse.self, from: data)
-                    if response.type == "error" {
-                        throw YoozEngineError.webSocketError(response.message ?? "Unknown error")
-                    }
-                }
-            case .data:
-                break
-            @unknown default:
-                break
-            }
-        } catch {
-            wsTask.cancel(with: .normalClosure, reason: nil)
-            session.invalidateAndCancel()
-            throw error
-        }
-
-        return STTStream(task: wsTask, session: session)
+        // The transport opens the stream: the loopback transport performs the
+        // WebSocket config/ready handshake; the in-process transport sets up an
+        // engine StreamingTranscriber / Qwen3 session / Apple buffer directly
+        // (epic #192 Phase 2b). Either way the SDK gets a uniform session.
+        let session = try await engine.openSTTStream(
+            language: language.rawValue,
+            mode: mode.rawValue
+        )
+        return STTStream(session: session)
     }
 }
 
@@ -240,8 +206,12 @@ struct STTStreamConfig: Codable {
     let mode: String
 }
 
-struct STTLanguagesResponse: Codable {
-    let languages: [STTLanguageInfo]
+public struct STTLanguagesResponse: Codable, Sendable {
+    public let languages: [STTLanguageInfo]
+
+    public init(languages: [STTLanguageInfo]) {
+        self.languages = languages
+    }
 }
 
 struct WSReadyResponse: Decodable {
@@ -254,6 +224,13 @@ public struct STTLanguageInfo: Codable, Sendable {
     public let name: String
     public let implemented: Bool
     public let family: String
+
+    public init(code: String, name: String, implemented: Bool, family: String) {
+        self.code = code
+        self.name = name
+        self.implemented = implemented
+        self.family = family
+    }
 }
 
 public struct STTStatus: Codable, Sendable {
@@ -295,72 +272,47 @@ public enum AudioMode: String, Codable, Sendable {
 
 // MARK: - STT Stream
 
-/// A WebSocket-based streaming STT session.
+/// A streaming STT session.
 ///
-/// Send audio samples via `sendAudio(_:)` and receive
-/// partial/final results via `receive()`.
+/// Send audio samples via `sendAudio(_:)` and receive partial/final results via
+/// `receive()`. The session is transport-backed (epic #192 Phase 2b): loopback
+/// over a WebSocket, or in-process driving the engine transcriber directly. The
+/// public API is identical either way.
 @available(macOS 14.0, iOS 17.0, *)
 public final class STTStream: @unchecked Sendable {
-    private let task: URLSessionWebSocketTask
-    private let session: URLSession
+    private let session: any STTStreamSession
 
-    init(task: URLSessionWebSocketTask, session: URLSession) {
-        self.task = task
+    init(session: any STTStreamSession) {
         self.session = session
     }
 
     deinit {
-        task.cancel(with: .normalClosure, reason: nil)
-        session.invalidateAndCancel()
+        // Release transport resources if the caller dropped the stream without
+        // calling close() — cancels the WebSocket (loopback) or finalizes the
+        // engine transcriber / Apple buffer (in-process). close() is idempotent.
+        session.close()
     }
 
     /// Send audio samples (Float32 at 16kHz) to the engine.
     public func sendAudio(_ samples: [Float]) async throws {
-        let data = samples.withUnsafeBufferPointer { ptr in
-            Data(buffer: ptr)
-        }
-        try await task.send(.data(data))
+        try await session.sendAudio(samples)
     }
 
     /// Receive the next transcription result from the engine.
     ///
-    /// Returns nil when the connection is closed gracefully.
-    /// Throws on decoding errors or unexpected network failures.
+    /// Returns nil when the session is closed/exhausted. Throws on decoding
+    /// errors or unexpected failures.
     public func receive() async throws -> StreamingSTTResult? {
-        let message: URLSessionWebSocketTask.Message
-        do {
-            message = try await task.receive()
-        } catch is CancellationError {
-            return nil
-        } catch let urlError as URLError
-            where urlError.code == .cancelled || urlError.code == .networkConnectionLost {
-            return nil
-        } catch let nsError as NSError
-            where nsError.domain == NSPOSIXErrorDomain && nsError.code == 57 {
-            // POSIX error 57: socket is not connected (graceful close)
-            return nil
-        }
-
-        switch message {
-        case .string(let text):
-            guard let data = text.data(using: .utf8) else {
-                throw YoozEngineError.decodingError("Received non-UTF8 text from WebSocket")
-            }
-            return try JSONDecoder().decode(StreamingSTTResult.self, from: data)
-        case .data(let data):
-            return try JSONDecoder().decode(StreamingSTTResult.self, from: data)
-        @unknown default:
-            throw YoozEngineError.invalidResponse
-        }
+        try await session.receive()
     }
 
     /// Close the streaming session.
     public func close() {
-        task.cancel(with: .normalClosure, reason: nil)
+        session.close()
     }
 }
 
-/// A streaming STT result received over WebSocket.
+/// A streaming STT result (partial or final).
 public struct StreamingSTTResult: Codable, Sendable {
     /// "partial" or "final"
     public let type: String
@@ -369,4 +321,11 @@ public struct StreamingSTTResult: Codable, Sendable {
     public let draft: String
 
     public var isFinal: Bool { type == "final" }
+
+    public init(type: String, text: String, finalized: String, draft: String) {
+        self.type = type
+        self.text = text
+        self.finalized = finalized
+        self.draft = draft
+    }
 }

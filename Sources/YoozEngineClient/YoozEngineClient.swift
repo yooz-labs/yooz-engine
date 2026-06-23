@@ -105,7 +105,7 @@ public final class YoozEngineClient: Sendable {
     }
 
     @available(macOS 14.0, iOS 17.0, *)
-    func webSocketURL(path: String) throws -> URL {
-        try transport.webSocketURL(path: path)
+    func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
+        try await transport.openSTTStream(language: language, mode: mode)
     }
 }

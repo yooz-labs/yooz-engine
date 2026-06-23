@@ -23,3 +23,20 @@ typealias SDKSpeechSegment = SpeechSegment
 typealias SDKTranscriptionResult = TranscriptionResult
 typealias SDKAlignedToken = AlignedToken
 typealias SDKLLMGenerateResponse = LLMGenerateResponse
+
+// Status + picker DTOs (Phase 2b). Several collide with engine module types
+// (`ModelTier`, `ModelLoadState`, `TouchUpModelInfo`, `TouchUpMode`).
+typealias SDKSTTStatus = STTStatus
+typealias SDKSTTLanguagesResponse = STTLanguagesResponse
+typealias SDKSTTLanguageInfo = STTLanguageInfo
+typealias SDKSTTBackendInfo = STTBackendInfo
+typealias SDKSTTBackendsResponse = STTBackendsResponse
+typealias SDKModelTier = ModelTier
+typealias SDKModelLoadState = ModelLoadState
+typealias SDKLLMStatus = LLMStatus
+typealias SDKLLMModelInfo = LLMModelInfo
+typealias SDKLLMModelsResponse = LLMModelsResponse
+typealias SDKTouchUpModelInfo = TouchUpModelInfo
+typealias SDKTouchUpModelsResponse = TouchUpModelsResponse
+typealias SDKTouchUpResponse = TouchUpResponse
+typealias SDKTouchUpMode = TouchUpMode

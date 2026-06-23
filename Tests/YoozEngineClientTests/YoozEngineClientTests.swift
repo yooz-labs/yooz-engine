@@ -1092,5 +1092,7 @@ private final class SpyTransport: EngineTransport, @unchecked Sendable {
     func delete(_ path: String) async throws -> Data { Data() }
 
     @available(macOS 14.0, iOS 17.0, *)
-    func webSocketURL(path: String) throws -> URL { baseURL }
+    func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
+        throw YoozEngineError.unsupportedInProcess(operation: "spy stream")
+    }
 }

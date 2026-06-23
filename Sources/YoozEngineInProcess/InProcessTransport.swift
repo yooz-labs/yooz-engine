@@ -60,6 +60,18 @@ public final class InProcessTransport: EngineTransport {
             return try await handleHealth()
         case "/v1/modules":
             return try await handleModules()
+        case "/v1/stt/status":
+            return try await handleSTTStatus()
+        case "/v1/stt/languages":
+            return try await handleSTTLanguages()
+        case "/v1/stt/engine":
+            return try await handleSTTEngine()
+        case "/v1/llm/status":
+            return try await handleLLMStatus()
+        case "/v1/llm/models":
+            return try await handleLLMModels()
+        case "/v1/touchup/models":
+            return try await handleTouchUpModels()
         default:
             throw YoozEngineError.unsupportedInProcess(operation: "GET \(route(path))")
         }
@@ -74,8 +86,20 @@ public final class InProcessTransport: EngineTransport {
             return try await handleVAD(body)
         case "/v1/stt/batch":
             return try await handleBatch(body)
+        case "/v1/stt/engine":
+            return try await handleSetSTTEngine(body)
         case "/v1/llm/generate":
             return try await handleLLM(body)
+        case "/v1/llm/model":
+            return try await handleSetLLMModel(body)
+        case "/v1/llm/preload":
+            return try await handleLLMPreload(body)
+        case "/v1/llm/unload":
+            return try await handleLLMUnload(body)
+        case "/v1/touchup":
+            return try await handleTouchUp(body)
+        case "/v1/touchup/model":
+            return try await handleSetTouchUpModel(body)
         default:
             throw YoozEngineError.unsupportedInProcess(operation: "POST \(route(path))")
         }
@@ -86,9 +110,46 @@ public final class InProcessTransport: EngineTransport {
     }
 
     @available(macOS 14.0, iOS 17.0, *)
-    public func webSocketURL(path: String) throws -> URL {
-        // In-process streaming STT lands in Phase 2b.
-        throw YoozEngineError.unsupportedInProcess(operation: "WS \(path)")
+    public func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
+        try await connect()
+        guard let lang = STTModule.STTLanguage.fromCode(language) else {
+            throw YoozEngineError.serverError(
+                statusCode: 400,
+                code: "invalid_language",
+                message: "Unknown STT language '\(language)'"
+            )
+        }
+        // Unknown mode falls back to .normal for parity with the loopback WS
+        // handler (which also coerces). normal/whispered are the only cases and
+        // share rawValues across the SDK and engine enums.
+        let audioMode = STTModule.AudioMode(rawValue: mode) ?? .normal
+
+        switch YoozSTTEngine.shared.currentBackend {
+        case .appleSTT:
+            guard let appleLang = AppleSTTLanguage.from(rawCode: language) else {
+                throw YoozEngineError.serverError(
+                    statusCode: 400, code: "invalid_language",
+                    message: "Language '\(language)' is not supported by Apple STT"
+                )
+            }
+            try await AppleSTTEngine.shared.start(language: appleLang)
+            return InProcessSTTStreamSession(backend: .apple(AppleSTTEngine.shared))
+
+        case .qwen3ASRPreview:
+            // The preview backend is loopback/dev only (unstable; engine#154).
+            throw YoozEngineError.unsupportedInProcess(operation: "streaming qwen3 preview")
+
+        case .parakeet, .fastConformer:
+            try await YoozSTTEngine.shared.start(language: lang)
+            guard let transcriber = YoozSTTEngine.shared.createBatchTranscriber(mode: audioMode) else {
+                throw YoozEngineError.serverError(
+                    statusCode: 503,
+                    code: "stt_not_loaded",
+                    message: "STT model failed to load for language '\(language)'"
+                )
+            }
+            return InProcessSTTStreamSession(backend: .parakeet(transcriber))
+        }
     }
 
     // MARK: - Routing
@@ -280,6 +341,243 @@ public final class InProcessTransport: EngineTransport {
         )
         return try JSONEncoder().encode(response)
     }
+
+    // MARK: - Status
+
+    private func handleSTTStatus() async throws -> Data {
+        let status: SDKSTTStatus
+        if YoozSTTEngine.shared.currentBackend == .appleSTT {
+            let loaded = await AppleSTTEngine.shared.isLoaded
+            let language = await AppleSTTEngine.shared.currentLanguage.rawValue
+            let streaming = await AppleSTTEngine.shared.isStreaming
+            status = SDKSTTStatus(
+                loaded: loaded, language: language, streaming: streaming,
+                progress: nil, state: nil, lastError: nil
+            )
+        } else {
+            let progress = YoozSTTEngine.shared.downloadProgress
+            status = SDKSTTStatus(
+                loaded: YoozSTTEngine.shared.isRunning,
+                language: YoozSTTEngine.shared.currentLanguage.rawValue,
+                streaming: YoozSTTEngine.shared.isStreaming,
+                progress: progress > 0 ? progress : nil,
+                state: nil,
+                lastError: nil
+            )
+        }
+        return try JSONEncoder().encode(status)
+    }
+
+    private func handleLLMStatus() async throws -> Data {
+        let active = await TouchUpEngine.shared.activeModel
+        let loaded: Bool
+        switch active {
+        case .yoozLight:
+            loaded = await TouchUpEngine.shared.isLightModelLoaded
+        case .yoozQuality:
+            loaded = await TouchUpEngine.shared.isQualityModelLoaded
+        case .foundationModels:
+            loaded = await TouchUpEngine.shared.isFoundationModelsLoaded
+        }
+        let status = SDKLLMStatus(
+            loaded: loaded, modelId: active.rawValue, progress: nil,
+            state: nil, lastError: nil
+        )
+        return try JSONEncoder().encode(status)
+    }
+
+    // MARK: - STT picker
+
+    private func handleSTTLanguages() async throws -> Data {
+        let infos = YoozSTTEngine.shared.availableLanguages.map {
+            SDKSTTLanguageInfo(
+                code: $0.rawValue,
+                name: $0.displayName,
+                implemented: $0.isImplemented,
+                family: $0.modelFamily.rawValue
+            )
+        }
+        return try JSONEncoder().encode(SDKSTTLanguagesResponse(languages: infos))
+    }
+
+    private func handleSTTEngine() async throws -> Data {
+        let active = YoozSTTEngine.shared.currentBackend
+        let activeLoaded = await YoozSTTEngine.shared.isCurrentBackendLoaded()
+        let backends = STTModule.STTBackendID.allCases.map {
+            sttBackendInfo($0, active: active, activeLoaded: activeLoaded)
+        }
+        return try JSONEncoder().encode(
+            SDKSTTBackendsResponse(backends: backends, activeId: active.rawValue)
+        )
+    }
+
+    private func handleSetSTTEngine(_ body: Data) async throws -> Data {
+        let request = try JSONDecoder().decode(SetBackendBody.self, from: body)
+        guard let backend = STTModule.STTBackendID(rawValue: request.id) else {
+            throw YoozEngineError.serverError(
+                statusCode: 400, code: "invalid_backend",
+                message: "Unknown STT backend '\(request.id)'"
+            )
+        }
+        await YoozSTTEngine.shared.setBackend(backend)
+        let loaded = await YoozSTTEngine.shared.isCurrentBackendLoaded()
+        let info = sttBackendInfo(backend, active: backend, activeLoaded: loaded)
+        return try JSONEncoder().encode(info)
+    }
+
+    private func sttBackendInfo(
+        _ backend: STTModule.STTBackendID,
+        active: STTModule.STTBackendID,
+        activeLoaded: Bool
+    ) -> SDKSTTBackendInfo {
+        let isActive = backend == active
+        return SDKSTTBackendInfo(
+            id: backend.rawValue,
+            displayName: backend.displayName,
+            description: backend.pickerDescription,
+            tier: SDKModelTier(rawValue: backend.pickerTier.rawValue) ?? .unknown,
+            sizeBytes: backend.estimatedDownloadMB.map { Int64($0) * 1_000_000 },
+            loadState: (isActive && activeLoaded) ? .loaded : .available,
+            isActive: isActive,
+            supportsBatch: backend.supportsBatch,
+            supportsStreaming: backend.supportsStreaming,
+            supportedLanguages: backend.supportedLanguages.map(\.rawValue)
+        )
+    }
+
+    // MARK: - LLM / TouchUp model management
+
+    private func handleLLMModels() async throws -> Data {
+        let models = await TouchUpEngine.shared.availableModels()
+        let active = await TouchUpEngine.shared.activeModel
+        // `LLMModelInfo.loaded` is a Bool, so the engine's four-state lifecycle
+        // collapses here: `.cached` (on disk, not resident) reports `loaded:false`.
+        // This matches the SDK type; the full lifecycle is on the TouchUp picker
+        // (`/v1/touchup/models` -> `TouchUpModelInfo.loadState`).
+        let available = models.map {
+            SDKLLMModelInfo(
+                id: $0.id, displayName: $0.displayName,
+                sizeBytes: $0.sizeBytes, loaded: $0.loadState == .loaded,
+                latencyHintMs: nil
+            )
+        }
+        return try JSONEncoder().encode(
+            SDKLLMModelsResponse(current: active.rawValue, available: available)
+        )
+    }
+
+    private func handleSetLLMModel(_ body: Data) async throws -> Data {
+        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let modelType = try resolveLLMModel(request.model)
+        await TouchUpEngine.shared.setPreferredModel(modelType)
+        return try await handleLLMModels()
+    }
+
+    private func handleLLMPreload(_ body: Data) async throws -> Data {
+        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let modelType = try resolveLLMModel(request.model)
+        try await TouchUpEngine.shared.preloadModel(modelType)
+        return try JSONEncoder().encode(await llmModelInfo(modelType))
+    }
+
+    private func handleLLMUnload(_ body: Data) async throws -> Data {
+        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let modelType = try resolveLLMModel(request.model)
+        await TouchUpEngine.shared.unload(modelType)
+        return try JSONEncoder().encode(await llmModelInfo(modelType))
+    }
+
+    private func handleTouchUp(_ body: Data) async throws -> Data {
+        let request = try JSONDecoder().decode(TouchUpBody.self, from: body)
+        // The requested mode is explicit caller intent (off/light/standard/full),
+        // not a forward-compat wire value — an unknown mode is a hard error, never
+        // a silent run at a different cleanup level. (Both enums share rawValues.)
+        guard let engineMode = LLMModule.TouchUpMode(rawValue: request.mode),
+              let sdkMode = SDKTouchUpMode(rawValue: request.mode)
+        else {
+            throw YoozEngineError.serverError(
+                statusCode: 400, code: "invalid_mode",
+                message: "Unknown TouchUp mode '\(request.mode)'"
+            )
+        }
+        let result = await TouchUpEngine.shared.process(
+            text: request.text, mode: engineMode, replacements: []
+        )
+        let response = SDKTouchUpResponse(
+            result: result.text,
+            mode: sdkMode,
+            processingTimeMs: Int(result.latencyMs),
+            modelUsed: result.modelUsed.rawValue,
+            warnings: result.fallbackReason.map { [$0] }
+        )
+        return try JSONEncoder().encode(response)
+    }
+
+    private func handleTouchUpModels() async throws -> Data {
+        let models = await TouchUpEngine.shared.availableModels()
+        let active = await TouchUpEngine.shared.activeModel
+        let mapped = models.map(touchUpModelInfo)
+        let activeId = mapped.first(where: \.isActive)?.id ?? active.rawValue
+        return try JSONEncoder().encode(
+            SDKTouchUpModelsResponse(models: mapped, activeId: activeId)
+        )
+    }
+
+    private func handleSetTouchUpModel(_ body: Data) async throws -> Data {
+        let request = try JSONDecoder().decode(SetModelBody.self, from: body)
+        guard let selection = TouchUpModelSelection(rawValue: request.id) else {
+            throw YoozEngineError.serverError(
+                statusCode: 400, code: "invalid_model",
+                message: "Unknown TouchUp model '\(request.id)'"
+            )
+        }
+        let info = try await TouchUpEngine.shared.setActiveModel(
+            selection, preload: request.preload ?? true
+        )
+        return try JSONEncoder().encode(touchUpModelInfo(info))
+    }
+
+    // MARK: - Mapping helpers
+
+    private func resolveLLMModel(_ id: String) throws -> LLMModelType {
+        guard let modelType = LLMModelType(rawValue: id) else {
+            throw YoozEngineError.serverError(
+                statusCode: 400, code: "invalid_model",
+                message: "Unknown LLM model '\(id)'"
+            )
+        }
+        return modelType
+    }
+
+    /// Real post-operation model info for the preload/unload responses: re-query
+    /// `availableModels()` so `displayName` / `sizeBytes` / `loaded` reflect the
+    /// actual state rather than a fabricated row.
+    private func llmModelInfo(_ modelType: LLMModelType) async -> SDKLLMModelInfo {
+        let models = await TouchUpEngine.shared.availableModels()
+        if let match = models.first(where: { $0.id == modelType.rawValue }) {
+            return SDKLLMModelInfo(
+                id: match.id, displayName: match.displayName,
+                sizeBytes: match.sizeBytes, loaded: match.loadState == .loaded,
+                latencyHintMs: nil
+            )
+        }
+        return SDKLLMModelInfo(
+            id: modelType.rawValue, displayName: modelType.rawValue,
+            sizeBytes: nil, loaded: false, latencyHintMs: nil
+        )
+    }
+
+    private func touchUpModelInfo(_ info: LLMModule.TouchUpModelInfo) -> SDKTouchUpModelInfo {
+        SDKTouchUpModelInfo(
+            id: info.id,
+            displayName: info.displayName,
+            description: info.description,
+            tier: SDKModelTier(rawValue: info.tier.rawValue) ?? .unknown,
+            sizeBytes: info.sizeBytes,
+            loadState: SDKModelLoadState(rawValue: info.loadState.rawValue) ?? .unavailable,
+            isActive: info.isActive
+        )
+    }
 }
 
 // MARK: - Wire request mirrors
@@ -310,4 +608,24 @@ private struct LLMBody: Decodable {
     let prompt: String
     let model: String?
     let systemPrompt: String?
+}
+
+private struct SetBackendBody: Decodable {
+    let id: String
+    let preload: Bool?
+}
+
+private struct ModelSelectionBody: Decodable {
+    let model: String
+}
+
+private struct TouchUpBody: Decodable {
+    let text: String
+    let mode: String
+    let language: String?
+}
+
+private struct SetModelBody: Decodable {
+    let id: String
+    let preload: Bool?
 }

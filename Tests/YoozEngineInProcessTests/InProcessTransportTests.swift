@@ -44,9 +44,8 @@ final class InProcessTransportTests: XCTestCase {
         XCTAssertEqual(client.port, 0)
     }
 
-    func testDeleteAndWebSocketThrowUnsupportedInProcess() async throws {
+    func testDeleteThrowsUnsupportedInProcess() async throws {
         let transport = InProcessTransport()
-
         do {
             _ = try await transport.delete("/v1/infinite/sessions/x")
             XCTFail("delete should throw unsupportedInProcess")
@@ -56,13 +55,64 @@ final class InProcessTransportTests: XCTestCase {
                 return
             }
         }
+    }
 
-        XCTAssertThrowsError(try transport.webSocketURL(path: "v1/stt/stream")) { error in
-            guard case YoozEngineError.unsupportedInProcess = error else {
+    // MARK: - Picker / status (Phase 2b, no models required)
+
+    func testInProcessSTTLanguages() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let languages = try await client.stt.languages()
+        XCTAssertFalse(languages.isEmpty)
+        XCTAssertTrue(languages.contains { $0.code == "en" })
+    }
+
+    func testInProcessSTTEnginePickerListsBackends() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let response = try await client.stt.availableEngines()
+        let ids = Set(response.backends.map(\.id))
+        XCTAssertTrue(ids.contains("parakeet"))
+        XCTAssertTrue(ids.contains("apple_stt"))
+    }
+
+    func testInProcessSTTStatusReadsCleanly() async throws {
+        let client = makeClient()
+        try await client.connect()
+        // No model is started by this test path, so status must return without
+        // throwing; streaming is false.
+        let status = try await client.stt.status()
+        XCTAssertFalse(status.streaming)
+    }
+
+    func testInProcessLLMStatusReadsCleanly() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let status = try await client.llm.status()
+        XCTAssertNotNil(status.modelId)
+    }
+
+    /// Streaming dispatch is wired (no longer `unsupportedInProcess` wholesale):
+    /// switching to the qwen3 preview backend — which the in-process streaming
+    /// path intentionally does NOT support — and opening a stream must throw
+    /// `unsupportedInProcess` for THAT backend specifically. This exercises the
+    /// streaming dispatch + the STT engine picker without needing model weights.
+    func testInProcessQwen3StreamingIsUnsupported() async throws {
+        let client = makeClient()
+        try await client.connect()
+        _ = try await client.stt.setEngine(id: "qwen3_asr_preview")
+        do {
+            _ = try await client.stt.startStream()
+            XCTFail("qwen3 streaming should be unsupported in-process")
+        } catch let error as YoozEngineError {
+            guard case .unsupportedInProcess = error else {
                 XCTFail("expected unsupportedInProcess, got \(error)")
                 return
             }
         }
+        // Restore the default backend so test ordering can't strand the shared
+        // singleton on qwen3.
+        _ = try await client.stt.setEngine(id: "parakeet")
     }
 
     func testGrammarCheckRoundTripsThroughTheSeam() async throws {
@@ -85,10 +135,12 @@ final class InProcessTransportTests: XCTestCase {
     }
 
     func testUnsupportedEndpointThrowsInProcess() async throws {
+        // Infinite is intentionally not served in-process (its consumer is the
+        // loopback super-yooz host), so it remains a clean unsupported throw.
         let client = makeClient()
         try await client.connect()
         do {
-            _ = try await client.stt.status()
+            _ = try await client.infinite.status()
             XCTFail("expected unsupportedInProcess for an unimplemented endpoint")
         } catch let error as YoozEngineError {
             guard case .unsupportedInProcess = error else {
