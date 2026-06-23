@@ -1,6 +1,11 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
 import Foundation
+// Qwen3ASR is a separate SPM module but part of STTModule under xcodegen
+// (canImport false there). Conditional import bridges both (epic #192).
+#if canImport(Qwen3ASR)
+    import Qwen3ASR
+#endif
 
 // MARK: - Model Family
 

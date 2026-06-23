@@ -54,6 +54,7 @@ let package = Package(
         .library(name: "VADModule", targets: ["VADModule"]),
         .library(name: "LLMModule", targets: ["LLMModule"]),
         .library(name: "GrammarModule", targets: ["GrammarModule"]),
+        .library(name: "STTModule", targets: ["STTModule"]),
     ],
     dependencies: [
         // mlx-swift 0.31.4 release (what mlx-swift-lm main declares). Pin the
@@ -140,6 +141,27 @@ let package = Package(
         .binaryTarget(
             name: "YoozTextCleanup",
             path: "Vendor/YoozTextCleanup/YoozTextCleanup.xcframework"
+        ),
+        // STTModule is the whole YoozEngine/STT EXCEPT Models/Qwen3ASR, which
+        // stays its own target (re-used by the headless parity tests). The STT
+        // engine references Qwen3ASR types (public, one-directional), bridged by
+        // a `#if canImport(Qwen3ASR)` import in the few referencing files.
+        .target(
+            name: "STTModule",
+            dependencies: [
+                "EngineCore",
+                "Qwen3ASR",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Hub", package: "swift-transformers"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+            ],
+            path: "YoozEngine/STT",
+            exclude: ["Models/Qwen3ASR"]
         ),
         .target(
             name: "Qwen3ASRMelFrontend",
