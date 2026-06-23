@@ -200,7 +200,7 @@ let package = Package(
         // In-process facade (epic #192 Phase 2). Routes the SDK surface to the
         // engine actors directly. Infinite is intentionally NOT a dependency
         // (its consumer is the loopback super-yooz host); the in-process
-        // transport returns `unsupportedInProcess` for that API.
+        // transport returns `unsupportedOperation` for that API.
         .target(
             name: "YoozEngineInProcess",
             dependencies: [

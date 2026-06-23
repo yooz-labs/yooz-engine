@@ -58,6 +58,28 @@ final class XPCRoundTripTests: XCTestCase {
         XCTAssertTrue(modules.modules.contains { $0.name == "grammar" })
     }
 
+    /// `serverError` keeps its status + machine-readable code across XPC (not
+    /// flattened to a generic error). Setting an unknown LLM model id is a
+    /// `400 invalid_model` on the service side and must arrive intact.
+    func testServerErrorPreservesCodeAndStatusOverXPC() async throws {
+        let service = Service()
+        defer { service.invalidate() }
+        let client = service.makeClient()
+        try await client.connect()
+
+        do {
+            try await client.touchUp.setModel("definitely-not-a-real-model")  // POST /v1/llm/model
+            XCTFail("expected a serverError for an unknown model id")
+        } catch let error as YoozEngineError {
+            guard case .serverError(let statusCode, let code, _) = error else {
+                XCTFail("expected serverError, got \(error)")
+                return
+            }
+            XCTAssertEqual(statusCode, 400)
+            XCTAssertEqual(code, "invalid_model")
+        }
+    }
+
     /// Typed errors survive the XPC boundary: an unsupported endpoint comes back
     /// as `unsupportedOperation`, not a generic connection error.
     func testUnsupportedEndpointPropagatesTypedErrorOverXPC() async throws {

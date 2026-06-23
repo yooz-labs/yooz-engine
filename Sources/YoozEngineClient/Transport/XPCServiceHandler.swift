@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Service-side XPC handler (epic #192 Phase 3): implements
 /// `YoozEngineXPCProtocol` by delegating to an injected `EngineTransport` — the
@@ -65,6 +66,7 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
 /// see `docs/engine-app-packaging.md`.)
 public final class XPCServiceListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let makeHandler: @Sendable () -> XPCServiceHandler
+    private let logger = Logger(subsystem: "live.yooz.engine.client", category: "xpc-service")
 
     public init(makeHandler: @escaping @Sendable () -> XPCServiceHandler) {
         self.makeHandler = makeHandler
@@ -77,6 +79,16 @@ public final class XPCServiceListenerDelegate: NSObject, NSXPCListenerDelegate, 
     ) -> Bool {
         newConnection.exportedInterface = NSXPCInterface(with: YoozEngineXPCProtocol.self)
         newConnection.exportedObject = makeHandler()
+        // Surface lifecycle events so a mid-request peer drop isn't silent — any
+        // engine work already in flight on the service side runs to completion
+        // but with no one waiting; logging makes that observable.
+        let logger = self.logger
+        newConnection.interruptionHandler = {
+            logger.debug("xpc: connection interrupted (peer crashed or restarted)")
+        }
+        newConnection.invalidationHandler = {
+            logger.debug("xpc: connection invalidated")
+        }
         newConnection.resume()
         return true
     }

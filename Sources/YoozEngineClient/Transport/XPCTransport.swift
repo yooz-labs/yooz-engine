@@ -35,6 +35,12 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
         connection.resume()
     }
 
+    deinit {
+        // Release the Mach port pair (and let a system-launched service idle out)
+        // when the transport is torn down.
+        connection.invalidate()
+    }
+
     public func connect() async throws {
         // Confirm the service is reachable (and decodes our health contract).
         _ = try await get("/v1/health")
@@ -63,42 +69,84 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
     }
 
     private func send(_ method: String, _ path: String, _ body: Data?) async throws -> Data {
-        // Guard against the (rare) case where both the proxy error handler and the
-        // reply fire — a CheckedContinuation traps on double resume.
-        let resumed = ResumeOnce()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
-            let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-                if resumed.claim() {
-                    continuation.resume(throwing: XPCErrorBridge.toYoozEngineError(error))
+        // `SendState` resumes the continuation exactly once across all paths:
+        // the proxy error handler, the reply block, AND task cancellation (which
+        // NSXPCConnection does not surface on its own — without this a cancelled
+        // caller would leak the continuation, trapping on dealloc).
+        let state = SendState()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                guard state.register(continuation) else {
+                    return  // already cancelled before we registered — resolved.
+                }
+                let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                    state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
+                }
+                guard let service = proxy as? YoozEngineXPCProtocol else {
+                    state.resume(.failure(YoozEngineError.engineNotReachable))
+                    return
+                }
+                service.request(method: method, path: path, body: body) { data, error in
+                    if let error {
+                        state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
+                    } else if let data {
+                        state.resume(.success(data))
+                    } else {
+                        // Protocol violation: reply(nil, nil). Surface it, never a
+                        // plausible-but-wrong empty success.
+                        state.resume(.failure(YoozEngineError.invalidResponse))
+                    }
                 }
             }
-            guard let service = proxy as? YoozEngineXPCProtocol else {
-                if resumed.claim() {
-                    continuation.resume(throwing: YoozEngineError.engineNotReachable)
-                }
-                return
-            }
-            service.request(method: method, path: path, body: body) { data, error in
-                guard resumed.claim() else { return }
-                if let error {
-                    continuation.resume(throwing: XPCErrorBridge.toYoozEngineError(error))
-                } else {
-                    continuation.resume(returning: data ?? Data())
-                }
-            }
+        } onCancel: {
+            state.cancel()
         }
     }
 }
 
-/// One-shot latch so a continuation is resumed exactly once.
-private final class ResumeOnce: @unchecked Sendable {
+/// Resolves a single XPC request's continuation exactly once, whether the
+/// outcome arrives from XPC (reply / error handler) or from task cancellation.
+private final class SendState: @unchecked Sendable {
     private let lock = NSLock()
-    private var done = false
-    func claim() -> Bool {
+    private var continuation: CheckedContinuation<Data, Error>?
+    private var resumed = false
+    private var cancelledEarly = false
+
+    /// Register the continuation. Returns false (and resumes with
+    /// `CancellationError`) if cancellation already fired before registration.
+    func register(_ continuation: CheckedContinuation<Data, Error>) -> Bool {
         lock.lock()
-        defer { lock.unlock() }
-        if done { return false }
-        done = true
+        if cancelledEarly {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
         return true
+    }
+
+    func resume(_ result: Result<Data, Error>) {
+        lock.lock()
+        guard !resumed, let continuation else { lock.unlock(); return }
+        resumed = true
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(with: result)
+    }
+
+    func cancel() {
+        lock.lock()
+        if resumed { lock.unlock(); return }
+        if let continuation {
+            resumed = true
+            self.continuation = nil
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+        } else {
+            // Cancellation raced ahead of registration; register() will resolve.
+            cancelledEarly = true
+            lock.unlock()
+        }
     }
 }

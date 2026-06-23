@@ -32,64 +32,70 @@ enum XPCErrorBridge {
         guard let yooz = error as? YoozEngineError else {
             return error as NSError
         }
-        let description = yooz.errorDescription ?? "engine error"
+        // Every case carries a `kind` discriminator plus its associated payload,
+        // so the typed error reconstructs losslessly on the other side (no case
+        // is flattened to a generic `.invalidResponse`).
+        var info: [String: Any] = [NSLocalizedDescriptionKey: yooz.errorDescription ?? "engine error"]
         switch yooz {
-        case .serverError(let statusCode, let code, let message):
-            return NSError(domain: domain, code: 1, userInfo: [
-                NSLocalizedDescriptionKey: message,
-                "kind": "serverError",
-                "statusCode": statusCode,
-                "code": code,
-                "message": message,
-            ])
-        case .unsupportedOperation(let operation):
-            return NSError(domain: domain, code: 2, userInfo: [
-                NSLocalizedDescriptionKey: description,
-                "kind": "unsupportedOperation",
-                "operation": operation,
-            ])
+        case .engineNotInstalled:
+            info["kind"] = "engineNotInstalled"
+        case .engineNotReachable:
+            info["kind"] = "engineNotReachable"
+        case .engineLaunchFailed(let reason):
+            info["kind"] = "engineLaunchFailed"
+            info["reason"] = reason
+        case .portHeldByStaleEngine(let port):
+            info["kind"] = "portHeldByStaleEngine"
+            info["port"] = port
+        case .invalidResponse:
+            info["kind"] = "invalidResponse"
         case .httpError(let statusCode):
-            return NSError(domain: domain, code: 3, userInfo: [
-                NSLocalizedDescriptionKey: description,
-                "kind": "httpError",
-                "statusCode": statusCode,
-            ])
+            info["kind"] = "httpError"
+            info["statusCode"] = statusCode
+        case .serverError(let statusCode, let code, let message):
+            info["kind"] = "serverError"
+            info["statusCode"] = statusCode
+            info["code"] = code
+            info["message"] = message
         case .decodingError(let message):
-            return NSError(domain: domain, code: 4, userInfo: [
-                NSLocalizedDescriptionKey: description,
-                "kind": "decodingError",
-                "message": message,
-            ])
-        default:
-            return NSError(domain: domain, code: 99, userInfo: [
-                NSLocalizedDescriptionKey: description,
-                "kind": "other",
-            ])
+            info["kind"] = "decodingError"
+            info["message"] = message
+        case .webSocketError(let message):
+            info["kind"] = "webSocketError"
+            info["message"] = message
+        case .unsupportedOperation(let operation):
+            info["kind"] = "unsupportedOperation"
+            info["operation"] = operation
         }
+        return NSError(domain: domain, code: 1, userInfo: info)
     }
 
     static func toYoozEngineError(_ error: Error) -> YoozEngineError {
         let nsError = error as NSError
-        // Any non-bridged error (e.g. NSXPCConnection invalidation/interruption)
+        // A non-bridged error (e.g. NSXPCConnection invalidation/interruption)
         // means the service is unreachable.
         guard nsError.domain == domain else {
             return .engineNotReachable
         }
-        switch nsError.userInfo["kind"] as? String {
+        let info = nsError.userInfo
+        let message = info["message"] as? String ?? nsError.localizedDescription
+        switch info["kind"] as? String {
+        case "engineNotInstalled":     return .engineNotInstalled
+        case "engineNotReachable":     return .engineNotReachable
+        case "engineLaunchFailed":     return .engineLaunchFailed(info["reason"] as? String ?? message)
+        case "portHeldByStaleEngine":  return .portHeldByStaleEngine(port: info["port"] as? Int ?? 0)
+        case "invalidResponse":        return .invalidResponse
+        case "httpError":              return .httpError(statusCode: info["statusCode"] as? Int ?? 0)
         case "serverError":
             return .serverError(
-                statusCode: nsError.userInfo["statusCode"] as? Int ?? 0,
-                code: nsError.userInfo["code"] as? String ?? "",
-                message: nsError.userInfo["message"] as? String ?? nsError.localizedDescription
+                statusCode: info["statusCode"] as? Int ?? 0,
+                code: info["code"] as? String ?? "",
+                message: message
             )
-        case "unsupportedOperation":
-            return .unsupportedOperation(operation: nsError.userInfo["operation"] as? String ?? "")
-        case "httpError":
-            return .httpError(statusCode: nsError.userInfo["statusCode"] as? Int ?? 0)
-        case "decodingError":
-            return .decodingError(nsError.userInfo["message"] as? String ?? nsError.localizedDescription)
-        default:
-            return .invalidResponse
+        case "decodingError":          return .decodingError(message)
+        case "webSocketError":         return .webSocketError(message)
+        case "unsupportedOperation":   return .unsupportedOperation(operation: info["operation"] as? String ?? "")
+        default:                       return .invalidResponse
         }
     }
 }
