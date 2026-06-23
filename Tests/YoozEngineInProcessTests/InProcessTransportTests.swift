@@ -48,10 +48,10 @@ final class InProcessTransportTests: XCTestCase {
         let transport = InProcessTransport()
         do {
             _ = try await transport.delete("/v1/infinite/sessions/x")
-            XCTFail("delete should throw unsupportedInProcess")
+            XCTFail("delete should throw unsupportedOperation")
         } catch let error as YoozEngineError {
-            guard case .unsupportedInProcess = error else {
-                XCTFail("expected unsupportedInProcess, got \(error)")
+            guard case .unsupportedOperation = error else {
+                XCTFail("expected unsupportedOperation, got \(error)")
                 return
             }
         }
@@ -92,10 +92,10 @@ final class InProcessTransportTests: XCTestCase {
         XCTAssertNotNil(status.modelId)
     }
 
-    /// Streaming dispatch is wired (no longer `unsupportedInProcess` wholesale):
+    /// Streaming dispatch is wired (no longer `unsupportedOperation` wholesale):
     /// switching to the qwen3 preview backend — which the in-process streaming
     /// path intentionally does NOT support — and opening a stream must throw
-    /// `unsupportedInProcess` for THAT backend specifically. This exercises the
+    /// `unsupportedOperation` for THAT backend specifically. This exercises the
     /// streaming dispatch + the STT engine picker without needing model weights.
     func testInProcessQwen3StreamingIsUnsupported() async throws {
         let client = makeClient()
@@ -105,8 +105,8 @@ final class InProcessTransportTests: XCTestCase {
             _ = try await client.stt.startStream()
             XCTFail("qwen3 streaming should be unsupported in-process")
         } catch let error as YoozEngineError {
-            guard case .unsupportedInProcess = error else {
-                XCTFail("expected unsupportedInProcess, got \(error)")
+            guard case .unsupportedOperation = error else {
+                XCTFail("expected unsupportedOperation, got \(error)")
                 return
             }
         }
@@ -141,10 +141,10 @@ final class InProcessTransportTests: XCTestCase {
         try await client.connect()
         do {
             _ = try await client.infinite.status()
-            XCTFail("expected unsupportedInProcess for an unimplemented endpoint")
+            XCTFail("expected unsupportedOperation for an unimplemented endpoint")
         } catch let error as YoozEngineError {
-            guard case .unsupportedInProcess = error else {
-                XCTFail("expected unsupportedInProcess, got \(error)")
+            guard case .unsupportedOperation = error else {
+                XCTFail("expected unsupportedOperation, got \(error)")
                 return
             }
         }

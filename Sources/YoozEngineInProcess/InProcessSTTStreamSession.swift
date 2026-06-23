@@ -13,7 +13,7 @@ import YoozEngineClient
 ///
 /// Backends: Parakeet / FastConformer (incremental `StreamingTranscriber`) and
 /// Apple STT (buffer-then-finalize). The qwen3 preview backend is loopback/dev
-/// only — `InProcessTransport.openSTTStream` reports `unsupportedInProcess` for it.
+/// only — `InProcessTransport.openSTTStream` reports `unsupportedOperation` for it.
 @available(macOS 14.0, iOS 17.0, *)
 final class InProcessSTTStreamSession: STTStreamSession, @unchecked Sendable {
     enum Backend {

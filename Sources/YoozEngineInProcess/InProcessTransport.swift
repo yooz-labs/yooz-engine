@@ -20,7 +20,7 @@ import YoozEngineClient
 /// `POST /v1/grammar/check`, `POST /v1/vad/detect`, `POST /v1/stt/batch`,
 /// `POST /v1/llm/generate`.
 ///
-/// Reported as `unsupportedInProcess` until a later cut:
+/// Reported as `unsupportedOperation` until a later cut:
 ///   - **Streaming STT** (`webSocketURL`) — Phase 2b.
 ///   - **Pickers / status / load** (`/v1/stt/engine`, `/v1/stt/status`,
 ///     `/v1/stt/load`, `/v1/stt/languages`, `/v1/llm/*` model management,
@@ -73,7 +73,7 @@ public final class InProcessTransport: EngineTransport {
         case "/v1/touchup/models":
             return try await handleTouchUpModels()
         default:
-            throw YoozEngineError.unsupportedInProcess(operation: "GET \(route(path))")
+            throw YoozEngineError.unsupportedOperation(operation: "GET \(route(path))")
         }
     }
 
@@ -101,12 +101,12 @@ public final class InProcessTransport: EngineTransport {
         case "/v1/touchup/model":
             return try await handleSetTouchUpModel(body)
         default:
-            throw YoozEngineError.unsupportedInProcess(operation: "POST \(route(path))")
+            throw YoozEngineError.unsupportedOperation(operation: "POST \(route(path))")
         }
     }
 
     public func delete(_ path: String) async throws -> Data {
-        throw YoozEngineError.unsupportedInProcess(operation: "DELETE \(route(path))")
+        throw YoozEngineError.unsupportedOperation(operation: "DELETE \(route(path))")
     }
 
     @available(macOS 14.0, iOS 17.0, *)
@@ -137,7 +137,7 @@ public final class InProcessTransport: EngineTransport {
 
         case .qwen3ASRPreview:
             // The preview backend is loopback/dev only (unstable; engine#154).
-            throw YoozEngineError.unsupportedInProcess(operation: "streaming qwen3 preview")
+            throw YoozEngineError.unsupportedOperation(operation: "streaming qwen3 preview")
 
         case .parakeet, .fastConformer:
             try await YoozSTTEngine.shared.start(language: lang)
