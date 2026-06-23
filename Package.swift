@@ -57,6 +57,13 @@ let package = Package(
         .library(name: "LLMModule", targets: ["LLMModule"]),
         .library(name: "GrammarModule", targets: ["GrammarModule"]),
         .library(name: "STTModule", targets: ["STTModule"]),
+
+        // In-process facade (epic #192 Phase 2): the `YoozEngineClient` SDK
+        // surface backed by direct calls into the engine module actors, with no
+        // loopback socket. Standalone App Store apps link this to run the engine
+        // in-sandbox. Depends on YoozEngineClient (SDK + transport seam) plus the
+        // module products it routes to.
+        .library(name: "YoozEngineInProcess", targets: ["YoozEngineInProcess"]),
     ],
     dependencies: [
         // mlx-swift 0.31.4 release (what mlx-swift-lm main declares). Pin the
@@ -190,10 +197,32 @@ let package = Package(
             path: "YoozEngine/STT/Models/Qwen3ASR",
             exclude: ["MelFrontend"]
         ),
+        // In-process facade (epic #192 Phase 2). Routes the SDK surface to the
+        // engine actors directly. Infinite is intentionally NOT a dependency
+        // (its consumer is the loopback super-yooz host); the in-process
+        // transport returns `unsupportedInProcess` for that API.
+        .target(
+            name: "YoozEngineInProcess",
+            dependencies: [
+                "YoozEngineClient",
+                "EngineCore",
+                "STTModule",
+                "LLMModule",
+                "GrammarModule",
+                "AppleSTTModule",
+                "VADModule",
+            ],
+            path: "Sources/YoozEngineInProcess"
+        ),
         .testTarget(
             name: "YoozEngineClientTests",
             dependencies: ["YoozEngineClient"],
             path: "Tests/YoozEngineClientTests"
+        ),
+        .testTarget(
+            name: "YoozEngineInProcessTests",
+            dependencies: ["YoozEngineInProcess"],
+            path: "Tests/YoozEngineInProcessTests"
         ),
         .testTarget(
             name: "Qwen3ASRMelFrontendTests",
