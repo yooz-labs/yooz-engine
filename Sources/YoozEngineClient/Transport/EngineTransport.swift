@@ -46,11 +46,13 @@ public protocol EngineTransport: Sendable {
     /// `DELETE <path>` returning the raw response body.
     func delete(_ path: String) async throws -> Data
 
-    /// WebSocket URL for a streaming endpoint (e.g. `v1/stt/stream`).
+    /// Open a streaming STT session for `language` / `mode`.
     ///
-    /// `HTTPTransport` returns a `ws://` URL. Transports without a loopback
-    /// socket throw `YoozEngineError.unsupportedInProcess` until the
-    /// in-process streaming path lands (epic #192 Phase 2b).
+    /// `HTTPTransport` performs the WebSocket config/ready handshake and returns
+    /// a WebSocket-backed session. `InProcessTransport` sets up an engine
+    /// `StreamingTranscriber` / Qwen3 session / Apple buffer and returns an
+    /// in-process session. `language` / `mode` are raw wire values
+    /// (`STTLanguage.rawValue` / `AudioMode.rawValue`).
     @available(macOS 14.0, iOS 17.0, *)
-    func webSocketURL(path: String) throws -> URL
+    func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession
 }

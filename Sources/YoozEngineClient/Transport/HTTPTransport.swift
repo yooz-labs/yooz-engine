@@ -168,8 +168,8 @@ public final class HTTPTransport: EngineTransport {
     }
 
     @available(macOS 14.0, iOS 17.0, *)
-    public func webSocketURL(path: String) throws -> URL {
-        let wsURL = baseURL.appendingPathComponent(path)
+    public func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
+        let wsURL = baseURL.appendingPathComponent("v1/stt/stream")
         guard var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false) else {
             throw YoozEngineError.invalidResponse
         }
@@ -177,7 +177,39 @@ public final class HTTPTransport: EngineTransport {
         guard let url = components.url else {
             throw YoozEngineError.invalidResponse
         }
-        return url
+
+        let session = URLSession(configuration: .default)
+        let wsTask = session.webSocketTask(with: url)
+        wsTask.resume()
+
+        do {
+            // Send config frame, then wait for the engine's `ready` ack.
+            let config = STTStreamConfig(type: "config", language: language, mode: mode)
+            let configData = try JSONEncoder().encode(config)
+            let configStr = String(data: configData, encoding: .utf8)!
+            try await wsTask.send(.string(configStr))
+
+            let readyMsg = try await wsTask.receive()
+            switch readyMsg {
+            case .string(let text):
+                if let data = text.data(using: .utf8) {
+                    let response = try JSONDecoder().decode(WSReadyResponse.self, from: data)
+                    if response.type == "error" {
+                        throw YoozEngineError.webSocketError(response.message ?? "Unknown error")
+                    }
+                }
+            case .data:
+                break
+            @unknown default:
+                break
+            }
+        } catch {
+            wsTask.cancel(with: .normalClosure, reason: nil)
+            session.invalidateAndCancel()
+            throw error
+        }
+
+        return WebSocketSTTStreamSession(task: wsTask, session: session)
     }
 
     /// Engine error envelope: every non-2xx response carries `{error, code}`.
