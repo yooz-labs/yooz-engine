@@ -45,6 +45,18 @@ let package = Package(
             targets: ["Qwen3ASRMelFrontend"]
         ),
         .library(name: "Qwen3ASR", targets: ["Qwen3ASR"]),
+
+        // Engine modules exposed for in-process linking by standalone App Store
+        // apps (epic #192). Same source dirs the xcodegen module-framework targets
+        // (STTModule, LLMModule, …) ingest via project.yml — the app targets
+        // (YoozEngine*) exclude those dirs and just link the frameworks — so
+        // SwiftPM and xcodegen share one source of truth.
+        .library(name: "EngineCore", targets: ["EngineCore"]),
+        .library(name: "AppleSTTModule", targets: ["AppleSTTModule"]),
+        .library(name: "VADModule", targets: ["VADModule"]),
+        .library(name: "LLMModule", targets: ["LLMModule"]),
+        .library(name: "GrammarModule", targets: ["GrammarModule"]),
+        .library(name: "STTModule", targets: ["STTModule"]),
     ],
     dependencies: [
         // mlx-swift 0.31.4 release (what mlx-swift-lm main declares). Pin the
@@ -68,13 +80,94 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/huggingface/swift-transformers",
-            from: "1.1.6"
+            "1.2.0" ..< "1.3.0"
+        ),
+        // swift-huggingface (HubClient) — used by the #huggingFaceTokenizerLoader
+        // macro that LLM/Infinite expand. Matches project.yml.
+        .package(
+            url: "https://github.com/huggingface/swift-huggingface",
+            "0.9.0" ..< "0.10.0"
         ),
     ],
     targets: [
         .target(
             name: "YoozEngineClient",
             path: "Sources/YoozEngineClient"
+        ),
+
+        // MARK: - Engine modules (in-process, epic #192)
+        .target(
+            name: "EngineCore",
+            path: "Sources/EngineCore"
+        ),
+        .target(
+            name: "AppleSTTModule",
+            dependencies: ["EngineCore"],
+            path: "YoozEngine/AppleSTT"
+        ),
+        .target(
+            name: "VADModule",
+            dependencies: ["EngineCore"],
+            path: "YoozEngine/VAD"
+        ),
+        // LLM + TouchUp are mutually referential (one module in xcodegen), so a
+        // single SPM target spans both dirs. The #huggingFaceTokenizerLoader
+        // macro builds natively under SwiftPM (the xcodegen-only
+        // -skipMacroValidation flag is an xcodebuild flag, not a swiftc one, and
+        // isn't needed here), so this stays a usable versioned dependency.
+        .target(
+            name: "LLMModule",
+            dependencies: [
+                "EngineCore",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Hub", package: "swift-transformers"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+            ],
+            path: "YoozEngine",
+            sources: ["LLM", "TouchUp"]
+        ),
+        // Grammar depends on the vendored Rust text-cleanup xcframework. The whole
+        // Vendor/ tree is gitignored (build output, regenerated from the Rust
+        // source), so on a clean checkout this path is absent and `swift build`
+        // fails until the xcframework is built. For external consumers it must
+        // become a remote .binaryTarget(url:checksum:) (publish like the helper
+        // release) — tracked as a follow-up. Local path proves the in-repo integration.
+        .target(
+            name: "GrammarModule",
+            dependencies: ["EngineCore", "YoozTextCleanup"],
+            path: "YoozEngine/Grammar"
+        ),
+        .binaryTarget(
+            name: "YoozTextCleanup",
+            path: "Vendor/YoozTextCleanup/YoozTextCleanup.xcframework"
+        ),
+        // STTModule is the whole YoozEngine/STT EXCEPT Models/Qwen3ASR, which
+        // stays its own SPM target so the 606 MB parity tests can run headlessly
+        // via `swift test` (see the file-header comment for why xcodebuild
+        // deadlocks). The STT engine references Qwen3ASR types (public,
+        // one-directional), bridged by a `#if canImport(Qwen3ASR)` import in the
+        // few referencing files.
+        .target(
+            name: "STTModule",
+            dependencies: [
+                "EngineCore",
+                "Qwen3ASR",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Hub", package: "swift-transformers"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+            ],
+            path: "YoozEngine/STT",
+            exclude: ["Models/Qwen3ASR"]
         ),
         .target(
             name: "Qwen3ASRMelFrontend",

@@ -4,6 +4,12 @@ import Combine
 import EngineCore
 import Foundation
 import MLX
+// Under SPM, Qwen3ASR is its own module (canImport true, import needed). Under
+// xcodegen its sources compile into STTModule (canImport false, already in
+// scope). The conditional handles both builds (epic #192).
+#if canImport(Qwen3ASR)
+    import Qwen3ASR
+#endif
 
 /// Result from streaming transcription
 public struct ParakeetResult: Equatable, Sendable {
