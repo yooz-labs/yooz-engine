@@ -45,6 +45,13 @@ let package = Package(
             targets: ["Qwen3ASRMelFrontend"]
         ),
         .library(name: "Qwen3ASR", targets: ["Qwen3ASR"]),
+
+        // Engine modules exposed for in-process linking by standalone App Store
+        // apps (epic #192). Same source files the xcodegen helper-`.app` targets
+        // ingest via project.yml, so SwiftPM and xcodegen share one source of truth.
+        .library(name: "EngineCore", targets: ["EngineCore"]),
+        .library(name: "AppleSTTModule", targets: ["AppleSTTModule"]),
+        .library(name: "VADModule", targets: ["VADModule"]),
     ],
     dependencies: [
         // mlx-swift 0.31.4 release (what mlx-swift-lm main declares). Pin the
@@ -75,6 +82,22 @@ let package = Package(
         .target(
             name: "YoozEngineClient",
             path: "Sources/YoozEngineClient"
+        ),
+
+        // MARK: - Engine modules (in-process, epic #192)
+        .target(
+            name: "EngineCore",
+            path: "Sources/EngineCore"
+        ),
+        .target(
+            name: "AppleSTTModule",
+            dependencies: ["EngineCore"],
+            path: "YoozEngine/AppleSTT"
+        ),
+        .target(
+            name: "VADModule",
+            dependencies: ["EngineCore"],
+            path: "YoozEngine/VAD"
         ),
         .target(
             name: "Qwen3ASRMelFrontend",
