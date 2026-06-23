@@ -24,36 +24,13 @@ import HuggingFace
 private let logger = Logger(subsystem: "live.yooz.engine", category: "MLXLLMBackend")
 
 #if canImport(MLXLMCommon)
-/// Capability protocol for KV cache layers that accept TurboQuant's per-layer
-/// `turboQuantEnabled` flag. The engine depends on the *capability*, not on
-/// SharpAI's concrete `KVCacheSimple` class — so a future fork rename or a
-/// new cache subclass that implements this property continues to work
-/// without source changes here.
-///
-/// `KVCacheSimple` from the SharpAI mlx-swift-lm fork conforms automatically
-/// via the extension below. Other built-in cache types
-/// (`QuantizedKVCache` / `RotatingKVCache` / `ChunkedKVCache`) deliberately
-/// do not. When a `.turbo3` request lands on a model whose layers do not
-/// conform, the engine logs an error and the run silently falls back to
-/// FP16 — the cast pattern in `generate(...)` makes that case observable
-/// via the `lastTurboLayersEnabled` actor property.
-protocol TurboQuantCapable: AnyObject {
-    var turboQuantEnabled: Bool { get set }
-}
-
-extension KVCacheSimple: TurboQuantCapable {}
-#endif
-
-#if canImport(MLXLMCommon)
 /// Per-generate-call result captured inside the `container.perform`
 /// closure and returned to the actor for post-processing. Lifted into a
 /// struct so the closure return type stays under the swiftlint
-/// `large_tuple` cap (4 fields would otherwise trigger the rule).
+/// `large_tuple` cap.
 private struct GenerateResult {
     let text: String
     let kvSnapshot: [[MLXArray]]?
-    let turboEnabled: Int
-    let turboTotal: Int
 }
 #endif
 
@@ -79,39 +56,6 @@ actor MLXLLMBackend: LLMBackend {
 
     private let bundleIdentifier: String
 
-    /// KV cache compression mode for this backend instance. Defaults to
-    /// `EngineConfig.kvCompression`, which today is `.off` so there is no
-    /// behavioral change for existing call sites until a caller opts in.
-    private let kvCompression: KVCompressionMode
-
-    /// Read-only accessor on the `kvCompression` mode this backend was
-    /// constructed with. Exposed primarily for tests and `/v1/health`-style
-    /// observability so callers can confirm the configured mode without
-    /// having to introspect private state.
-    var currentKVCompression: KVCompressionMode { kvCompression }
-
-    /// Number of cache layers on which `turboQuantEnabled = true` was
-    /// successfully set in the most recent `generate(...)` call. When
-    /// `kvCompression == .turbo3` and this is `0`, the run silently fell
-    /// back to FP16 (the model's cache type does not adopt
-    /// `TurboQuantCapable`); the generate path also logs an error in that
-    /// case. Reset at the start of every generate call.
-    private(set) var lastTurboLayersEnabled: Int = 0
-
-    /// Total number of cache layers seen during the most recent
-    /// `generate(...)` call (irrespective of whether they accepted the
-    /// turbo flag). Together with `lastTurboLayersEnabled` this lets a
-    /// caller distinguish "no layers exist" from "layers exist but none
-    /// were `TurboQuantCapable`".
-    private(set) var lastTurboLayersTotal: Int = 0
-
-    /// Whether the most recent `generate(...)` call's prompt token count
-    /// exceeded the upstream `turboMinActivationTokens` gate (default 2048).
-    /// Below the gate, even a `.turbo3` cache stays on FP16. Surfacing this
-    /// makes the "I enabled turbo3 and nothing happened" triage path
-    /// observable. Reset at the start of every generate call.
-    private(set) var lastActivationGatePassed: Bool = false
-
     #if canImport(MLXLMCommon)
     private var modelContainer: ModelContainer?
 
@@ -131,13 +75,11 @@ actor MLXLLMBackend: LLMBackend {
 
     init(
         modelType: LLMModelType,
-        bundleIdentifier: String = "live.yooz.engine",
-        kvCompression: KVCompressionMode = EngineConfig.kvCompression
+        bundleIdentifier: String = "live.yooz.engine"
     ) {
         self.identifier = modelType.rawValue
         self.modelType = modelType
         self.bundleIdentifier = bundleIdentifier
-        self.kvCompression = kvCompression
     }
 
     // MARK: - LLMBackend Protocol
@@ -218,14 +160,6 @@ actor MLXLLMBackend: LLMBackend {
             throw LLMError.notLoaded
         }
 
-        // Reset per-call observability counters before doing any work.
-        // If the call short-circuits early (e.g., model not available)
-        // these stay at 0/false, which is the correct interpretation
-        // ("no turbo activation occurred this call").
-        self.lastTurboLayersEnabled = 0
-        self.lastTurboLayersTotal = 0
-        self.lastActivationGatePassed = false
-
         #if canImport(MLXLMCommon)
         guard let container = modelContainer else {
             throw LLMError.notLoaded
@@ -301,28 +235,8 @@ actor MLXLLMBackend: LLMBackend {
             }
 
             phase = "generation"
-            // Capture into a local: actor-isolated `self.kvCompression`
-            // cannot cross the Sendable closure boundary in
-            // `container.perform { context in ... }`. The local copy is
-            // a `Sendable` value so the closure can read it directly.
-            let kvCompressionMode = self.kvCompression
-            // Activation-gate visibility (issue #10 / silent-failure-hunter
-            // finding #3). The upstream `turboMinActivationTokens` default
-            // is 2048; below that, even a `.turbo3` cache stays on FP16.
-            // Surface this at info so triage can distinguish "compression
-            // requested but gate filtered it out" from "compression
-            // requested and silently no-op'd because the cache type
-            // changed" (the latter is logged below as an error).
-            let promptTokenCount = fullInput.text.tokens.size
-            let gatePassed = promptTokenCount >= 2048
-            self.lastActivationGatePassed = gatePassed
-            if kvCompressionMode == .turbo3 && !gatePassed {
-                logger.info(
-                    "turbo3 requested but prompt tokens=\(promptTokenCount) < activation gate (2048); generation will use FP16 (expected for TouchUp / chat-turn workloads)."
-                )
-            }
 
-            let result: GenerateResult = try await container.perform { context in
+            let result: GenerateResult = try await container.perform { (context: ModelContext) in
                 // Create fresh KV cache and restore cached system prompt state if available
                 var cache = context.model.newCache(parameters: params)
                 if let savedState = savedKVState {
@@ -330,55 +244,6 @@ actor MLXLLMBackend: LLMBackend {
                         cache[i].state = savedState[i]
                     }
                     eval(cache)
-                }
-
-                // TurboQuant KV cache compression (issue #10).
-                // When `kvCompression == .turbo3`, opt every per-layer
-                // `TurboQuantCapable` cache into SharpAI's TurboKV path.
-                // The upstream class gates actual compression behind
-                // `turboMinActivationTokens` (default 2048), so short
-                // workloads (TouchUp / chat) stay on FP16.
-                //
-                // All currently-supported Yooz models (Yooz-Light Qwen2.5-0.5B
-                // and Yooz-Quality Qwen3-1.7B, both head_dim=128) return
-                // `KVCacheSimple` for every layer, which conforms to
-                // `TurboQuantCapable`. Sliding-window models (Mistral, Gemma)
-                // would yield `RotatingKVCache` for some layers and turbo3
-                // does not apply to those. Quantized variants
-                // (`QuantizedKVCache`, when `kvBits != nil`) are also skipped.
-                //
-                // The upstream `KVCacheSimple` self-disables
-                // `turboQuantEnabled` at runtime when `head_dim ∉ {128, 256, 512}`
-                // (verified at SharpAI mlx-swift-lm KVCache.swift:395-405),
-                // so we don't need a head_dim guard here — but we count and
-                // surface "no layers accepted the flag" as an error so a
-                // future fork rename or cache-type change is observable
-                // via `lastTurboLayersEnabled`.
-                var turboEnabledCount = 0
-                let turboTotalCount = cache.count
-                if kvCompressionMode == .turbo3 {
-                    var skippedTypes: [String] = []
-                    for layer in cache {
-                        if let capable = layer as? TurboQuantCapable {
-                            capable.turboQuantEnabled = true
-                            turboEnabledCount += 1
-                        } else {
-                            skippedTypes.append(String(describing: type(of: layer)))
-                        }
-                    }
-                    if turboEnabledCount == 0 {
-                        let typeList = skippedTypes.isEmpty
-                            ? "<no layers>"
-                            : Array(Set(skippedTypes)).joined(separator: ", ")
-                        logger.error(
-                            "turbo3 requested but no TurboQuantCapable cache layers found (cache types=[\(typeList)]); compression will not activate, falling back to FP16."
-                        )
-                    } else if !skippedTypes.isEmpty {
-                        let typeList = Array(Set(skippedTypes)).joined(separator: ", ")
-                        logger.warning("turbo3: enabled on \(turboEnabledCount)/\(turboTotalCount) layers; skipped types=[\(typeList)]")
-                    } else {
-                        logger.info("turbo3: enabled on all \(turboEnabledCount) cache layers (gate triggers at >=2048 tokens)")
-                    }
                 }
 
                 // Generate using the lower-level API with our managed cache
@@ -391,13 +256,8 @@ actor MLXLLMBackend: LLMBackend {
 
                 var text = ""
                 for await generation in stream {
-                    // mlx-swift-lm 3.x changed `.chunk(String)` to
-                    // `.chunk(String, tokenId: Int)`. We don't track per-chunk
-                    // token IDs in this path, so the second associated value
-                    // is ignored. The wildcard `_` (rather than a named
-                    // placeholder) means a future 3.x minor that adds a
-                    // third associated value will fail-fast at compile time.
-                    if case let .chunk(chunk, _) = generation {
+                    // ml-explore `Generation.chunk` carries the decoded String.
+                    if case let .chunk(chunk) = generation {
                         text += chunk
                     }
                 }
@@ -414,62 +274,13 @@ actor MLXLLMBackend: LLMBackend {
                         }
                         eval(cache)
                     }
-                    // KVCacheSimple.trim() workaround for SharpAI fork.
-                    //
-                    // The fork's `trim(_:)` only decrements `offset`; it
-                    // does NOT clear `polarKeys` / `compressedOffset`. If a
-                    // generation crossed the 2048-token activation gate,
-                    // user-side tokens were compressed into `polarKeys`.
-                    // After trimming back to `sysCount`, those compressed
-                    // user tokens still live in `polarKeys`, and the
-                    // `state` getter will decode them and concatenate with
-                    // the (now-trimmed) hot window — meaning the snapshot
-                    // contains user-side history we explicitly tried to
-                    // strip out.
-                    //
-                    // Defensive bail-out: if any layer has
-                    // `compressedOffset > sysCount`, skip the snapshot.
-                    // The next call re-computes the system prompt from
-                    // scratch, which is correct (just slower). Filed
-                    // upstream at SharpAI/mlx-swift-lm; remove this guard
-                    // once `trim(_:)` clears `polarKeys` (or once
-                    // `state` getter respects `offset` for the polar band).
-                    var compressedBeyondSys = false
-                    for layer in cache {
-                        if let simple = layer as? KVCacheSimple,
-                           simple.compressedOffset > sysCount {
-                            compressedBeyondSys = true
-                            break
-                        }
-                    }
-                    if compressedBeyondSys {
-                        logger.warning(
-                            "Skipping prompt-cache snapshot: SharpAI trim() cannot evict user-side compressed history. Next call recomputes the system prompt."
-                        )
-                        snapshot = nil
-                    } else {
-                        // SharpAI fork's `KVCacheSimple.state` getter
-                        // decodes `polarKeys` back to fp16 and
-                        // concatenates with the hot window, so the
-                        // snapshot is fork-agnostic — both FP16-only and
-                        // turbo3-active runs return a valid fp16 pair the
-                        // setter can restore. See SharpAI mlx-swift-lm
-                        // KVCache.swift lines ~476-509.
-                        snapshot = cache.map(\.state)
-                    }
+                    snapshot = cache.map(\.state)
                 }
                 return GenerateResult(
                     text: text,
-                    kvSnapshot: snapshot,
-                    turboEnabled: turboEnabledCount,
-                    turboTotal: turboTotalCount
+                    kvSnapshot: snapshot
                 )
             }
-
-            // Surface the TurboQuant outcome on the actor for tests /
-            // health-style observability.
-            self.lastTurboLayersEnabled = result.turboEnabled
-            self.lastTurboLayersTotal = result.turboTotal
 
             // Update cached state
             if let snapshot = result.kvSnapshot {
@@ -613,43 +424,31 @@ actor MLXLLMBackend: LLMBackend {
 // MARK: - Factory
 
 extension MLXLLMBackend {
-    /// Construct a backend, optionally overriding the engine-wide
-    /// `kvCompression` default. Passing `nil` (or omitting) keeps the
-    /// `EngineConfig.kvCompression` default, so existing call sites do not
-    /// change behavior. Per-request callers (e.g., the
-    /// `/v1/llm/generate` handler in `APIServer`) pass the user-supplied
-    /// override here.
     static func create(
         for type: LLMModelType,
-        bundleIdentifier: String = "live.yooz.engine",
-        kvCompression: KVCompressionMode? = nil
+        bundleIdentifier: String = "live.yooz.engine"
     ) -> MLXLLMBackend {
         return MLXLLMBackend(
             modelType: type,
-            bundleIdentifier: bundleIdentifier,
-            kvCompression: kvCompression ?? EngineConfig.kvCompression
+            bundleIdentifier: bundleIdentifier
         )
     }
 
     static func createLight(
-        bundleIdentifier: String = "live.yooz.engine",
-        kvCompression: KVCompressionMode? = nil
+        bundleIdentifier: String = "live.yooz.engine"
     ) -> MLXLLMBackend {
         return create(
             for: .yoozLight,
-            bundleIdentifier: bundleIdentifier,
-            kvCompression: kvCompression
+            bundleIdentifier: bundleIdentifier
         )
     }
 
     static func createQuality(
-        bundleIdentifier: String = "live.yooz.engine",
-        kvCompression: KVCompressionMode? = nil
+        bundleIdentifier: String = "live.yooz.engine"
     ) -> MLXLLMBackend {
         return create(
             for: .yoozQuality,
-            bundleIdentifier: bundleIdentifier,
-            kvCompression: kvCompression
+            bundleIdentifier: bundleIdentifier
         )
     }
 }

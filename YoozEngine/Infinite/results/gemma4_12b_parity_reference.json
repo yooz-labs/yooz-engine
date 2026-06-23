@@ -1,0 +1,27 @@
+{
+  "model_repo": "mlx-community/gemma-4-12B-it-4bit",
+  "prompt_text": "List the first five prime numbers, separated by commas.",
+  "prompt_formatted": "<bos><|turn>user\nList the first five prime numbers, separated by commas.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+  "max_tokens": 48,
+  "generated_token_ids": [
+    236778,
+    236764,
+    236743,
+    236800,
+    236764,
+    236743,
+    236810,
+    236764,
+    236743,
+    236832,
+    236764,
+    236743,
+    236770,
+    236770,
+    106
+  ],
+  "generated_text": "2, 3, 5, 7, 11",
+  "finish_reason": "stop",
+  "sampler": "greedy/argmax (temperature=0.0)",
+  "reference_engine": "mlx-vlm==0.6.3"
+}

@@ -56,6 +56,8 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
     case gemma4E4B1M = "gemma4-e4b-1m"
     /// Full-tier Gemma4 MoE model proven in infinite.
     case gemma4_26B_A4B1M = "gemma4-26b-a4b-1m"
+    /// Reduced-tier dense Gemma4 12B (`gemma4_unified`) for long-context coding.
+    case gemma4_12B1M = "gemma4-12b-1m"
     /// Qwen/d1 paged long-context flagship path.
     case qwen35B1M = "qwen3-35b-1m"
     /// Fast retrieval-backed mode from the s3 carry track.
@@ -67,6 +69,8 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
             return "Gemma4 E4B 1M"
         case .gemma4_26B_A4B1M:
             return "Gemma4 26B-A4B 1M"
+        case .gemma4_12B1M:
+            return "Gemma4 12B 1M"
         case .qwen35B1M:
             return "Qwen3.6 35B-A3B 1M"
         case .s3Retrieval:
@@ -82,6 +86,9 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         case .gemma4_26B_A4B1M:
             return "Full-tier Gemma4 long-context model. Single-needle retrieval "
                 + "validated near 1M tokens; interactive tier ~256K (multi-hop degrades beyond)."
+        case .gemma4_12B1M:
+            return "Dense Gemma4 12B for long-context coding. Reduced-tier viable "
+                + "(~7 GB 4-bit); native window 262K, interactive coding recall the primary use."
         case .qwen35B1M:
             return "Paged-cache Qwen3.6 flagship path. 1M context is memory-feasible "
                 + "but latency-bound; interactive tier ~256K."
@@ -95,7 +102,7 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         switch self {
         case .gemma4E4B1M:
             return .light
-        case .gemma4_26B_A4B1M, .s3Retrieval:
+        case .gemma4_26B_A4B1M, .gemma4_12B1M, .s3Retrieval:
             return .quality
         case .qwen35B1M:
             return .premium
@@ -110,6 +117,8 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
             return 3 * 1024 * 1024 * 1024
         case .gemma4_26B_A4B1M:
             return 14 * 1024 * 1024 * 1024
+        case .gemma4_12B1M:
+            return 7 * 1024 * 1024 * 1024
         case .qwen35B1M:
             return 20 * 1024 * 1024 * 1024
         case .s3Retrieval:
@@ -135,16 +144,18 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
 
     /// Whether the model can actually be loaded + run by the engine's
     /// MLX-Swift runtime today. The catalog advertises models proven in the
-    /// Python harness; the Swift `mlx-swift-lm` fork loads all three MLX rows:
-    /// `qwen3_5_moe` (the Qwen row) plus both `gemma4` rows — 26B-A4B (#184) and
-    /// the E4B OptiQ-4bit build (#186, once its per-layer-input projection +
-    /// KV-shared layers became loadable), all verified vs Python mlx-lm at
-    /// native context. Only retrieval mode has no MLX backend wired here. A row
-    /// is selectable in the picker for discovery, but load/generate refuses
-    /// cleanly when this is false.
+    /// Python harness; the Swift `mlx-swift-lm` fork loads all four MLX rows:
+    /// `qwen3_5_moe` (the Qwen row) plus the three `gemma4`-family rows —
+    /// 26B-A4B (`gemma4`, #184), the E4B OptiQ-4bit build (`gemma4`, #186, once
+    /// its per-layer-input projection + KV-shared layers became loadable), and
+    /// the dense 12B (`gemma4_unified`, #187, registered + its K-eq-V value path
+    /// fixed). All verified at native context vs the Python reference (mlx-lm for
+    /// the `gemma4` rows, mlx-vlm for `gemma4_unified`). Only retrieval mode has
+    /// no MLX backend wired here. A row is selectable in the picker for
+    /// discovery, but load/generate refuses cleanly when this is false.
     public var swiftRuntimeSupported: Bool {
         switch self {
-        case .qwen35B1M, .gemma4_26B_A4B1M, .gemma4E4B1M:
+        case .qwen35B1M, .gemma4_26B_A4B1M, .gemma4E4B1M, .gemma4_12B1M:
             return true
         case .s3Retrieval:
             return false
@@ -171,6 +182,8 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         switch self {
         case .gemma4E4B1M, .gemma4_26B_A4B1M:
             return "infinite:research/18-gemma-support-matrix.md"
+        case .gemma4_12B1M:
+            return "engine:YoozEngine/Infinite/results/PARITY.md (#187)"
         case .qwen35B1M:
             return "infinite:research/26-flagship-1m.md"
         case .s3Retrieval:
@@ -205,6 +218,19 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
                 nativeContextTokens: 262_144,
                 targetContextTokens: 1_000_000,
                 requiredRAMTier: .full
+            )
+        case .gemma4_12B1M:
+            return InfiniteBackendDescriptor(
+                selection: self,
+                repository: InfiniteModelRepository(
+                    id: "mlx-community/gemma-4-12B-it-4bit",
+                    revision: "73bcf09092aa277861d5a191b989b666f7f32e8f"
+                ),
+                backendKind: .pagedKV,
+                adapterKind: .pagedKVMLX,
+                nativeContextTokens: 262_144,
+                targetContextTokens: 1_000_000,
+                requiredRAMTier: .reduced
             )
         case .qwen35B1M:
             return InfiniteBackendDescriptor(
