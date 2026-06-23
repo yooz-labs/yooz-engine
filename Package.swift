@@ -131,12 +131,15 @@ let package = Package(
             path: "YoozEngine",
             sources: ["LLM", "TouchUp"]
         ),
-        // Grammar depends on the vendored Rust text-cleanup xcframework. The whole
-        // Vendor/ tree is gitignored (build output, regenerated from the Rust
-        // source), so on a clean checkout this path is absent and `swift build`
-        // fails until the xcframework is built. For external consumers it must
-        // become a remote .binaryTarget(url:checksum:) (publish like the helper
-        // release) — tracked as a follow-up. Local path proves the in-repo integration.
+        // Grammar depends on the Rust text-cleanup xcframework, published as a
+        // public HuggingFace artifact (YoozLabs/YoozTextCleanup) so consumers
+        // resolving the engine by git revision can fetch it — the in-repo Vendor/
+        // tree is gitignored build output and absent on a clean checkout. The
+        // checksum pins content integrity; the versioned filename is never
+        // overwritten in place, so the `main` resolve URL is effectively immutable.
+        // To re-release on a new crate version: run text-cleanup/build-xcframework.sh,
+        // `swift package compute-checksum` the zip, upload to YoozLabs/YoozTextCleanup,
+        // then bump the url + checksum here.
         .target(
             name: "GrammarModule",
             dependencies: ["EngineCore", "YoozTextCleanup"],
@@ -144,7 +147,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "YoozTextCleanup",
-            path: "Vendor/YoozTextCleanup/YoozTextCleanup.xcframework"
+            url: "https://huggingface.co/YoozLabs/YoozTextCleanup/resolve/main/YoozTextCleanup-0.6.6-07ff96f.xcframework.zip",
+            checksum: "c859400999a7af479303316440032f6323dcfc56ad15a9295f92f9b3bec843a5"
         ),
         // STTModule is the whole YoozEngine/STT EXCEPT Models/Qwen3ASR, which
         // stays its own SPM target so the 606 MB parity tests can run headlessly
