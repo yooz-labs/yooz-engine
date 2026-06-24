@@ -1,6 +1,7 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
 import Foundation
+import MLX
 import os.log
 
 /// Singleton actor wrapping the `Qwen3ASRPipeline` so the engine
@@ -90,10 +91,20 @@ public actor Qwen3ASRBackend {
 
     /// Drop the pipeline and free MLX memory.
     public func unload() async {
-        if pipeline != nil {
+        let hadPipeline = pipeline != nil
+        if hadPipeline {
             logger.info("Unloading Qwen3-ASR pipeline")
         }
         pipeline = nil
         loadedDirectory = nil
+        // Return the pipeline's Metal buffers to the OS. `setBackend` runs
+        // `stop()` (which clears) before this unload, so without clearing here
+        // a previously-loaded Qwen3 pipeline's buffers would re-enter the cache
+        // after that clear and stay resident. Guarded on `hadPipeline` so a
+        // no-op unload never touches the Metal allocator (which faults where
+        // `default.metallib` is absent, e.g. a plain `swift test` run).
+        if hadPipeline {
+            Memory.clearCache()
+        }
     }
 }

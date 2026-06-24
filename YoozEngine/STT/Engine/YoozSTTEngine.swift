@@ -208,6 +208,11 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         NSLog("YoozSTTEngine: Loading model for %@...", language.displayName)
 
+        // Bound MLX's Metal buffer cache before loading Parakeet/FastConformer
+        // weights. See `EngineConfig.mlxCacheLimitBytes` — the in-process
+        // guardrail against the unbounded buffer-cache runaway. Idempotent.
+        Memory.cacheLimit = EngineConfig.mlxCacheLimitBytes
+
         // Reset progress at the start of every load so a stale 1.0
         // from a prior run does not mislead clients polling
         // /v1/stt/status during the early phase of a switch.
@@ -437,11 +442,28 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        // Only reclaim if there was actually MLX state to free. `clearCache()`
+        // loads the Metal backend; guarding on prior state keeps a no-op
+        // `stop()` (e.g. a backend switch before any model loaded) from
+        // faulting where `default.metallib` is absent (plain `swift test`),
+        // while still reclaiming after a real teardown.
+        let hadMLXState = model != nil || streamingContext != nil
+
         if isStreaming {
             streamingContext = nil
         }
 
         model = nil
+
+        // Return the dropped model's Metal buffers to the OS. `stop()` is the
+        // STT teardown that runs on a backend switch (`setBackend`); without
+        // this, switching backends only nils the Swift reference and the old
+        // model's weights stay parked in MLX's buffer cache. (`stopStream()`
+        // already clears; this closes the same gap for the non-streaming
+        // teardown path.)
+        if hadMLXState {
+            Memory.clearCache()
+        }
 
         // Snapshot the in-flight load handle under the lock so the
         // cancel happens off the MainActor hop below. The Task's
@@ -558,7 +580,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         print("YoozSTTEngine: Stream stopped, final text: '\(result.text.prefix(50))...'")
 
         // Clear GPU cache to avoid memory accumulation between streams
-        GPU.clearCache()
+        Memory.clearCache()
 
         return result
     }

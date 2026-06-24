@@ -39,7 +39,29 @@ public enum EngineConfig {
     }
 
     public static let host: String = "127.0.0.1"
-    public static let version: String = "0.7.2"
+    public static let version: String = "0.7.3"
+
+    /// Hard cap on MLX's Metal buffer cache, applied by the MLX model-load
+    /// paths (`MLXLLMBackend.load`, `YoozSTTEngine` Parakeet load, the Qwen3
+    /// backend) via `Memory.cacheLimit`.
+    ///
+    /// mlx-swift's default `cacheLimit` equals its memory limit (~1.5x the
+    /// device's recommended working set), which scales with installed RAM and
+    /// lets the cache of freed-but-retained buffers grow into the tens of GB.
+    /// The loopback packaging hid this by running the engine in a separate,
+    /// kill-able helper process; in-process that growth is charged to the
+    /// consumer app's own RSS for the app's lifetime (the observed multi-tens-
+    /// of-GB runaway). Capping the cache keeps steady-state RAM at roughly
+    /// (resident model weights + this cache). 512 MB is ample scratch for the
+    /// STT encoder + LLM KV without pinning GBs.
+    ///
+    /// Applied at the load paths (not at process start) on purpose: setting it
+    /// touches the Metal allocator, which needs `default.metallib` — present in
+    /// the real app and under xcodebuild, absent under a plain `swift test`
+    /// run. The load paths only execute when a model is actually being loaded,
+    /// so the cap lands before the cache-growing inference begins and never
+    /// fires in the non-GPU structural tests.
+    public static let mlxCacheLimitBytes: Int = 512 * 1024 * 1024
 
     /// Convenience accessor for the active build variant. Mirrors
     /// `BuildVariant.current` so callers reading other engine config

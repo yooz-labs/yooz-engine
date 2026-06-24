@@ -87,6 +87,13 @@ actor MLXLLMBackend: LLMBackend {
     func load() async throws {
         guard !isLoaded else { return }
 
+        // Bound MLX's Metal buffer cache before this model allocates weights.
+        // See `EngineConfig.mlxCacheLimitBytes`: in-process this is the
+        // guardrail against the unbounded buffer-cache runaway. Applied here (a
+        // real load path) rather than at process start so it never touches the
+        // Metal allocator in the non-GPU structural tests. Idempotent.
+        Memory.cacheLimit = EngineConfig.mlxCacheLimitBytes
+
         #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
         let hfID = modelType.huggingFaceID
         logger.info("Loading model \(self.modelType.rawValue) from HF \(hfID)...")
@@ -134,6 +141,7 @@ actor MLXLLMBackend: LLMBackend {
     }
 
     func unload() {
+        let wasLoaded = isLoaded
         #if canImport(MLXLMCommon)
         modelContainer = nil
         cachedPromptKVState = nil
@@ -142,6 +150,16 @@ actor MLXLLMBackend: LLMBackend {
         #endif
         isLoaded = false
         downloadProgress = 0
+        // Return the freed weight/KV buffers to the OS. Dropping the Swift
+        // references alone only parks the Metal buffers in MLX's buffer cache;
+        // without this they stay resident until the cache limit forces a
+        // reclaim. In-process this is what makes tier eviction actually shrink
+        // the app's footprint. Guarded on `wasLoaded` so unloading a tier that
+        // never loaded does not touch the Metal allocator (which faults where
+        // `default.metallib` is absent, e.g. a plain `swift test` run).
+        if wasLoaded {
+            Memory.clearCache()
+        }
         logger.info("Model \(self.modelType.rawValue) unloaded")
     }
 
