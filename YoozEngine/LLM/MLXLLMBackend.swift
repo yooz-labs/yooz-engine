@@ -280,8 +280,22 @@ actor MLXLLMBackend: LLMBackend {
                     }
                 }
 
-                // Trim the cache back to the system prompt tokens and
-                // snapshot for next call's prompt-cache reuse.
+                // Reset the cache to hold ONLY the system-prompt tokens, then
+                // snapshot it for the next call's prompt-cache reuse. This is the
+                // "keep the system prompt, drop this turn's transcription +
+                // response" step: trimming the user + generated tokens off the
+                // tail is what keeps the persistent cache from carrying one
+                // recording's content into the next (engine#212 KV-cache bleed).
+                //
+                // The trim is VERIFIED, not trusted. A snapshot is kept only when
+                // the cache provably holds exactly `sysCount` tokens afterwards.
+                // `trim()` removes from the tail and positions 0..<sysCount are
+                // always the system prefix (fed in order on the cold call,
+                // restored from a clean snapshot on warm calls), so an offset that
+                // lands back on `sysCount` proves the remaining KV is the untouched
+                // system prompt. If the offset bookkeeping has drifted, the trim
+                // would leave stale transcription/response KV behind — so we keep
+                // no snapshot and the actor drops the whole prompt cache below.
                 var snapshot: [[MLXArray]]?
                 if sysCount > 0 {
                     let currentOffset = cache.first?.offset ?? 0
@@ -292,7 +306,10 @@ actor MLXLLMBackend: LLMBackend {
                         }
                         eval(cache)
                     }
-                    snapshot = cache.map(\.state)
+                    let trimmedOffset = cache.first?.offset ?? 0
+                    if trimAmount >= 0 && trimmedOffset == sysCount {
+                        snapshot = cache.map(\.state)
+                    }
                 }
                 return GenerateResult(
                     text: text,
@@ -300,13 +317,33 @@ actor MLXLLMBackend: LLMBackend {
                 )
             }
 
-            // Update cached state
+            // Update cached state. A non-nil snapshot is provably system-prompt
+            // only (verified above), so persist it for reuse. A nil snapshot means
+            // either there was no system prefix to cache, or the trim could not be
+            // proven clean — drop the prompt cache entirely so the next call starts
+            // cold (recomputing the system prompt) instead of reusing a snapshot we
+            // cannot trust. This is the self-healing "otherwise delete all cache"
+            // fallback: by induction every kept snapshot is clean, so no call ever
+            // restores transcription/response KV from a prior recording.
             if let snapshot = result.kvSnapshot {
                 cachedPromptKVState = snapshot
                 cachedPromptTokenCount = sysCount
                 cachedSystemPrompt = systemPrompt
                 if savedKVState == nil {
                     logger.info("Cached system prompt KV (\(sysCount) tokens)")
+                }
+            } else {
+                // Either there was no system prefix to cache (sysCount == 0) or
+                // the trim could not be proven clean. Drop any prior prompt cache
+                // so the next call recomputes the system prompt instead of reusing
+                // a snapshot we cannot trust. Log only when an actual cache was
+                // evicted, so a benign cold call (nothing cached yet) stays quiet.
+                let hadCache = cachedPromptKVState != nil
+                cachedPromptKVState = nil
+                cachedPromptTokenCount = 0
+                cachedSystemPrompt = nil
+                if hadCache {
+                    logger.debug("Dropped prompt cache (unverified system-only trim); next call recomputes")
                 }
             }
 

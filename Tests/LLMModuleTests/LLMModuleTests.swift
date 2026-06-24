@@ -322,4 +322,61 @@ final class LLMModuleTests: XCTestCase {
         XCTAssertFalse(result.text.isEmpty,
                        "Quality v2 must produce non-empty output for a valid input")
     }
+
+    /// Regression guard for engine #212: the persistent system-prompt KV cache
+    /// must never carry one call's transcription/response into the next. The
+    /// live failure was a touch-up response that replayed a *previous*
+    /// recording's output verbatim — the cache's per-turn trim drifted and the
+    /// stale KV fed forward. `MLXLLMBackend.generate` now keeps a snapshot only
+    /// when the trim provably lands back on the system-prompt boundary, else it
+    /// drops the whole cache.
+    ///
+    /// This drives several sequential generations with the SAME system prompt
+    /// and disjoint, uniquely-marked inputs, then asserts no output ever
+    /// contains another input's marker words. Cleanup output tracks its own
+    /// input, so a foreign marker can only appear via cache bleed. Behavioral
+    /// (model-gated) rather than deterministic: the invariant is proven by
+    /// construction in `generate`; this is the end-to-end contract.
+    func testGenerateDoesNotBleedAcrossCalls() async throws {
+        try XCTSkipUnless(shouldLoadRealModels,
+                          "Set YOOZ_LLM_LOAD_MODELS=1 to exercise the cross-call KV-cache bleed guard")
+
+        let backend = MLXLLMBackend.createLight()
+        try await backend.load()
+
+        let systemPrompt = """
+        You are a transcription cleanup assistant. Fix punctuation and \
+        capitalization in the user's text. Return only the corrected text, \
+        with no commentary.
+        """
+        let inputs = [
+            "schedule a meeting with bob about the quarterly budget",
+            "the weather in tokyo is rainy today so bring an umbrella",
+            "remember to buy almonds walnuts and pistachios at the store",
+            "the spacecraft entered orbit around jupiter last tuesday"
+        ]
+        let markers = [
+            ["bob", "quarterly", "budget"],
+            ["tokyo", "umbrella", "rainy"],
+            ["almonds", "walnuts", "pistachios"],
+            ["spacecraft", "jupiter", "orbit"]
+        ]
+
+        var outputs: [String] = []
+        for input in inputs {
+            let out = try await backend.generate(prompt: input, systemPrompt: systemPrompt)
+            outputs.append(out.lowercased())
+        }
+
+        for (i, out) in outputs.enumerated() {
+            for (j, foreignMarkers) in markers.enumerated() where j != i {
+                for marker in foreignMarkers {
+                    XCTAssertFalse(
+                        out.contains(marker),
+                        "output[\(i)] leaked marker '\(marker)' from input[\(j)] — KV-cache bleed. got: \(out)"
+                    )
+                }
+            }
+        }
+    }
 }
