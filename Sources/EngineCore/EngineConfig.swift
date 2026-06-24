@@ -39,7 +39,7 @@ public enum EngineConfig {
     }
 
     public static let host: String = "127.0.0.1"
-    public static let version: String = "0.7.3"
+    public static let version: String = "0.7.4"
 
     /// Hard cap on MLX's Metal buffer cache, applied by the MLX model-load
     /// paths (`MLXLLMBackend.load`, `YoozSTTEngine` Parakeet load, the Qwen3
