@@ -539,8 +539,14 @@ public final class InProcessTransport: EngineTransport {
                 message: "Unknown TouchUp mode '\(request.mode)'"
             )
         }
-        let result = await TouchUpEngine.shared.process(
-            text: request.text, mode: engineMode, replacements: []
+        // Route through the active-model picker (not the legacy `process()`),
+        // so the user's selection is honored in-process: Apple Intelligence
+        // (FoundationModels), Yooz Light, or Yooz Quality. `process()` ignored
+        // the selection (always MLX-light) and never lazy-loaded it, so
+        // in-process cleanup silently passed text through. Each backend now
+        // lazy-loads on first use (mirrors the STT lazy-load).
+        let result = await TouchUpEngine.shared.processWithActiveModel(
+            text: request.text, mode: engineMode
         )
         let response = SDKTouchUpResponse(
             result: result.text,
