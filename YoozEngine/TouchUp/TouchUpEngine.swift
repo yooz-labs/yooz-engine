@@ -268,6 +268,42 @@ public actor TouchUpEngine {
         }
     }
 
+    /// Strict single-resident policy: unload every tier except `keep`.
+    ///
+    /// Called after a successful `setActiveModel` switch so the engine never
+    /// holds more than one LLM/TouchUp model resident at a time. This is the
+    /// in-process residency invariant: RAM tracks the *active* model, not the
+    /// union of every tier the user has tried this session. Previously
+    /// `setActiveModel` only ever loaded the new tier, so Light + Quality +
+    /// Apple could all stay resident (~2 GB stranded). FoundationModels is
+    /// OS-resident and cheap to drop; the MLX tiers free their weights via
+    /// `unload(_:)`, which also returns their Metal buffers to the OS.
+    ///
+    /// The invariant is expressed at the *loaded-weights* level, not object
+    /// existence: `unload(.yoozLight)` frees the backend's weights but leaves
+    /// the lightweight `lightModel` wrapper in place (next use lazy-reloads it).
+    /// So "evicted" means `isLightModelLoaded == false`, not `lightModel == nil`.
+    private func evictModelsExcept(_ keep: TouchUpModelSelection) async {
+        var evicted: [String] = []
+        if keep != .yoozLight {
+            await unload(.yoozLight)
+            evicted.append(TouchUpModelSelection.yoozLight.rawValue)
+        }
+        if keep != .yoozQuality {
+            await unload(.yoozQuality)
+            evicted.append(TouchUpModelSelection.yoozQuality.rawValue)
+        }
+        if keep != .foundationModels, let fm = foundationModelsBackend {
+            await fm.unload()
+            foundationModelsBackend = nil
+            evicted.append(TouchUpModelSelection.foundationModels.rawValue)
+        }
+        let evictedList = evicted.joined(separator: ", ")
+        logger.info(
+            "TouchUp single-resident: kept \(keep.rawValue, privacy: .public), evicted [\(evictedList, privacy: .public)]"
+        )
+    }
+
     /// Record the user-preferred LLM. Does not load weights — call
     /// `preloadModel(_:)` (or the /v1/llm/preload route) to warm
     /// the model after switching.
@@ -828,6 +864,12 @@ public actor TouchUpEngine {
 
         activeModel = selection
         logger.info("TouchUp active model set to \(selection.rawValue, privacy: .public)")
+
+        // Strict single-resident: now that the newly-selected tier is loaded
+        // and active, drop every other tier so RAM tracks only the active
+        // model. Done after the load above so a failed switch never leaves the
+        // engine with nothing resident.
+        await evictModelsExcept(selection)
 
         // `availableModels()` always emits exactly one row per
         // selection (precondition'd above). The `first(where:)` is

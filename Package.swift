@@ -221,7 +221,10 @@ let package = Package(
         ),
         .testTarget(
             name: "YoozEngineInProcessTests",
-            dependencies: ["YoozEngineInProcess"],
+            dependencies: [
+                "YoozEngineInProcess",
+                .product(name: "MLX", package: "mlx-swift"),
+            ],
             path: "Tests/YoozEngineInProcessTests"
         ),
         .testTarget(
