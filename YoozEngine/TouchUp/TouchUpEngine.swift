@@ -471,6 +471,13 @@ public actor TouchUpEngine {
             TouchUpProcessor.Replacement(original: $0.original, replacement: $0.replacement)
         }
 
+        // Mode off: no LLM cleanup is requested — return regex-only (voice
+        // commands) without loading any model. Must precede the lazy-load below
+        // so "off" never triggers a multi-hundred-MB download.
+        if mode == .off {
+            return TouchUpProcessor.processRegexOnly(text: text, replacements: replacementStructs)
+        }
+
         // Lazy-load the light model on first use, mirroring `generate()`. The
         // in-process path (epic #192) has no eager-loader — `bootstrap()` only
         // registers actors — so without this the model would never load and

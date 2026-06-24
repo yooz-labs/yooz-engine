@@ -236,20 +236,24 @@ final class LLMModuleTests: XCTestCase {
         XCTAssertEqual(result.text, "")
     }
 
-    // MARK: - TouchUpEngine.process graceful-degrade path (always runs)
+    // MARK: - TouchUpEngine.process mode-off path (always runs, no model load)
 
-    func testProcessFallsBackToRegexWhenModelNotLoaded() async throws {
-        // When the light model is not loaded, process() must return a
-        // regex-only result rather than throwing. This is the explicit
-        // degraded-service contract APIServer relies on.
+    func testProcessOffModeIsRegexOnlyAndDoesNotLoad() async {
+        // Mode .off requests no LLM cleanup: process() returns regex-only and
+        // must NOT trigger a model load. (process() now lazy-loads the light
+        // model for cleanup modes, so the previous "no model => regex-only for
+        // .light" contract no longer holds — .off is the deterministic,
+        // load-free graceful path, and the one APIServer relies on for off.)
         let engine = TouchUpEngine.shared
-        let lightLoaded = await engine.isLightModelLoaded
-        try XCTSkipIf(lightLoaded,
-                      "shared engine has light model loaded; cannot exercise degrade path")
+        let loadedBefore = await engine.isLightModelLoaded
 
-        let result = await engine.process(text: "test period", mode: .light)
+        let result = await engine.process(text: "test period", mode: .off)
         XCTAssertEqual(result.modelUsed.rawValue, "regex-only",
-                       "no light model means regex-only fallback; got \(result.modelUsed)")
+                       "mode off must be regex-only; got \(result.modelUsed)")
+
+        let loadedAfter = await engine.isLightModelLoaded
+        XCTAssertEqual(loadedBefore, loadedAfter,
+                       "mode off must not load the light model")
     }
 
     // MARK: - FoundationModelsBackend availability (always runs)
