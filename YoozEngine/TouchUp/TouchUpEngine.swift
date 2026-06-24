@@ -471,9 +471,20 @@ public actor TouchUpEngine {
             TouchUpProcessor.Replacement(original: $0.original, replacement: $0.replacement)
         }
 
-        // Ensure light model is loaded
+        // Lazy-load the light model on first use, mirroring `generate()`. The
+        // in-process path (epic #192) has no eager-loader — `bootstrap()` only
+        // registers actors — so without this the model would never load and
+        // every cleanup would silently downgrade to regex-only passthrough.
+        // Only fall back to regex-only if creation/load genuinely fails.
+        if lightModel == nil {
+            lightModel = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
+        }
+        if let light = lightModel, await !light.isLoaded {
+            do { try await light.load() }
+            catch { logger.error("Light model load failed: \(error.localizedDescription)") }
+        }
         guard let light = lightModel, await light.isLoaded else {
-            logger.warning("Light model not loaded, using regex-only processing")
+            logger.warning("Light model unavailable, using regex-only processing")
             return TouchUpProcessor.processRegexOnly(text: text, replacements: replacementStructs)
         }
 
@@ -552,6 +563,12 @@ public actor TouchUpEngine {
     ) async -> TouchUpProcessor.ProcessResult {
         let startTime = CFAbsoluteTimeGetCurrent()
 
+        // Lazy-load Apple Intelligence on first use (the in-process path has no
+        // eager-loader). `load()` just opens a LanguageModelSession — the system
+        // model is resident, no download — so this is cheap and idempotent.
+        if foundationModelsBackend == nil {
+            await loadFoundationModelsIfAvailable()
+        }
         guard let backend = foundationModelsBackend, await backend.isLoaded else {
             logger.warning("Foundation Models not available, falling back to MLX")
             var result = await process(text: text, mode: mode)
