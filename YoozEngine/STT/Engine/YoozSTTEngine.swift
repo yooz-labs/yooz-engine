@@ -440,13 +440,13 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
     /// Unload the model and free resources
     public func stop() {
         lock.lock()
-        defer { lock.unlock() }
 
         // Only reclaim if there was actually MLX state to free. `clearCache()`
         // loads the Metal backend; guarding on prior state keeps a no-op
         // `stop()` (e.g. a backend switch before any model loaded) from
         // faulting where `default.metallib` is absent (plain `swift test`),
-        // while still reclaiming after a real teardown.
+        // while still reclaiming after a real teardown. The clear itself runs
+        // after the lock is released (below).
         let hadMLXState = model != nil || streamingContext != nil
 
         if isStreaming {
@@ -454,16 +454,6 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         }
 
         model = nil
-
-        // Return the dropped model's Metal buffers to the OS. `stop()` is the
-        // STT teardown that runs on a backend switch (`setBackend`); without
-        // this, switching backends only nils the Swift reference and the old
-        // model's weights stay parked in MLX's buffer cache. (`stopStream()`
-        // already clears; this closes the same gap for the non-streaming
-        // teardown path.)
-        if hadMLXState {
-            Memory.clearCache()
-        }
 
         // Snapshot the in-flight load handle under the lock so the
         // cancel happens off the MainActor hop below. The Task's
@@ -500,6 +490,18 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
                 self.inFlightLoadTask = nil
                 self.inFlightLoadLanguage = nil
             }
+        }
+
+        lock.unlock()
+
+        // Return the dropped model's Metal buffers to the OS, AFTER releasing
+        // the lock. `clearCache()` can block on a GPU drain; holding the engine
+        // lock across it would stall any concurrent `startStream()` / `stop()`
+        // caller waiting on `lock.lock()`. (`stopStream()` clears post-unlock
+        // for the same reason; this closes the gap for the non-streaming
+        // teardown path that runs on a backend switch.)
+        if hadMLXState {
+            Memory.clearCache()
         }
 
         // Cancel after clearing the state pointer so the Task's
@@ -772,6 +774,13 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
                 + "\(modelDir.path) — run model fetch first"
             )
         }
+
+        // Bound MLX's Metal buffer cache before the Qwen3 pipeline allocates.
+        // `Qwen3ASRBackend` lives in a separate SPM target that does not depend
+        // on EngineCore, so the cap is applied here (this method has both
+        // EngineCore and MLX) rather than inside `ensureLoaded`. Without it the
+        // qwen3 backend path would load uncapped. See `EngineConfig.mlxCacheLimitBytes`.
+        Memory.cacheLimit = EngineConfig.mlxCacheLimitBytes
 
         do {
             try await Qwen3ASRBackend.shared.ensureLoaded(modelDir: modelDir)
