@@ -408,18 +408,40 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleLLMStatus() async throws -> Data {
-        let active = await TouchUpEngine.shared.activeModel
+        let engine = TouchUpEngine.shared
+        let active = await engine.activeModel
         let loaded: Bool
+        // Mirror the loopback `/v1/llm/status` progress contract so the
+        // consumer-side touch-up download banner works in-process too (#214):
+        // nil when the active tier is already loaded (no download to track),
+        // nil for Apple Intelligence (OS-provided, no HF fetch), otherwise the
+        // live fraction (>0) the `loadModelContainer` callback last reported.
+        // Was hardcoded `nil`, so the in-process Light/Quality download bar
+        // never moved on a first switch to a not-yet-cached tier.
+        let progress: Double?
         switch active {
         case .yoozLight:
-            loaded = await TouchUpEngine.shared.isLightModelLoaded
+            loaded = await engine.isLightModelLoaded
+            if loaded {
+                progress = nil
+            } else {
+                let fraction = await engine.downloadProgress(for: .yoozLight) ?? 0
+                progress = fraction > 0 ? fraction : nil
+            }
         case .yoozQuality:
-            loaded = await TouchUpEngine.shared.isQualityModelLoaded
+            loaded = await engine.isQualityModelLoaded
+            if loaded {
+                progress = nil
+            } else {
+                let fraction = await engine.downloadProgress(for: .yoozQuality) ?? 0
+                progress = fraction > 0 ? fraction : nil
+            }
         case .foundationModels:
-            loaded = await TouchUpEngine.shared.isFoundationModelsLoaded
+            loaded = await engine.isFoundationModelsLoaded
+            progress = nil
         }
         let status = SDKLLMStatus(
-            loaded: loaded, modelId: active.rawValue, progress: nil,
+            loaded: loaded, modelId: active.rawValue, progress: progress,
             state: nil, lastError: nil
         )
         return try JSONEncoder().encode(status)
