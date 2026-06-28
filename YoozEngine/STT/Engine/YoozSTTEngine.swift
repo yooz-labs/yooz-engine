@@ -132,11 +132,23 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             currentBackend.rawValue, backend.rawValue
         )
 
-        // Drop Parakeet/FastConformer state.
+        // Drop Parakeet/FastConformer state. `stop()` releases the `.stt`
+        // residency itself when Parakeet/FastConformer MLX state was loaded.
         stop()
 
-        // Drop Qwen3 state if it was loaded.
-        await Qwen3ASRBackend.shared.unload()
+        // Drop Qwen3 state if it was loaded, then release its `.stt` residency
+        // AFTER the weights are freed so the budget trim / flush reclaims them
+        // in the right order. `Qwen3ASRBackend` is a separate SPM target with no
+        // EngineCore dependency, so it cannot call `MLXResidency` itself.
+        // `unload()` reports whether it actually dropped a pipeline in a single
+        // actor hop, so a concurrent load cannot slip between an `isLoaded`
+        // check and the unload and leak a registration. Parakeet and Qwen3 are
+        // mutually exclusive (one STT model resident), so at most one of this
+        // and `stop()` above unregisters `.stt`.
+        let qwen3WasUnloaded = await Qwen3ASRBackend.shared.unload()
+        if qwen3WasUnloaded {
+            applyMLXResidency(MLXResidency.shared.unregister(.stt))
+        }
 
         await MainActor.run {
             self.currentBackend = backend
@@ -208,10 +220,13 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         NSLog("YoozSTTEngine: Loading model for %@...", language.displayName)
 
-        // Bound MLX's Metal buffer cache before loading Parakeet/FastConformer
-        // weights. See `EngineConfig.mlxCacheLimitBytes` — the in-process
-        // guardrail against the unbounded buffer-cache runaway. Idempotent.
-        Memory.cacheLimit = EngineConfig.mlxCacheLimitBytes
+        // Register STT as a resident MLX category and size MLX's global buffer
+        // cache to the sum across resident categories, BEFORE allocating
+        // weights below (so the cap bounds the load). Replaces the prior
+        // unilateral 512 MB cap, which a coexisting LLM had to share. The
+        // matching `unregister(.stt)` runs in `stop()` (success path) or the
+        // catch blocks below (load failure). See `EngineCore.MLXResidency`.
+        applyMLXResidency(MLXResidency.shared.register(.stt))
 
         // Reset progress at the start of every load so a stale 1.0
         // from a prior run does not mislead clients polling
@@ -259,11 +274,19 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             // the cooperative cancellation contract; do not record
             // `lastError` so the menu-bar UI doesn't render a red
             // banner for a deliberate stop.
+            // Roll back the residency registered above: no model became
+            // resident, so balance the `register(.stt)` to keep the
+            // resident-category set (and the flush-when-empty signal) accurate.
+            applyMLXResidency(MLXResidency.shared.unregister(.stt))
             await MainActor.run { self.downloadProgress = 0 }
             throw CancellationError()
         } catch {
             // Reset progress so a polling client doesn't see a
             // stalled mid-download fraction after a failed load.
+            // Roll back the residency registered above: the load failed, so no
+            // model is resident — balance the `register(.stt)` to keep the
+            // resident set (and the flush-when-empty signal) accurate.
+            applyMLXResidency(MLXResidency.shared.unregister(.stt))
             let message = error.localizedDescription
             NSLog("YoozSTTEngine: ERROR - %@", message)
             await MainActor.run {
@@ -437,6 +460,18 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Apply an `MLXResidency` directive to the process-global MLX cache knobs.
+    /// The single place in this file that mutates `MLX.Memory`. Call OUTSIDE
+    /// `lock`: `clearCache()` can block on a GPU drain and must not be held
+    /// under the engine lock (mirrors the prior `stop()` / `stopStream()`
+    /// ordering, which cleared after unlocking).
+    private func applyMLXResidency(_ directive: MLXResidencyDirective) {
+        Memory.cacheLimit = directive.cacheLimitBytes
+        if directive.flush {
+            Memory.clearCache()
+        }
+    }
+
     /// Unload the model and free resources
     public func stop() {
         lock.lock()
@@ -494,14 +529,17 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
 
         lock.unlock()
 
-        // Return the dropped model's Metal buffers to the OS, AFTER releasing
-        // the lock. `clearCache()` can block on a GPU drain; holding the engine
-        // lock across it would stall any concurrent `startStream()` / `stop()`
-        // caller waiting on `lock.lock()`. (`stopStream()` clears post-unlock
-        // for the same reason; this closes the gap for the non-streaming
-        // teardown path that runs on a backend switch.)
+        // Release STT residency now that the dropped model's weights are freed,
+        // AFTER releasing the lock. Trims the global cache budget to the
+        // categories still resident and returns this model's buffers to the OS
+        // — but flushes the Metal cache only when no MLX category is left
+        // resident, so a backend switch while the LLM is loaded no longer
+        // evicts the LLM's warm buffers (the cross-category stomp this epic
+        // fixes). Run post-unlock: `clearCache()` can block on a GPU drain, and
+        // holding the engine lock across it would stall any concurrent
+        // `startStream()` / `stop()` caller waiting on `lock.lock()`.
         if hadMLXState {
-            Memory.clearCache()
+            applyMLXResidency(MLXResidency.shared.unregister(.stt))
         }
 
         // Cancel after clearing the state pointer so the Task's
@@ -581,8 +619,13 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         onTranscription?(result)
         print("YoozSTTEngine: Stream stopped, final text: '\(result.text.prefix(50))...'")
 
-        // Clear GPU cache to avoid memory accumulation between streams
-        Memory.clearCache()
+        // Do NOT flush the MLX cache here. The model stays loaded across stream
+        // stops, so the per-category cache budget already bounds scratch growth
+        // between streams. The prior `Memory.clearCache()` was process-global
+        // and fired on every recording, evicting a coexisting LLM's warm
+        // buffers and forcing a cold rebuild each cycle — the main driver of the
+        // Parakeet + TouchUp slowdown. Residency (and any flush) is owned by
+        // `stop()` / backend switches via `MLXResidency`.
 
         return result
     }
@@ -775,12 +818,28 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             )
         }
 
-        // Bound MLX's Metal buffer cache before the Qwen3 pipeline allocates.
-        // `Qwen3ASRBackend` lives in a separate SPM target that does not depend
-        // on EngineCore, so the cap is applied here (this method has both
-        // EngineCore and MLX) rather than inside `ensureLoaded`. Without it the
-        // qwen3 backend path would load uncapped. See `EngineConfig.mlxCacheLimitBytes`.
-        Memory.cacheLimit = EngineConfig.mlxCacheLimitBytes
+        // Already loaded from this directory? Update language metadata only and
+        // skip the residency register, so a repeated start() on the Qwen3
+        // backend does not double-count `.stt` (mirrors loadParakeetModel's
+        // already-loaded guard). A single unregister on the next teardown would
+        // otherwise leave `.stt` phantom-resident and suppress flush-when-empty.
+        if await Qwen3ASRBackend.shared.isLoaded,
+           await Qwen3ASRBackend.shared.currentModelDirectory?.standardizedFileURL
+               == modelDir.standardizedFileURL {
+            await MainActor.run {
+                self.isReady = true
+                self.currentLanguage = language
+            }
+            return
+        }
+
+        // Register STT as a resident MLX category and size the global cache to
+        // the sum across resident categories, before the Qwen3 pipeline
+        // allocates. `Qwen3ASRBackend` is a separate SPM target that does not
+        // depend on EngineCore, so residency for the Qwen3 STT model is owned
+        // here (this method has both EngineCore and MLX) and released in
+        // `setBackend` after `Qwen3ASRBackend.unload()`. See `MLXResidency`.
+        applyMLXResidency(MLXResidency.shared.register(.stt))
 
         do {
             try await Qwen3ASRBackend.shared.ensureLoaded(modelDir: modelDir)
@@ -792,7 +851,17 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
                 "YoozSTTEngine: Qwen3-ASR ready (language=%@)",
                 language.rawValue
             )
+        } catch is CancellationError {
+            // Deliberate stop — roll back the residency and propagate
+            // cancellation cleanly rather than wrapping it as a load failure,
+            // which would surface a red error banner for a user-requested stop
+            // (mirrors loadParakeetModel's CancellationError handling).
+            applyMLXResidency(MLXResidency.shared.unregister(.stt))
+            throw CancellationError()
         } catch {
+            // Roll back the residency registered above: the Qwen3 load failed,
+            // so no model is resident — balance the `register(.stt)`.
+            applyMLXResidency(MLXResidency.shared.unregister(.stt))
             let msg = "Failed to load Qwen3-ASR pipeline: \(error)"
             NSLog("YoozSTTEngine: ERROR - %@", msg)
             await MainActor.run {

@@ -1,7 +1,6 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
 import Foundation
-import MLX
 import os.log
 
 /// Singleton actor wrapping the `Qwen3ASRPipeline` so the engine
@@ -90,21 +89,27 @@ public actor Qwen3ASRBackend {
     }
 
     /// Drop the pipeline and free MLX memory.
-    public func unload() async {
+    /// - Returns: `true` if a pipeline was actually loaded and dropped, `false`
+    ///   for a no-op. `YoozSTTEngine.setBackend` uses the return value to decide
+    ///   whether to release this backend's `.stt` MLX residency, collapsing the
+    ///   prior "check `isLoaded`, then `unload()`" into a single actor hop so a
+    ///   concurrent load can't slip between the two and leak a registration.
+    @discardableResult
+    public func unload() async -> Bool {
         let hadPipeline = pipeline != nil
         if hadPipeline {
             logger.info("Unloading Qwen3-ASR pipeline")
         }
         pipeline = nil
         loadedDirectory = nil
-        // Return the pipeline's Metal buffers to the OS. `setBackend` runs
-        // `stop()` (which clears) before this unload, so without clearing here
-        // a previously-loaded Qwen3 pipeline's buffers would re-enter the cache
-        // after that clear and stay resident. Guarded on `hadPipeline` so a
-        // no-op unload never touches the Metal allocator (which faults where
-        // `default.metallib` is absent, e.g. a plain `swift test` run).
-        if hadPipeline {
-            Memory.clearCache()
-        }
+        // Dropping the pipeline frees its weights; the buffers are returned to
+        // the OS by `YoozSTTEngine`, which owns this backend's `.stt` MLX
+        // residency and applies the cache-budget trim / flush AFTER awaiting
+        // this `unload()` (see `YoozSTTEngine.setBackend`). This type can't call
+        // `MLXResidency` itself — it is a separate SPM target with no EngineCore
+        // dependency. The previous process-global `Memory.clearCache()` here
+        // evicted a coexisting LLM's warm buffers; that cross-category stomp is
+        // what the per-category residency budget removes.
+        return hadPipeline
     }
 }

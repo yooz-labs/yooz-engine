@@ -214,6 +214,15 @@ let package = Package(
             ],
             path: "Sources/YoozEngineInProcess"
         ),
+        // Pure-logic EngineCore unit tests. Mirrors the xcodegen
+        // `EngineCoreTests` bundle (project.yml) so this suite also runs under
+        // a headless `swift test` — it has no MLX / macro / app-host
+        // dependencies, only `@testable import EngineCore`.
+        .testTarget(
+            name: "EngineCoreTests",
+            dependencies: ["EngineCore"],
+            path: "Tests/EngineCoreTests"
+        ),
         .testTarget(
             name: "YoozEngineClientTests",
             dependencies: ["YoozEngineClient"],

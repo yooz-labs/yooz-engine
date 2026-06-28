@@ -41,9 +41,10 @@ public enum EngineConfig {
     public static let host: String = "127.0.0.1"
     public static let version: String = "0.7.5"
 
-    /// Hard cap on MLX's Metal buffer cache, applied by the MLX model-load
-    /// paths (`MLXLLMBackend.load`, `YoozSTTEngine` Parakeet load, the Qwen3
-    /// backend) via `Memory.cacheLimit`.
+    /// Budget for MLX's Metal buffer cache **per resident model category**. The
+    /// process-global `MLX.Memory.cacheLimit` is set to this value times the
+    /// number of resident categories, by `MLXResidency` at the MLX model-load /
+    /// teardown paths (`MLXLLMBackend`, `YoozSTTEngine`, the Qwen3 backend).
     ///
     /// mlx-swift's default `cacheLimit` equals its memory limit (~1.5x the
     /// device's recommended working set), which scales with installed RAM and
@@ -52,8 +53,16 @@ public enum EngineConfig {
     /// kill-able helper process; in-process that growth is charged to the
     /// consumer app's own RSS for the app's lifetime (the observed multi-tens-
     /// of-GB runaway). Capping the cache keeps steady-state RAM at roughly
-    /// (resident model weights + this cache). 512 MB is ample scratch for the
-    /// STT encoder + LLM KV without pinning GBs.
+    /// (resident model weights + this cache).
+    ///
+    /// 512 MB is ample scratch for **one** model category (the STT encoder, or
+    /// the LLM KV). It was the original whole-process cap, which starved a
+    /// coexisting second MLX model — Parakeet STT + the Quality LLM share one
+    /// process, and a single 512 MB pool made them evict each other's buffers
+    /// every cycle. Treating it as a *per-category* budget that `MLXResidency`
+    /// sums across resident categories (e.g. STT + LLM -> 1 GB) keeps each
+    /// category's scratch warm while RAM stays bounded and scales with how many
+    /// models actually coexist. See `MLXResidency`.
     ///
     /// Applied at the load paths (not at process start) on purpose: setting it
     /// touches the Metal allocator, which needs `default.metallib` — present in
@@ -61,7 +70,7 @@ public enum EngineConfig {
     /// run. The load paths only execute when a model is actually being loaded,
     /// so the cap lands before the cache-growing inference begins and never
     /// fires in the non-GPU structural tests.
-    public static let mlxCacheLimitBytes: Int = 512 * 1024 * 1024
+    public static let mlxCacheBudgetPerCategoryBytes: Int = 512 * 1024 * 1024
 
     /// Convenience accessor for the active build variant. Mirrors
     /// `BuildVariant.current` so callers reading other engine config

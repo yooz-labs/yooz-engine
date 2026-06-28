@@ -84,15 +84,28 @@ actor MLXLLMBackend: LLMBackend {
 
     // MARK: - LLMBackend Protocol
 
+    /// Apply an `MLXResidency` directive to the process-global MLX cache knobs.
+    /// The only place this backend mutates `MLX.Memory`.
+    private func applyResidency(_ directive: MLXResidencyDirective) {
+        Memory.cacheLimit = directive.cacheLimitBytes
+        if directive.flush {
+            Memory.clearCache()
+        }
+    }
+
     func load() async throws {
         guard !isLoaded else { return }
 
-        // Bound MLX's Metal buffer cache before this model allocates weights.
-        // See `EngineConfig.mlxCacheLimitBytes`: in-process this is the
-        // guardrail against the unbounded buffer-cache runaway. Applied here (a
-        // real load path) rather than at process start so it never touches the
-        // Metal allocator in the non-GPU structural tests. Idempotent.
-        Memory.cacheLimit = EngineConfig.mlxCacheLimitBytes
+        // Register this LLM/TouchUp model as resident and size MLX's global
+        // buffer cache to the sum across resident categories (per-category
+        // budget x category count). Replaces the prior unilateral 512 MB cap,
+        // which starved a coexisting STT model's scratch. A load only grows the
+        // budget, so `register` never flushes. Applied here (a real load path)
+        // rather than at process start so it never touches the Metal allocator
+        // in the non-GPU structural tests. Rolled back in every failure path
+        // below so a failed load never leaves a phantom-resident category. See
+        // `EngineCore.MLXResidency`.
+        applyResidency(MLXResidency.shared.register(.touchUp))
 
         #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
         let hfID = modelType.huggingFaceID
@@ -129,13 +142,21 @@ actor MLXLLMBackend: LLMBackend {
             isLoaded = true
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
         } catch let error as LLMError {
+            // Roll back the registration above: no model became resident, so
+            // balance `register(.touchUp)` to keep the resident set (and the
+            // flush-when-empty signal) accurate. The rollback flushes only if
+            // no other MLX category remains, so it never evicts a coexisting
+            // STT model's warm buffers.
+            applyResidency(MLXResidency.shared.unregister(.touchUp))
             throw error
         } catch {
             logger.error("Failed to load model: \(error.localizedDescription)")
+            applyResidency(MLXResidency.shared.unregister(.touchUp))
             throw LLMError.loadFailed(error.localizedDescription)
         }
         #else
         logger.error("MLXLMCommon / MLXHuggingFace not available")
+        applyResidency(MLXResidency.shared.unregister(.touchUp))
         throw LLMError.notAvailable("MLX framework not linked. Please rebuild with mlx-swift-lm package.")
         #endif
     }
@@ -150,15 +171,17 @@ actor MLXLLMBackend: LLMBackend {
         #endif
         isLoaded = false
         downloadProgress = 0
-        // Return the freed weight/KV buffers to the OS. Dropping the Swift
-        // references alone only parks the Metal buffers in MLX's buffer cache;
-        // without this they stay resident until the cache limit forces a
-        // reclaim. In-process this is what makes tier eviction actually shrink
-        // the app's footprint. Guarded on `wasLoaded` so unloading a tier that
-        // never loaded does not touch the Metal allocator (which faults where
-        // `default.metallib` is absent, e.g. a plain `swift test` run).
+        // Release this model's residency. Trims the global cache budget to the
+        // categories still resident; the freed weight/KV buffers are returned
+        // to the OS by the flush — but only when no MLX category is left
+        // resident, so unloading an LLM tier never evicts a coexisting STT
+        // model's warm buffers (the cross-category stomp this epic fixes). When
+        // another category is still resident the lowered limit reclaims the
+        // parked buffers on its next allocation. Guarded on `wasLoaded` so
+        // unloading a tier that never loaded does not touch the Metal allocator
+        // (which faults where `default.metallib` is absent, e.g. `swift test`).
         if wasLoaded {
-            Memory.clearCache()
+            applyResidency(MLXResidency.shared.unregister(.touchUp))
         }
         logger.info("Model \(self.modelType.rawValue) unloaded")
     }
