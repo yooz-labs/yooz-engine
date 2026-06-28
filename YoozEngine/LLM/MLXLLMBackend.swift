@@ -84,6 +84,15 @@ actor MLXLLMBackend: LLMBackend {
 
     // MARK: - LLMBackend Protocol
 
+    /// Apply an `MLXResidency` directive to the process-global MLX cache knobs.
+    /// The only place this backend mutates `MLX.Memory`.
+    private func applyResidency(_ directive: MLXResidencyDirective) {
+        Memory.cacheLimit = directive.cacheLimitBytes
+        if directive.flush {
+            Memory.clearCache()
+        }
+    }
+
     func load() async throws {
         guard !isLoaded else { return }
 
@@ -93,8 +102,10 @@ actor MLXLLMBackend: LLMBackend {
         // which starved a coexisting STT model's scratch. A load only grows the
         // budget, so `register` never flushes. Applied here (a real load path)
         // rather than at process start so it never touches the Metal allocator
-        // in the non-GPU structural tests. See `EngineCore.MLXResidency`.
-        Memory.cacheLimit = MLXResidency.shared.register(.touchUp).cacheLimitBytes
+        // in the non-GPU structural tests. Rolled back in every failure path
+        // below so a failed load never leaves a phantom-resident category. See
+        // `EngineCore.MLXResidency`.
+        applyResidency(MLXResidency.shared.register(.touchUp))
 
         #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
         let hfID = modelType.huggingFaceID
@@ -131,13 +142,21 @@ actor MLXLLMBackend: LLMBackend {
             isLoaded = true
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
         } catch let error as LLMError {
+            // Roll back the registration above: no model became resident, so
+            // balance `register(.touchUp)` to keep the resident set (and the
+            // flush-when-empty signal) accurate. The rollback flushes only if
+            // no other MLX category remains, so it never evicts a coexisting
+            // STT model's warm buffers.
+            applyResidency(MLXResidency.shared.unregister(.touchUp))
             throw error
         } catch {
             logger.error("Failed to load model: \(error.localizedDescription)")
+            applyResidency(MLXResidency.shared.unregister(.touchUp))
             throw LLMError.loadFailed(error.localizedDescription)
         }
         #else
         logger.error("MLXLMCommon / MLXHuggingFace not available")
+        applyResidency(MLXResidency.shared.unregister(.touchUp))
         throw LLMError.notAvailable("MLX framework not linked. Please rebuild with mlx-swift-lm package.")
         #endif
     }
@@ -162,11 +181,7 @@ actor MLXLLMBackend: LLMBackend {
         // unloading a tier that never loaded does not touch the Metal allocator
         // (which faults where `default.metallib` is absent, e.g. `swift test`).
         if wasLoaded {
-            let residency = MLXResidency.shared.unregister(.touchUp)
-            Memory.cacheLimit = residency.cacheLimitBytes
-            if residency.flush {
-                Memory.clearCache()
-            }
+            applyResidency(MLXResidency.shared.unregister(.touchUp))
         }
         logger.info("Model \(self.modelType.rawValue) unloaded")
     }

@@ -89,7 +89,13 @@ public actor Qwen3ASRBackend {
     }
 
     /// Drop the pipeline and free MLX memory.
-    public func unload() async {
+    /// - Returns: `true` if a pipeline was actually loaded and dropped, `false`
+    ///   for a no-op. `YoozSTTEngine.setBackend` uses the return value to decide
+    ///   whether to release this backend's `.stt` MLX residency, collapsing the
+    ///   prior "check `isLoaded`, then `unload()`" into a single actor hop so a
+    ///   concurrent load can't slip between the two and leak a registration.
+    @discardableResult
+    public func unload() async -> Bool {
         let hadPipeline = pipeline != nil
         if hadPipeline {
             logger.info("Unloading Qwen3-ASR pipeline")
@@ -104,5 +110,6 @@ public actor Qwen3ASRBackend {
         // dependency. The previous process-global `Memory.clearCache()` here
         // evicted a coexisting LLM's warm buffers; that cross-category stomp is
         // what the per-category residency budget removes.
+        return hadPipeline
     }
 }

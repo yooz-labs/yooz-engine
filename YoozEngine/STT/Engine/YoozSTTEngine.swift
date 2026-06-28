@@ -140,12 +140,13 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         // AFTER the weights are freed so the budget trim / flush reclaims them
         // in the right order. `Qwen3ASRBackend` is a separate SPM target with no
         // EngineCore dependency, so it cannot call `MLXResidency` itself.
-        // Checked before `unload()`, which clears the loaded flag. Parakeet and
-        // Qwen3 are mutually exclusive (one STT model resident), so at most one
-        // of this and `stop()` above unregisters `.stt`.
-        let qwen3WasLoaded = await Qwen3ASRBackend.shared.isLoaded
-        await Qwen3ASRBackend.shared.unload()
-        if qwen3WasLoaded {
+        // `unload()` reports whether it actually dropped a pipeline in a single
+        // actor hop, so a concurrent load cannot slip between an `isLoaded`
+        // check and the unload and leak a registration. Parakeet and Qwen3 are
+        // mutually exclusive (one STT model resident), so at most one of this
+        // and `stop()` above unregisters `.stt`.
+        let qwen3WasUnloaded = await Qwen3ASRBackend.shared.unload()
+        if qwen3WasUnloaded {
             applyMLXResidency(MLXResidency.shared.unregister(.stt))
         }
 
@@ -459,7 +460,6 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// Unload the model and free resources
     /// Apply an `MLXResidency` directive to the process-global MLX cache knobs.
     /// The single place in this file that mutates `MLX.Memory`. Call OUTSIDE
     /// `lock`: `clearCache()` can block on a GPU drain and must not be held
@@ -472,6 +472,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Unload the model and free resources
     public func stop() {
         lock.lock()
 
@@ -817,6 +818,21 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             )
         }
 
+        // Already loaded from this directory? Update language metadata only and
+        // skip the residency register, so a repeated start() on the Qwen3
+        // backend does not double-count `.stt` (mirrors loadParakeetModel's
+        // already-loaded guard). A single unregister on the next teardown would
+        // otherwise leave `.stt` phantom-resident and suppress flush-when-empty.
+        if await Qwen3ASRBackend.shared.isLoaded,
+           await Qwen3ASRBackend.shared.currentModelDirectory?.standardizedFileURL
+               == modelDir.standardizedFileURL {
+            await MainActor.run {
+                self.isReady = true
+                self.currentLanguage = language
+            }
+            return
+        }
+
         // Register STT as a resident MLX category and size the global cache to
         // the sum across resident categories, before the Qwen3 pipeline
         // allocates. `Qwen3ASRBackend` is a separate SPM target that does not
@@ -835,6 +851,13 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
                 "YoozSTTEngine: Qwen3-ASR ready (language=%@)",
                 language.rawValue
             )
+        } catch is CancellationError {
+            // Deliberate stop — roll back the residency and propagate
+            // cancellation cleanly rather than wrapping it as a load failure,
+            // which would surface a red error banner for a user-requested stop
+            // (mirrors loadParakeetModel's CancellationError handling).
+            applyMLXResidency(MLXResidency.shared.unregister(.stt))
+            throw CancellationError()
         } catch {
             // Roll back the residency registered above: the Qwen3 load failed,
             // so no model is resident — balance the `register(.stt)`.
