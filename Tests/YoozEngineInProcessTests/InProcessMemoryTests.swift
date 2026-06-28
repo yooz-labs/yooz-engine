@@ -6,7 +6,9 @@ import YoozEngineClient
 
 /// The in-process residency invariant (epic #192): in-process RAM tracks the
 /// resident model set, not an unbounded runaway. Two mechanisms:
-///   - Tier 1: MLX's Metal buffer cache is capped (`EngineConfig.mlxCacheLimitBytes`).
+///   - Tier 1: MLX's Metal buffer cache is capped per resident model category
+///     (`EngineConfig.mlxCacheBudgetPerCategoryBytes`, summed across resident
+///     categories by `MLXResidency`).
 ///   - Tier 2: switching a TouchUp tier evicts the previous one (single-resident).
 ///
 /// Background: mlx-swift's default `cacheLimit` equals its memory limit (~1.5x
@@ -29,19 +31,20 @@ final class InProcessMemoryTests: XCTestCase {
         ProcessInfo.processInfo.environment["YOOZ_LLM_LOAD_MODELS"] == "1"
     }
 
-    /// Guards intent, not the literal value: the cap must stay conservative so
-    /// steady-state RAM is (resident weights + a small scratch cache). Asserting
-    /// a range rather than `== 512 MB` lets the cap be tuned for a future device
-    /// tier without a mechanical test edit, while still failing if someone drops
-    /// it so low models churn or raises it past the in-process RSS budget.
-    func testCacheLimitConstantIsConservativelyBounded() {
+    /// Guards intent, not the literal value: the per-category budget must stay
+    /// conservative so steady-state RAM is (resident weights + a small scratch
+    /// cache per resident category). Asserting a range rather than `== 512 MB`
+    /// lets the budget be tuned for a future device tier without a mechanical
+    /// test edit, while still failing if someone drops it so low models churn or
+    /// raises a single category's share past the in-process RSS budget.
+    func testPerCategoryCacheBudgetIsConservativelyBounded() {
         XCTAssertGreaterThanOrEqual(
-            EngineConfig.mlxCacheLimitBytes, 256 * 1024 * 1024,
-            "cache cap must not drop below 256 MB (would churn re-allocation)"
+            EngineConfig.mlxCacheBudgetPerCategoryBytes, 256 * 1024 * 1024,
+            "per-category budget must not drop below 256 MB (would churn re-allocation)"
         )
         XCTAssertLessThanOrEqual(
-            EngineConfig.mlxCacheLimitBytes, 1024 * 1024 * 1024,
-            "cache cap must not exceed 1 GB (violates the in-process RSS budget)"
+            EngineConfig.mlxCacheBudgetPerCategoryBytes, 1024 * 1024 * 1024,
+            "per-category budget must not exceed 1 GB (in-process RSS budget per category)"
         )
     }
 
@@ -64,8 +67,9 @@ final class InProcessMemoryTests: XCTestCase {
 
         XCTAssertEqual(
             Memory.cacheLimit,
-            EngineConfig.mlxCacheLimitBytes,
-            "model load must bound the MLX buffer cache to the engine cap"
+            MLXResidency.shared.currentCacheLimitBytes(),
+            "model load must bound the MLX buffer cache to the per-category "
+                + "budget summed across resident categories"
         )
     }
 

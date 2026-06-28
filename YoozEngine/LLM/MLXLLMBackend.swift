@@ -87,12 +87,14 @@ actor MLXLLMBackend: LLMBackend {
     func load() async throws {
         guard !isLoaded else { return }
 
-        // Bound MLX's Metal buffer cache before this model allocates weights.
-        // See `EngineConfig.mlxCacheLimitBytes`: in-process this is the
-        // guardrail against the unbounded buffer-cache runaway. Applied here (a
-        // real load path) rather than at process start so it never touches the
-        // Metal allocator in the non-GPU structural tests. Idempotent.
-        Memory.cacheLimit = EngineConfig.mlxCacheLimitBytes
+        // Register this LLM/TouchUp model as resident and size MLX's global
+        // buffer cache to the sum across resident categories (per-category
+        // budget x category count). Replaces the prior unilateral 512 MB cap,
+        // which starved a coexisting STT model's scratch. A load only grows the
+        // budget, so `register` never flushes. Applied here (a real load path)
+        // rather than at process start so it never touches the Metal allocator
+        // in the non-GPU structural tests. See `EngineCore.MLXResidency`.
+        Memory.cacheLimit = MLXResidency.shared.register(.touchUp).cacheLimitBytes
 
         #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
         let hfID = modelType.huggingFaceID
@@ -150,15 +152,21 @@ actor MLXLLMBackend: LLMBackend {
         #endif
         isLoaded = false
         downloadProgress = 0
-        // Return the freed weight/KV buffers to the OS. Dropping the Swift
-        // references alone only parks the Metal buffers in MLX's buffer cache;
-        // without this they stay resident until the cache limit forces a
-        // reclaim. In-process this is what makes tier eviction actually shrink
-        // the app's footprint. Guarded on `wasLoaded` so unloading a tier that
-        // never loaded does not touch the Metal allocator (which faults where
-        // `default.metallib` is absent, e.g. a plain `swift test` run).
+        // Release this model's residency. Trims the global cache budget to the
+        // categories still resident; the freed weight/KV buffers are returned
+        // to the OS by the flush — but only when no MLX category is left
+        // resident, so unloading an LLM tier never evicts a coexisting STT
+        // model's warm buffers (the cross-category stomp this epic fixes). When
+        // another category is still resident the lowered limit reclaims the
+        // parked buffers on its next allocation. Guarded on `wasLoaded` so
+        // unloading a tier that never loaded does not touch the Metal allocator
+        // (which faults where `default.metallib` is absent, e.g. `swift test`).
         if wasLoaded {
-            Memory.clearCache()
+            let residency = MLXResidency.shared.unregister(.touchUp)
+            Memory.cacheLimit = residency.cacheLimitBytes
+            if residency.flush {
+                Memory.clearCache()
+            }
         }
         logger.info("Model \(self.modelType.rawValue) unloaded")
     }
