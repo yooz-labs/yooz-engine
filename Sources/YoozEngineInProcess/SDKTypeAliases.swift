@@ -33,6 +33,7 @@ typealias SDKSTTBackendInfo = STTBackendInfo
 typealias SDKSTTBackendsResponse = STTBackendsResponse
 typealias SDKModelTier = ModelTier
 typealias SDKModelLoadState = ModelLoadState
+typealias SDKLoadState = LoadState
 typealias SDKLLMStatus = LLMStatus
 typealias SDKLLMModelInfo = LLMModelInfo
 typealias SDKLLMModelsResponse = LLMModelsResponse

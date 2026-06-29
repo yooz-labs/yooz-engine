@@ -149,4 +149,44 @@ final class InProcessTransportTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Load lifecycle (Phase 1: model load reliability)
+
+    /// The in-process STT load now routes `loadModelAsync` through the engine's
+    /// `enqueueLoad` state machine, so `/v1/stt/status` reports a non-nil
+    /// lifecycle `state` (was hardcoded `nil`). A cold engine with no load in
+    /// flight reports `.idle` — this is what lets the consumer distinguish a
+    /// download ("Downloading X%") from the materialization window
+    /// ("Loading model…": state `.loading` + progress nil) and a failure
+    /// (`.failed`) without weights or GPU.
+    func testInProcessSTTStatusSurfacesLoadStateWhenCold() async throws {
+        let client = makeClient()
+        try await client.connect()
+        _ = try await client.stt.setEngine(id: "parakeet")
+        let status = try await client.stt.status()
+        XCTAssertEqual(status.state, .idle, "cold MLX engine should report .idle, not nil")
+    }
+
+    /// The in-process LLM status handler now surfaces the per-tier `loadState`
+    /// (was hardcoded `nil`), so the touch-up picker can render a distinct
+    /// "Loading model…" phase during materialization.
+    func testInProcessLLMStatusSurfacesLoadStateWhenCold() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let status = try await client.llm.status()
+        XCTAssertNotNil(status.state, "in-process LLM status should surface a lifecycle state")
+    }
+
+    /// `parseWaitQuery` recovers the `?wait` flag the in-process `route()`
+    /// strips, so `loadModel` (`?wait=true`, blocking) and `loadModelAsync`
+    /// (no query, fire-and-forget) keep their distinct contracts in-process.
+    func testParseWaitQuery() {
+        XCTAssertFalse(InProcessTransport.parseWaitQuery("/v1/stt/load"))
+        XCTAssertTrue(InProcessTransport.parseWaitQuery("/v1/stt/load?wait=true"))
+        XCTAssertTrue(InProcessTransport.parseWaitQuery("/v1/stt/load?wait=1"))
+        XCTAssertTrue(InProcessTransport.parseWaitQuery("/v1/stt/load?wait"))
+        XCTAssertFalse(InProcessTransport.parseWaitQuery("/v1/stt/load?wait=false"))
+        XCTAssertFalse(InProcessTransport.parseWaitQuery("/v1/stt/load?wait=0"))
+        XCTAssertTrue(InProcessTransport.parseWaitQuery("/v1/stt/load?lang=en&wait=true"))
+    }
 }
