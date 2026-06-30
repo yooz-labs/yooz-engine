@@ -1252,55 +1252,107 @@ final class APIServer: ObservableObject {
             return Response(status: .noContent)
         }
 
-        // Models
-        router.get("/v1/models") { _, _ in
-            var models: [ModelInfo] = []
-            #if canImport(STTModule)
-            let sttEngine = YoozSTTEngine.shared
-            if sttEngine.isRunning {
-                models.append(ModelInfo(
-                    name: sttEngine.currentLanguage.modelIdentifier,
-                    module: "stt",
-                    loaded: true,
-                    sizeBytes: nil
-                ))
+        // Models — disk-hygiene inventory (real on-disk sizes + delete targets).
+        // The friendly LLM catalog (with bundle awareness) plus a disk-first
+        // sweep of every other hub repo (Parakeet, legacy) so nothing consuming
+        // disk is hidden. See `ModelStore.inventory`.
+        router.get("/v1/models") { [self] _, _ -> Response in
+            let store = ModelStore()
+            let llmInputs = await Self.llmInventoryInputs()
+            let rows = await store.inventory(
+                llm: llmInputs,
+                activeSTTRepoDirName: Self.activeSTTRepoDirName()
+            )
+            let models = rows.map {
+                ModelInfo(
+                    id: $0.id, module: $0.module, displayName: $0.displayName,
+                    sizeBytes: $0.sizeBytes, cached: $0.cached, loaded: $0.loaded,
+                    isActive: $0.isActive, deletable: $0.deletable
+                )
             }
-            #endif
-            #if canImport(AppleSTTModule)
-            let appleEngine = AppleSTTEngine.shared
-            if await appleEngine.isLoaded {
-                let lang = await appleEngine.currentLanguage
-                models.append(ModelInfo(
-                    name: "apple-stt-\(lang.bcp47)",
-                    module: "apple_stt",
-                    loaded: true,
-                    sizeBytes: nil
-                ))
+            return try jsonResponse(ModelsResponse(models: models))
+        }
+
+        // Delete one model's reclaimable on-disk copies. Unloads it from memory
+        // first; refuses to delete the active model.
+        router.delete("/v1/models/:id") { [self] _, context -> Response in
+            let id = try context.parameters.require("id")
+            let store = ModelStore()
+
+            if let modelType = LLMModelType(rawValue: id) {
+                let active = await TouchUpEngine.shared.activeModel
+                if active.rawValue == id {
+                    return errorResponse(
+                        status: .conflict,
+                        message: "Cannot delete the active model '\(id)'",
+                        code: "model_active"
+                    )
+                }
+                await TouchUpEngine.shared.unload(modelType)
+                let descriptor = LLMModelCatalog.cacheDescriptors().first { $0.id == id }
+                do {
+                    let reclaimed = try await store.deleteModel(
+                        hfRepoDirName: descriptor?.hfRepoDirName,
+                        modelsDirSubdir: descriptor?.modelsDirSubdir
+                    )
+                    return try jsonResponse(DeleteModelResponse(id: id, reclaimedBytes: reclaimed))
+                } catch {
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: "Failed to delete '\(id)': \(error.localizedDescription)",
+                        code: "delete_failed"
+                    )
+                }
             }
-            #endif
-            let llmInfo = await TouchUpEngine.shared.getModelInfo()
-            models.append(ModelInfo(
-                name: llmInfo.light.type.rawValue,
-                module: "llm",
-                loaded: llmInfo.light.isLoaded,
-                sizeBytes: llmInfo.light.type.estimatedSize
-            ))
-            models.append(ModelInfo(
-                name: llmInfo.quality.type.rawValue,
-                module: "llm",
-                loaded: llmInfo.quality.isLoaded,
-                sizeBytes: llmInfo.quality.type.estimatedSize
-            ))
-            let fmLoaded = await TouchUpEngine.shared.isFoundationModelsLoaded
-            if fmLoaded {
-                models.append(ModelInfo(
-                    name: "foundation-models",
-                    module: "llm",
-                    loaded: true,
-                    sizeBytes: nil
-                ))
+
+            if id.hasPrefix("models--") {
+                if id == Self.activeSTTRepoDirName() {
+                    return errorResponse(
+                        status: .conflict,
+                        message: "Cannot delete the active model '\(id)'",
+                        code: "model_active"
+                    )
+                }
+                do {
+                    let reclaimed = try await store.deleteModel(
+                        hfRepoDirName: id, modelsDirSubdir: nil
+                    )
+                    return try jsonResponse(DeleteModelResponse(id: id, reclaimedBytes: reclaimed))
+                } catch {
+                    return errorResponse(
+                        status: .internalServerError,
+                        message: "Failed to delete '\(id)': \(error.localizedDescription)",
+                        code: "delete_failed"
+                    )
+                }
             }
-            return ModelsResponse(models: models)
+
+            return errorResponse(
+                status: .notFound,
+                message: "Unknown model '\(id)'",
+                code: "unknown_model"
+            )
+        }
+
+        // One-shot disk-hygiene migration: collapse superseded snapshots + drop
+        // duplicates a higher-priority copy supersedes. Idempotent.
+        router.post("/v1/models/cleanup") { [self] _, _ -> Response in
+            let store = ModelStore()
+            do {
+                let report = try await store.cleanupAll(
+                    descriptors: LLMModelCatalog.cacheDescriptors()
+                )
+                return try jsonResponse(ModelCleanupResponse(
+                    totalReclaimedBytes: report.totalReclaimedBytes,
+                    perRepo: report.perRepo
+                ))
+            } catch {
+                return errorResponse(
+                    status: .internalServerError,
+                    message: "Cleanup failed: \(error.localizedDescription)",
+                    code: "cleanup_failed"
+                )
+            }
         }
 
         // LLM: Generate
@@ -3470,7 +3522,40 @@ extension APIServer {
         return out
     }
 
+    /// Hub directory name of the currently-active STT model, or `nil` when the
+    /// active backend has no HuggingFace footprint (Apple Speech) or STT isn't
+    /// bundled. The only HF-backed STT family is Parakeet TDT; deriving the dir
+    /// from the active language's `huggingFaceID` keeps this in lockstep with the
+    /// downloader without a second mapping. Used to protect the active model from
+    /// deletion and to flag it `isActive` in the inventory.
+    nonisolated static func activeSTTRepoDirName() -> String? {
+        #if canImport(STTModule)
+        let engine = YoozSTTEngine.shared
+        guard engine.currentBackend != .appleSTT,
+              let hfID = engine.currentLanguage.huggingFaceID
+        else { return nil }
+        return ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: hfID)
+        #else
+        return nil
+        #endif
+    }
+
     #if canImport(LLMModule)
+    /// LLM rows for the model-management inventory: the cache descriptors paired
+    /// with live display/loaded/active state from the TouchUp picker.
+    nonisolated static func llmInventoryInputs() async -> [ModelStore.LLMInventoryInput] {
+        let picker = await TouchUpEngine.shared.availableModels()
+        return LLMModelCatalog.cacheDescriptors().map { descriptor in
+            let row = picker.first { $0.id == descriptor.id }
+            return ModelStore.LLMInventoryInput(
+                descriptor: descriptor,
+                displayName: row?.displayName ?? descriptor.id,
+                loaded: row?.loadState == .loaded,
+                isActive: row?.isActive ?? false
+            )
+        }
+    }
+
     /// Build a single-model entry for the `/v1/llm/*` responses.
     /// `latencyHintMs` is a best-effort per-model baseline drawn from
     /// LLMModelType.description (e.g. "~200ms"). Keeps the JSON wire

@@ -35,15 +35,35 @@ struct EngineModules: Codable {
     let detail: ModuleDetailMap
 }
 
+/// `GET /v1/models` — the model-management inventory (disk hygiene). Keys mirror
+/// the SDK's `ManagedModelsResponse`/`ManagedModelInfo` so the client decodes it
+/// directly. This supersedes the prior loaded-models-only shape (which had no
+/// consumer).
 struct ModelsResponse: ResponseCodable {
     let models: [ModelInfo]
 }
 
 struct ModelInfo: Codable {
-    let name: String
+    let id: String
     let module: String
+    let displayName: String
+    let sizeBytes: Int64
+    let cached: Bool
     let loaded: Bool
-    let sizeBytes: Int64?
+    let isActive: Bool
+    let deletable: Bool
+}
+
+/// `DELETE /v1/models/:id`.
+struct DeleteModelResponse: ResponseCodable {
+    let id: String
+    let reclaimedBytes: Int64
+}
+
+/// `POST /v1/models/cleanup`.
+struct ModelCleanupResponse: ResponseCodable {
+    let totalReclaimedBytes: Int64
+    let perRepo: [String: Int64]
 }
 
 struct ErrorResponse: ResponseCodable {

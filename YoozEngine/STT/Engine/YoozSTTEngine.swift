@@ -981,7 +981,7 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         // `model_not_cached` wire code instead of getting flattened
         // into a generic 500.
         try Task.checkCancellation()
-        return try await STTModelHFDownloader.snapshot(
+        let snapshotURL = try await STTModelHFDownloader.snapshot(
             for: language,
             localFilesOnly: !allowFetch,
             progress: { fraction in
@@ -990,6 +990,25 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
                 }
             }
         )
+
+        // Best-effort: after a (possibly fresh) HF fetch, collapse superseded
+        // snapshots so repeated STT model updates don't stack on disk (the
+        // disk-hygiene contract; see EngineCore.ModelStore). Only on the
+        // fetch-allowed path, idempotent, and never blocks/fails the load — the
+        // live `refs/main` snapshot is preserved.
+        if allowFetch, let hfID = language.huggingFaceID,
+           let repoDir = ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: hfID) {
+            let reclaimed = (try? await ModelStore()
+                .collapseSnapshots(hfRepoDirName: repoDir)) ?? 0
+            if reclaimed > 0 {
+                NSLog(
+                    "YoozSTTEngine: collapsed superseded snapshots for %@: reclaimed %lld bytes",
+                    language.rawValue, reclaimed
+                )
+            }
+        }
+
+        return snapshotURL
     }
 }
 
