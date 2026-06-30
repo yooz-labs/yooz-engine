@@ -72,6 +72,17 @@ public enum EngineConfig {
     /// fires in the non-GPU structural tests.
     public static let mlxCacheBudgetPerCategoryBytes: Int = 512 * 1024 * 1024
 
+    /// Upper bound, in seconds, for a single blocking model-load await on the
+    /// in-process transport. The in-process path has no HTTP-client timeout to
+    /// fall back on, so a blocking caller (`loadModel(wait:true)`, the TouchUp
+    /// model switch, a stream open) wraps its load `Task` in this deadline via
+    /// `awaitLoadTask(_:deadlineSeconds:)`. Generous on purpose — a legitimate
+    /// first-run multi-GB Hugging Face pull on a slow link can run many minutes;
+    /// the deadline only exists so a genuinely wedged load surfaces an error
+    /// instead of blocking the caller forever. Matches the consumer-side
+    /// `awaitModelReady` poll ceiling in yooz-whisper.
+    public static let modelLoadDeadlineSeconds: Double = 600
+
     /// Convenience accessor for the active build variant. Mirrors
     /// `BuildVariant.current` so callers reading other engine config
     /// values can stay on the `EngineConfig` namespace.

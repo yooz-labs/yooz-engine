@@ -834,16 +834,24 @@ public actor TouchUpEngine {
         switch selection {
         case .yoozLight:
             if preload {
-                if lightModel == nil {
-                    lightModel = MLXLLMBackend.createLight(bundleIdentifier: bundleIdentifier)
-                }
-                if let light = lightModel, await !light.isLoaded {
-                    try await light.load()
-                }
+                // Route through the cancellable `enqueueLoad` state machine so
+                // the load is bounded (no unbounded `loadModelContainer` await
+                // that hangs the picker) and observable via `loadState(for:)` /
+                // `/v1/llm/status`. `enqueueLoad(.yoozLight)` runs
+                // `preloadModel(.yoozLight)`, equivalent to the prior inline load
+                // under normal conditions (it throws rather than silently no-ops
+                // if `createLight` ever returns nil).
+                try await awaitLoadTask(
+                    enqueueLoad(.yoozLight),
+                    deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+                )
             }
         case .yoozQuality:
             if preload {
-                try await loadQualityModel()
+                try await awaitLoadTask(
+                    enqueueLoad(.yoozQuality),
+                    deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+                )
             }
         case .foundationModels:
             // Validate availability up-front so a non-26 host never

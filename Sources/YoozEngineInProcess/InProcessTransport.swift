@@ -89,7 +89,7 @@ public final class InProcessTransport: EngineTransport {
         case "/v1/stt/batch":
             return try await handleBatch(body)
         case "/v1/stt/load":
-            return try await handleSTTLoad(body)
+            return try await handleSTTLoad(body, wait: Self.parseWaitQuery(path))
         case "/v1/stt/engine":
             return try await handleSetSTTEngine(body)
         case "/v1/llm/generate":
@@ -144,7 +144,15 @@ public final class InProcessTransport: EngineTransport {
             throw YoozEngineError.unsupportedOperation(operation: "streaming qwen3 preview")
 
         case .parakeet, .fastConformer:
-            try await YoozSTTEngine.shared.start(language: lang)
+            // Bound the (possibly first-run) load so a stream open can't hang
+            // indefinitely; routes through the same cancellable `enqueueLoad`
+            // primitive the load endpoint uses.
+            let task = await YoozSTTEngine.shared.enqueueLoad(language: lang) {
+                try await YoozSTTEngine.shared.start(language: lang)
+            }
+            try await awaitLoadTask(
+                task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+            )
             guard let transcriber = YoozSTTEngine.shared.createBatchTranscriber(mode: audioMode) else {
                 throw YoozEngineError.serverError(
                     statusCode: 503,
@@ -164,6 +172,23 @@ public final class InProcessTransport: EngineTransport {
             return String(path[..<q])
         }
         return path
+    }
+
+    /// Parse the `?wait=...` flag a load caller may append. Mirrors the loopback
+    /// `APIServer.parseWaitQuery`: `loadModel` posts `/v1/stt/load?wait=true`
+    /// (blocking), `loadModelAsync` posts `/v1/stt/load` (fire-and-forget). The
+    /// in-process `route()` strips the query for matching, so the original path
+    /// is parsed here to recover the flag.
+    static func parseWaitQuery(_ path: String) -> Bool {
+        guard let q = path.firstIndex(of: "?") else { return false }
+        let query = path[path.index(after: q)...]
+        for pair in query.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.first == "wait" else { continue }
+            if kv.count == 1 { return true }
+            return kv[1] == "true" || kv[1] == "1"
+        }
+        return false
     }
 
     // MARK: - Handlers
@@ -316,13 +341,21 @@ public final class InProcessTransport: EngineTransport {
 
     /// Pre-load the active backend's STT model for a language and return the
     /// resulting status. Backs both `loadModel` (`/v1/stt/load?wait=true`) and
-    /// `loadModelAsync` (`/v1/stt/load`): in-process there is no HTTP timeout to
-    /// dodge, so there is no async dispatch — `route()` strips the query and we
-    /// always load synchronously before returning a fully-loaded status. The
-    /// backend switch mirrors `openSTTStream`. The same lazy `start()` also runs
-    /// on the first `batch`/stream call, so this endpoint is a pre-warm, not a
-    /// prerequisite, for transcription.
-    private func handleSTTLoad(_ body: Data) async throws -> Data {
+    /// `loadModelAsync` (`/v1/stt/load`, fire-and-forget).
+    ///
+    /// For the MLX backends the load is routed through the engine's cancellable
+    /// `enqueueLoad` state machine — the same primitive the loopback
+    /// `/v1/stt/load` route uses — so the load is observable via `loadState`
+    /// and bounded. `wait == true` awaits completion under
+    /// `EngineConfig.modelLoadDeadlineSeconds`; `wait == false` returns the
+    /// current (`.loading`) status immediately and the consumer polls
+    /// `/v1/stt/status` for the `.ready` / `.failed` transition. This replaces
+    /// the prior synchronous, unbounded `start()` that pinned status at
+    /// "Downloading 100%" until weights finished materializing.
+    ///
+    /// The same lazy `start()` also runs on the first `batch`/stream call, so
+    /// this endpoint is a pre-warm, not a prerequisite, for transcription.
+    private func handleSTTLoad(_ body: Data, wait: Bool) async throws -> Data {
         let request = try JSONDecoder().decode(STTLoadBody.self, from: body)
         guard let language = STTModule.STTLanguage.fromCode(request.language) else {
             throw YoozEngineError.serverError(
@@ -339,12 +372,29 @@ public final class InProcessTransport: EngineTransport {
                     message: "Language '\(request.language)' is not supported by Apple STT"
                 )
             }
+            // Apple STT has no HF download/materialize phase; load synchronously.
             try await AppleSTTEngine.shared.start(language: appleLang)
         case .qwen3ASRPreview:
             // The preview backend is loopback/dev only (unstable; engine#154).
             throw YoozEngineError.unsupportedOperation(operation: "load qwen3 preview")
         case .parakeet, .fastConformer:
-            try await YoozSTTEngine.shared.start(language: language)
+            let task = await YoozSTTEngine.shared.enqueueLoad(language: language) {
+                try await YoozSTTEngine.shared.start(language: language)
+            }
+            if wait {
+                try await awaitLoadTask(
+                    task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+                )
+            } else {
+                // Fire-and-forget: the task settles loadState/lastLoadError in the
+                // background and a failure surfaces on the next /v1/stt/status
+                // poll. Log at the dispatch site so that failure is correlatable
+                // here, not only via the NSLog deep inside start().
+                NSLog(
+                    "InProcessTransport: STT load dispatched fire-and-forget for %@; poll /v1/stt/status for completion",
+                    language.rawValue
+                )
+            }
         }
         return try await handleSTTStatus()
     }
@@ -389,19 +439,41 @@ public final class InProcessTransport: EngineTransport {
             let loaded = await AppleSTTEngine.shared.isLoaded
             let language = await AppleSTTEngine.shared.currentLanguage.rawValue
             let streaming = await AppleSTTEngine.shared.isStreaming
+            // Apple STT has no fetcher/materialize lifecycle; map loaded → ready.
             status = SDKSTTStatus(
                 loaded: loaded, language: language, streaming: streaming,
-                progress: nil, state: nil, lastError: nil
+                progress: nil, state: loaded ? .ready : .idle, lastError: nil
             )
         } else {
-            let progress = YoozSTTEngine.shared.downloadProgress
+            // Surface the load lifecycle + last error (mirrors the loopback
+            // /v1/stt/status, engine#125) so the consumer can distinguish a
+            // download ("Downloading X%") from the synchronous materialization
+            // window ("Loading model…": progress nil + state .loading) and from a
+            // failed load (state .failed). The in-process path constructs the SDK
+            // type directly, so the engine LoadState is bridged by rawValue.
+            let engine = YoozSTTEngine.shared
+            let loaded = engine.isRunning
+            // Read the @Published, MainActor-written fields in a single hop so a
+            // poll can't observe a torn snapshot (e.g. the stale ~1.0 progress
+            // mid-reset alongside an already-advanced state).
+            let (rawProgress, engineState, engineError) = await MainActor.run {
+                (engine.downloadProgress, engine.loadState, engine.lastLoadError)
+            }
+            // When the model is resident, force progress nil + state .ready: a
+            // just-finished load leaves downloadProgress at 1.0, and a redundant
+            // enqueueLoad on an already-loaded engine briefly flips loadState to
+            // .loading — neither should surface as "Downloading 100%" / "loading"
+            // for a ready model. While not loaded, a fraction of exactly 1.0 means
+            // "download done, materializing" -> nil (the STT analog of the LLM
+            // `< 1` filter).
+            let resolvedState: EngineCore.LoadState = loaded ? .ready : engineState
             status = SDKSTTStatus(
-                loaded: YoozSTTEngine.shared.isRunning,
-                language: YoozSTTEngine.shared.currentLanguage.rawValue,
-                streaming: YoozSTTEngine.shared.isStreaming,
-                progress: progress > 0 ? progress : nil,
-                state: nil,
-                lastError: nil
+                loaded: loaded,
+                language: engine.currentLanguage.rawValue,
+                streaming: engine.isStreaming,
+                progress: loaded ? nil : (rawProgress > 0 && rawProgress < 1 ? rawProgress : nil),
+                state: SDKLoadState(rawValue: resolvedState.rawValue),
+                lastError: loaded ? nil : engineError
             )
         }
         return try JSONEncoder().encode(status)
@@ -418,7 +490,16 @@ public final class InProcessTransport: EngineTransport {
         // live fraction (>0) the `loadModelContainer` callback last reported.
         // Was hardcoded `nil`, so the in-process Light/Quality download bar
         // never moved on a first switch to a not-yet-cached tier.
+        // A fraction of 1.0 means the download finished and the model is now
+        // materializing (loadModelContainer hasn't returned yet): report nil so
+        // the consumer renders "Loading model…" (state .loading) rather than a
+        // frozen "Downloading 100%" — the LLM analog of the STT progress reset.
         let progress: Double?
+        // engine#125: also surface the per-tier lifecycle state + last error so
+        // consumers distinguish downloading / loading / failed. Bridged to the
+        // SDK enum by rawValue (the in-process path builds the SDK type directly).
+        let engineState: EngineCore.LoadState
+        let lastError: String?
         switch active {
         case .yoozLight:
             loaded = await engine.isLightModelLoaded
@@ -426,23 +507,30 @@ public final class InProcessTransport: EngineTransport {
                 progress = nil
             } else {
                 let fraction = await engine.downloadProgress(for: .yoozLight) ?? 0
-                progress = fraction > 0 ? fraction : nil
+                progress = (fraction > 0 && fraction < 1) ? fraction : nil
             }
+            engineState = await engine.loadState(for: .yoozLight)
+            lastError = await engine.lastLoadError(for: .yoozLight)
         case .yoozQuality:
             loaded = await engine.isQualityModelLoaded
             if loaded {
                 progress = nil
             } else {
                 let fraction = await engine.downloadProgress(for: .yoozQuality) ?? 0
-                progress = fraction > 0 ? fraction : nil
+                progress = (fraction > 0 && fraction < 1) ? fraction : nil
             }
+            engineState = await engine.loadState(for: .yoozQuality)
+            lastError = await engine.lastLoadError(for: .yoozQuality)
         case .foundationModels:
             loaded = await engine.isFoundationModelsLoaded
             progress = nil
+            engineState = loaded ? .ready : .idle
+            lastError = nil
         }
         let status = SDKLLMStatus(
             loaded: loaded, modelId: active.rawValue, progress: progress,
-            state: nil, lastError: nil
+            state: SDKLoadState(rawValue: engineState.rawValue),
+            lastError: lastError
         )
         return try JSONEncoder().encode(status)
     }

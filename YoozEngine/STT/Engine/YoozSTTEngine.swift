@@ -253,6 +253,14 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             )
             NSLog("YoozSTTEngine: Got model directory: %@", modelDir.path)
 
+            // The download (if any) is done; the snapshot is on disk. Reset the
+            // progress fraction so the synchronous weight materialization below
+            // reads as "Loading model…" (progress nil + state .loading) on
+            // /v1/stt/status rather than a frozen "Downloading 100%". Without
+            // this, `downloadProgress` holds the last HF callback value (~1.0)
+            // for the entire `fromDirectory` window, which is exactly the
+            // "stuck at 100%" the consumer banner showed.
+            await MainActor.run { self.downloadProgress = 0 }
 
             NSLog("YoozSTTEngine: Calling ParakeetModel.fromDirectory...")
             let loadedModel = try ParakeetModel.fromDirectory(modelDir, dtype: .bfloat16)
