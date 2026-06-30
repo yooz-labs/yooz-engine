@@ -116,6 +116,14 @@ actor MLXLLMBackend: LLMBackend {
         return firstModelDirectory(containingConfigIn: candidates)
     }
 
+    /// Whether a complete copy of `modelType` ships in the app bundle (or the
+    /// long-lived models directory) and therefore loads offline with no HF
+    /// download. Used by the model-management layer to mark a hub copy as a
+    /// reclaimable duplicate. Static + synchronous: no actor state.
+    static func isBundled(_ modelType: LLMModelType) -> Bool {
+        bundledModelDirectory(for: modelType) != nil
+    }
+
     /// Pure probe (no `Bundle`/`EngineConfig` coupling, for testability): the
     /// first candidate directory that holds a COMPLETE snapshot — both
     /// `config.json` AND at least one `.safetensors` weights file — or nil.
@@ -200,6 +208,30 @@ actor MLXLLMBackend: LLMBackend {
             // readiness on `downloadProgress >= 1` (rather than `isLoaded`) stalls.
             downloadProgress = 1
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
+
+            // Best-effort: after an HF fetch, collapse superseded snapshots so
+            // repeated model updates don't stack multi-GB snapshots on disk
+            // (the disk-hygiene contract; see EngineCore.ModelStore). Skipped for
+            // a bundled `.directory` load (writes no hub snapshot). Never blocks
+            // or fails the load — the current `refs/main` snapshot is preserved.
+            if Self.bundledModelDirectory(for: modelType) == nil,
+               let repoDir = ModelCacheDescriptor.hubRepoDirName(
+                   forHuggingFaceID: modelType.huggingFaceID
+               ) {
+                do {
+                    let reclaimed = try await ModelStore()
+                        .collapseSnapshots(hfRepoDirName: repoDir)
+                    if reclaimed > 0 {
+                        logger.info(
+                            "Collapsed superseded snapshots for \(self.modelType.rawValue): reclaimed \(reclaimed) bytes"
+                        )
+                    }
+                } catch {
+                    logger.debug(
+                        "Post-load snapshot collapse failed for \(self.modelType.rawValue): \(error.localizedDescription) (non-fatal)"
+                    )
+                }
+            }
         } catch let error as LLMError {
             // Roll back the registration above: no model became resident, so
             // balance `register(.touchUp)` to keep the resident set (and the

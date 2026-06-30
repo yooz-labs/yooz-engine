@@ -203,4 +203,121 @@ final class InProcessTransportTests: XCTestCase {
         XCTAssertFalse(InProcessTransport.parseWaitQuery("/v1/stt/load?wait=0"))
         XCTAssertTrue(InProcessTransport.parseWaitQuery("/v1/stt/load?lang=en&wait=true"))
     }
+
+    // MARK: - Model management (disk hygiene)
+
+    /// `GET /v1/models` routes in-process and returns an internally consistent
+    /// inventory. Read-only — never mutates the real cache. State-agnostic: the
+    /// machine may have zero or many installed models, so it pins the invariants
+    /// rather than a specific list.
+    func testInProcessModelsInventoryIsConsistent() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let response = try await client.models.list()
+        for model in response.models {
+            // Not-cached implies no reclaimable footprint.
+            if !model.cached { XCTAssertEqual(model.sizeBytes, 0, "\(model.id)") }
+            // The active model is never offered for deletion.
+            if model.isActive { XCTAssertFalse(model.deletable, "\(model.id)") }
+            // Deletable implies a real footprint and not active.
+            if model.deletable {
+                XCTAssertGreaterThan(model.sizeBytes, 0, "\(model.id)")
+                XCTAssertFalse(model.isActive, "\(model.id)")
+            }
+        }
+    }
+
+    /// Deleting an id that is neither an LLM tier nor a hub repo dir is a 404 —
+    /// and the rejection happens before any disk touch.
+    func testInProcessDeleteUnknownModelThrows404() async throws {
+        let client = makeClient()
+        try await client.connect()
+        do {
+            _ = try await client.models.delete(id: "totally-unknown-model")
+            XCTFail("expected a 404 for an unknown model")
+        } catch let error as YoozEngineError {
+            guard case .serverError(let status, _, _) = error, status == 404 else {
+                return XCTFail("expected serverError 404, got \(error)")
+            }
+        }
+    }
+
+    /// The active model can never be deleted (409). Targets whichever LLM tier is
+    /// active; the rejection short-circuits before any unload or disk removal, so
+    /// this is safe against the real cache.
+    func testInProcessDeleteActiveModelIsRejected() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let picker: TouchUpModelsResponse = try await client.touchUp.availableModels()
+        guard let activeId = picker.models.first(where: \.isActive)?.id else {
+            return XCTFail("expected exactly one active TouchUp model")
+        }
+        // Apple Intelligence (foundation-models) has no LLMModelType mapping, so
+        // it 404s rather than 409s; the active-rejection contract applies to the
+        // deletable LLM tiers.
+        guard activeId == "yooz-light-v2" || activeId == "yooz-quality-v2" else {
+            throw XCTSkip("active model \(activeId) is not a deletable LLM tier")
+        }
+        do {
+            _ = try await client.models.delete(id: activeId)
+            XCTFail("deleting the active model should be rejected")
+        } catch let error as YoozEngineError {
+            guard case .serverError(let status, let code, _) = error,
+                  status == 409, code == "model_active" else {
+                return XCTFail("expected serverError 409 model_active, got \(error)")
+            }
+        }
+    }
+
+    /// `POST /v1/models/cleanup` routes end-to-end and actually collapses a
+    /// stacked cache. `HF_HOME` is redirected to a temp hub holding a real
+    /// symlinked fixture, so the assertions are deterministic and the machine's
+    /// real cache is never touched.
+    func testInProcessCleanupCollapsesRedirectedCache() async throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory
+            .appendingPathComponent("ip-cleanup-\(UUID().uuidString)")
+        let repo = home.appendingPathComponent("hub/models--Foo--Bar")
+        let blobs = repo.appendingPathComponent("blobs")
+        try fm.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try Data(count: 4_096).write(to: blobs.appendingPathComponent("cfg"))
+        try Data(count: 16_384).write(to: blobs.appendingPathComponent("old"))
+        try Data(count: 16_384).write(to: blobs.appendingPathComponent("new"))
+        // Each snapshot is complete (config.json + model.safetensors) so the live
+        // one counts as a materialized survivor.
+        for (commit, weights) in [("old111", "old"), ("new222", "new")] {
+            let dir = repo.appendingPathComponent("snapshots/\(commit)")
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try fm.createSymbolicLink(
+                atPath: dir.appendingPathComponent("config.json").path,
+                withDestinationPath: "../../blobs/cfg"
+            )
+            try fm.createSymbolicLink(
+                atPath: dir.appendingPathComponent("model.safetensors").path,
+                withDestinationPath: "../../blobs/\(weights)"
+            )
+        }
+        let refs = repo.appendingPathComponent("refs")
+        try fm.createDirectory(at: refs, withIntermediateDirectories: true)
+        try "new222".write(
+            to: refs.appendingPathComponent("main"), atomically: true, encoding: .utf8
+        )
+
+        let savedHome = ProcessInfo.processInfo.environment["HF_HOME"]
+        setenv("HF_HOME", home.path, 1)
+        defer {
+            if let savedHome { setenv("HF_HOME", savedHome, 1) } else { unsetenv("HF_HOME") }
+            try? fm.removeItem(at: home)
+        }
+
+        let client = makeClient()
+        try await client.connect()
+        let result = try await client.models.cleanup()
+
+        XCTAssertGreaterThan(result.totalReclaimedBytes, 0)
+        XCTAssertFalse(fm.fileExists(atPath: repo.appendingPathComponent("snapshots/old111").path))
+        XCTAssertTrue(fm.fileExists(atPath: repo.appendingPathComponent("snapshots/new222").path))
+        XCTAssertFalse(fm.fileExists(atPath: blobs.appendingPathComponent("old").path))
+        XCTAssertTrue(fm.fileExists(atPath: blobs.appendingPathComponent("new").path))
+    }
 }
