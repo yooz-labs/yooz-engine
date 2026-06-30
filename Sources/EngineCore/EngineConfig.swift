@@ -176,6 +176,51 @@ public enum EngineConfig {
         return caches.appendingPathComponent("live.yooz.engine")
     }()
 
+    /// Root of the HuggingFace hub cache that the engine's downloaders write
+    /// into — `<root>/models--<namespace>--<repo>/{blobs,refs,snapshots}`.
+    ///
+    /// This duplicates swift-huggingface's `CacheLocationProvider.environment`
+    /// resolution **in pure Foundation** on purpose: `ModelStore` (disk hygiene)
+    /// lives in `EngineCore`, which deliberately takes no swift-huggingface
+    /// dependency, so it cannot call `HubCache.default`. The two resolvers must
+    /// agree byte-for-byte or cleanup would scan the wrong directory; the order
+    /// below mirrors `CacheLocationProvider.resolveFromEnvironment` /
+    /// `defaultCacheDirectory` exactly and is pinned by `ModelStoreTests`.
+    ///
+    /// Resolution order:
+    /// 1. `HF_HUB_CACHE` (tilde-expanded).
+    /// 2. `HF_HOME` + `/hub` (tilde-expanded).
+    /// 3. Default — sandboxed (`APP_SANDBOX_CONTAINER_ID` set, the in-process
+    ///    case inside a host app's container): `<container>/Library/Caches/
+    ///    huggingface/hub`; otherwise `~/.cache/huggingface/hub`.
+    ///
+    /// Computed (not cached) because tests redirect it via `HF_HOME`.
+    public static var huggingFaceCacheDirectory: URL {
+        let env = ProcessInfo.processInfo.environment
+        if let hubCache = env["HF_HUB_CACHE"], !hubCache.isEmpty {
+            return URL(fileURLWithPath: (hubCache as NSString).expandingTildeInPath)
+        }
+        if let hfHome = env["HF_HOME"], !hfHome.isEmpty {
+            return URL(fileURLWithPath: (hfHome as NSString).expandingTildeInPath)
+                .appendingPathComponent("hub")
+        }
+        if env["APP_SANDBOX_CONTAINER_ID"] != nil {
+            guard let caches = FileManager.default.urls(
+                for: .cachesDirectory,
+                in: .userDomainMask
+            ).first else {
+                fatalError("EngineConfig: Caches directory not found")
+            }
+            return caches
+                .appendingPathComponent("huggingface")
+                .appendingPathComponent("hub")
+        }
+        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent(".cache")
+            .appendingPathComponent("huggingface")
+            .appendingPathComponent("hub")
+    }
+
     /// Whether the eager-load loop runs when `APIServer.start()`
     /// completes. Production keeps this on; tests turn it off because
     /// the route tests boot a real `APIServer` and a kickoff would
