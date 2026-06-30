@@ -93,6 +93,42 @@ actor MLXLLMBackend: LLMBackend {
         }
     }
 
+    /// Resolve a locally-bundled/preinstalled snapshot directory for `modelType`
+    /// so a packaged app loads its embedded model with no Hugging Face fetch.
+    /// Mirrors `YoozSTTEngine.getModelDirectory`'s probe order, but keyed by
+    /// `modelType.rawValue` (e.g. `yooz-quality-v2`) since multiple LLM tiers
+    /// coexist. `config.json` is the readiness sentinel; a partial drop returns
+    /// nil and the caller falls through to the HF path. In-process, `Bundle.main`
+    /// is the host app, where whisper copies the model to
+    /// `Contents/Resources/<id>/` (a folder-reference resource).
+    private static func bundledModelDirectory(for modelType: LLMModelType) -> URL? {
+        let id = modelType.rawValue
+        var candidates: [URL] = [
+            EngineConfig.modelsDirectory.appendingPathComponent(id)
+        ]
+        if let resourcePath = Bundle.main.resourcePath {
+            let resourceDir = URL(fileURLWithPath: resourcePath)
+            candidates.append(
+                resourceDir.appendingPathComponent("Models").appendingPathComponent(id)
+            )
+            candidates.append(resourceDir.appendingPathComponent(id))
+        }
+        return firstModelDirectory(containingConfigIn: candidates)
+    }
+
+    /// Pure probe (no `Bundle`/`EngineConfig` coupling, for testability): the
+    /// first candidate directory that contains a `config.json` readiness
+    /// sentinel, or nil. Precedence follows the caller's order.
+    static func firstModelDirectory(containingConfigIn candidates: [URL]) -> URL? {
+        let fileManager = FileManager.default
+        for dir in candidates where fileManager.fileExists(
+            atPath: dir.appendingPathComponent("config.json").path
+        ) {
+            return dir
+        }
+        return nil
+    }
+
     func load() async throws {
         guard !isLoaded else { return }
 
@@ -108,8 +144,20 @@ actor MLXLLMBackend: LLMBackend {
         applyResidency(MLXResidency.shared.register(.touchUp))
 
         #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
-        let hfID = modelType.huggingFaceID
-        logger.info("Loading model \(self.modelType.rawValue) from HF \(hfID)...")
+        // Prefer a locally-bundled/preinstalled snapshot (zero-download), else a
+        // Hugging Face fetch. mlx-swift-lm's resolver short-circuits the
+        // downloader for a `.directory` configuration, so the `#hubDownloader()`
+        // passed below is never invoked for a bundled model — no HF round-trip
+        // and no second on-disk copy. (Mirrors the STT bundle/local resolver.)
+        let configuration: ModelConfiguration
+        if let localDir = Self.bundledModelDirectory(for: modelType) {
+            logger.info("Loading model \(self.modelType.rawValue) from bundled dir \(localDir.path)")
+            configuration = ModelConfiguration(directory: localDir)
+        } else {
+            let hfID = modelType.huggingFaceID
+            logger.info("Loading model \(self.modelType.rawValue) from HF \(hfID)...")
+            configuration = ModelConfiguration(id: hfID)
+        }
 
         do {
             // Use the explicit `loadModelContainer(from: downloader, using:
@@ -122,11 +170,9 @@ actor MLXLLMBackend: LLMBackend {
             // `Hub` via `#hubDownloader()`) and tokenizer loader macros and
             // is what the macro itself expands to internally.
             //
-            // First-run downloads stream into `~/.cache/huggingface/hub/`;
-            // cached snapshots reuse the same on-disk layout. No
-            // `/Volumes/S1` fallback, no embedded bundle dance — packaged
-            // builds and fresh installs hit the same code path.
-            let configuration = ModelConfiguration(id: hfID)
+            // For a `.directory` configuration the downloader is bypassed; for an
+            // `.id` configuration first-run downloads stream into
+            // `~/.cache/huggingface/hub/` and cached snapshots reuse that layout.
             modelContainer = try await loadModelContainer(
                 from: #hubDownloader(),
                 using: #huggingFaceTokenizerLoader(),
