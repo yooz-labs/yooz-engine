@@ -14,25 +14,31 @@ import XCTest
 
 final class LLMBundledModelResolverTests: XCTestCase {
 
-    func testFirstModelDirectoryPicksFirstWithConfigSentinel() throws {
+    func testFirstModelDirectoryRequiresConfigAndWeights() throws {
         let fileManager = FileManager.default
         let base = fileManager.temporaryDirectory
             .appendingPathComponent("llm-bundle-\(UUID().uuidString)")
-        let missing = base.appendingPathComponent("no-config")
-        let present = base.appendingPathComponent("has-config")
-        try fileManager.createDirectory(at: missing, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: present, withIntermediateDirectories: true)
-        try Data("{}".utf8).write(to: present.appendingPathComponent("config.json"))
+        let missing = base.appendingPathComponent("empty")             // nothing
+        let partial = base.appendingPathComponent("config-only")       // config, no weights
+        let complete = base.appendingPathComponent("config-and-weights")
+        for dir in [missing, partial, complete] {
+            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        try Data("{}".utf8).write(to: partial.appendingPathComponent("config.json"))
+        try Data("{}".utf8).write(to: complete.appendingPathComponent("config.json"))
+        try Data("w".utf8).write(to: complete.appendingPathComponent("model.safetensors"))
         defer { try? fileManager.removeItem(at: base) }
 
-        // A candidate without the config.json sentinel is skipped; the next wins.
+        // Skips the empty dir AND the config-only (partial) dir; picks the
+        // complete snapshot (config.json + .safetensors).
         XCTAssertEqual(
-            MLXLLMBackend.firstModelDirectory(containingConfigIn: [missing, present]),
-            present
+            MLXLLMBackend.firstModelDirectory(containingConfigIn: [missing, partial, complete]),
+            complete
         )
-        // No candidate carries the sentinel -> nil, so the caller falls back to HF.
+        // A partial bundle (config.json but no weights) is NOT selected, so the
+        // caller falls through to HF instead of hard-failing the load.
         XCTAssertNil(
-            MLXLLMBackend.firstModelDirectory(containingConfigIn: [missing])
+            MLXLLMBackend.firstModelDirectory(containingConfigIn: [missing, partial])
         )
     }
 }

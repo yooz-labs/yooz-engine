@@ -117,14 +117,23 @@ actor MLXLLMBackend: LLMBackend {
     }
 
     /// Pure probe (no `Bundle`/`EngineConfig` coupling, for testability): the
-    /// first candidate directory that contains a `config.json` readiness
-    /// sentinel, or nil. Precedence follows the caller's order.
+    /// first candidate directory that holds a COMPLETE snapshot — both
+    /// `config.json` AND at least one `.safetensors` weights file — or nil.
+    /// Requiring weights (matching `isModelCached`) means a partially-copied
+    /// bundle (config present, weights missing) returns nil so the caller falls
+    /// through to HF instead of hard-failing the load. Precedence = caller order.
     static func firstModelDirectory(containingConfigIn candidates: [URL]) -> URL? {
         let fileManager = FileManager.default
-        for dir in candidates where fileManager.fileExists(
-            atPath: dir.appendingPathComponent("config.json").path
-        ) {
-            return dir
+        for dir in candidates {
+            guard fileManager.fileExists(
+                atPath: dir.appendingPathComponent("config.json").path
+            ) else { continue }
+            let contents = (try? fileManager.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil
+            )) ?? []
+            if contents.contains(where: { $0.pathExtension == "safetensors" }) {
+                return dir
+            }
         }
         return nil
     }
@@ -186,6 +195,10 @@ actor MLXLLMBackend: LLMBackend {
             )
 
             isLoaded = true
+            // A bundled (`.directory`) load never fires the HF progress handler,
+            // so pin progress to 1.0 on success — otherwise a consumer that gates
+            // readiness on `downloadProgress >= 1` (rather than `isLoaded`) stalls.
+            downloadProgress = 1
             logger.info("Model \(self.modelType.rawValue) loaded successfully")
         } catch let error as LLMError {
             // Roll back the registration above: no model became resident, so
@@ -513,6 +526,10 @@ actor MLXLLMBackend: LLMBackend {
     /// for an interrupted download. Repo IDs without an owner segment
     /// fall back to `false` (the engine never wires such IDs today).
     var isModelCached: Bool {
+        // A bundled/preinstalled snapshot counts as cached (it loads offline with
+        // no download). Check before the HF hub probe so the picker never offers a
+        // download for a model already in the app bundle.
+        if Self.bundledModelDirectory(for: modelType) != nil { return true }
         #if canImport(MLXHuggingFace)
         let id = modelType.huggingFaceID
         let parts = id.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
