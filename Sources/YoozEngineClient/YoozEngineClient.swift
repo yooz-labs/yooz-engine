@@ -90,6 +90,9 @@ public final class YoozEngineClient: Sendable {
     /// VAD (voice activity detection) service client.
     public var vad: VADClient { VADClient(engine: self) }
 
+    /// Model-management service client (disk hygiene: inventory, delete, cleanup).
+    public var models: ModelsClient { ModelsClient(engine: self) }
+
     // MARK: - Transport delegation (used by the service clients)
 
     func get(_ path: String) async throws -> Data {

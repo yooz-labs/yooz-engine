@@ -74,6 +74,8 @@ public final class InProcessTransport: EngineTransport {
             return try await handleLLMModels()
         case "/v1/touchup/models":
             return try await handleTouchUpModels()
+        case "/v1/models":
+            return try await handleModelsInventory()
         default:
             throw YoozEngineError.unsupportedOperation(operation: "GET \(route(path))")
         }
@@ -104,13 +106,23 @@ public final class InProcessTransport: EngineTransport {
             return try await handleTouchUp(body)
         case "/v1/touchup/model":
             return try await handleSetTouchUpModel(body)
+        case "/v1/models/cleanup":
+            return try await handleModelsCleanup()
         default:
             throw YoozEngineError.unsupportedOperation(operation: "POST \(route(path))")
         }
     }
 
     public func delete(_ path: String) async throws -> Data {
-        throw YoozEngineError.unsupportedOperation(operation: "DELETE \(route(path))")
+        try await connect()
+        let routed = route(path)
+        let prefix = "/v1/models/"
+        if routed.hasPrefix(prefix) {
+            let raw = String(routed.dropFirst(prefix.count))
+            let id = raw.removingPercentEncoding ?? raw
+            return try await handleDeleteModel(id)
+        }
+        throw YoozEngineError.unsupportedOperation(operation: "DELETE \(routed)")
     }
 
     @available(macOS 14.0, iOS 17.0, *)
@@ -690,6 +702,102 @@ public final class InProcessTransport: EngineTransport {
             selection, preload: request.preload ?? true
         )
         return try JSONEncoder().encode(touchUpModelInfo(info))
+    }
+
+    // MARK: - Model management (disk hygiene)
+
+    /// `GET /v1/models` — the cross-module inventory with real on-disk sizes.
+    /// Mirrors the loopback `APIServer` `/v1/models` handler so the SDK is
+    /// transport-agnostic.
+    private func handleModelsInventory() async throws -> Data {
+        let store = ModelStore()
+        let rows = await store.inventory(
+            llm: await llmInventoryInputs(),
+            activeSTTRepoDirName: activeSTTRepoDirName()
+        )
+        let models = rows.map {
+            ManagedModelInfo(
+                id: $0.id, module: $0.module, displayName: $0.displayName,
+                sizeBytes: $0.sizeBytes, cached: $0.cached, loaded: $0.loaded,
+                isActive: $0.isActive, deletable: $0.deletable
+            )
+        }
+        return try JSONEncoder().encode(ManagedModelsResponse(models: models))
+    }
+
+    /// `DELETE /v1/models/:id` — unload then remove a model's reclaimable copies.
+    /// Refuses to delete the active model (409).
+    private func handleDeleteModel(_ id: String) async throws -> Data {
+        let store = ModelStore()
+
+        if let modelType = LLMModelType(rawValue: id) {
+            let active = await TouchUpEngine.shared.activeModel
+            if active.rawValue == id {
+                throw YoozEngineError.serverError(
+                    statusCode: 409, code: "model_active",
+                    message: "Cannot delete the active model '\(id)'"
+                )
+            }
+            await TouchUpEngine.shared.unload(modelType)
+            let descriptor = LLMModelCatalog.cacheDescriptors().first { $0.id == id }
+            let reclaimed = try await store.deleteModel(
+                hfRepoDirName: descriptor?.hfRepoDirName,
+                modelsDirSubdir: descriptor?.modelsDirSubdir
+            )
+            return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
+        }
+
+        if id.hasPrefix("models--") {
+            if id == activeSTTRepoDirName() {
+                throw YoozEngineError.serverError(
+                    statusCode: 409, code: "model_active",
+                    message: "Cannot delete the active model '\(id)'"
+                )
+            }
+            let reclaimed = try await store.deleteModel(hfRepoDirName: id, modelsDirSubdir: nil)
+            return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
+        }
+
+        throw YoozEngineError.serverError(
+            statusCode: 404, code: "unknown_model",
+            message: "Unknown model '\(id)'"
+        )
+    }
+
+    /// `POST /v1/models/cleanup` — the one-shot disk-hygiene migration.
+    private func handleModelsCleanup() async throws -> Data {
+        let store = ModelStore()
+        let report = try await store.cleanupAll(
+            descriptors: LLMModelCatalog.cacheDescriptors()
+        )
+        return try JSONEncoder().encode(ModelCleanupResult(
+            totalReclaimedBytes: report.totalReclaimedBytes,
+            perRepo: report.perRepo
+        ))
+    }
+
+    /// LLM rows for the inventory: cache descriptors + live picker state.
+    private func llmInventoryInputs() async -> [ModelStore.LLMInventoryInput] {
+        let picker = await TouchUpEngine.shared.availableModels()
+        return LLMModelCatalog.cacheDescriptors().map { descriptor in
+            let row = picker.first { $0.id == descriptor.id }
+            return ModelStore.LLMInventoryInput(
+                descriptor: descriptor,
+                displayName: row?.displayName ?? descriptor.id,
+                loaded: row?.loadState == .loaded,
+                isActive: row?.isActive ?? false
+            )
+        }
+    }
+
+    /// Hub dir name of the active STT model, or `nil` for Apple Speech (no HF
+    /// footprint). Parakeet TDT is the only HF-backed STT family.
+    private func activeSTTRepoDirName() -> String? {
+        let engine = YoozSTTEngine.shared
+        guard engine.currentBackend != .appleSTT,
+              let hfID = engine.currentLanguage.huggingFaceID
+        else { return nil }
+        return ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: hfID)
     }
 
     // MARK: - Mapping helpers
