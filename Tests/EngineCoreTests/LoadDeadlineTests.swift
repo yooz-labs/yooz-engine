@@ -24,11 +24,9 @@ final class LoadDeadlineTests: XCTestCase {
     /// underlying load Task so cooperatively-cancellable work unwinds.
     func testThrowsDeadlineExceededAndCancelsTask() async {
         let task = Task<Void, Error> {
-            // Loops until cancelled (swallows the per-iteration sleep cancel so
-            // the deadline child wins the race deterministically).
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 20_000_000)
-            }
+            // Sleeps "forever"; Task.sleep throws CancellationError on cancel,
+            // exactly as real load bodies propagate cancellation.
+            try await Task.sleep(nanoseconds: 60_000_000_000)
         }
         do {
             try await awaitLoadTask(task, deadlineSeconds: 0.2)
@@ -39,6 +37,29 @@ final class LoadDeadlineTests: XCTestCase {
             XCTFail("expected LoadDeadlineExceeded, got \(error)")
         }
         XCTAssertTrue(task.isCancelled, "the load task must be cancelled on deadline")
+    }
+
+    /// A genuine load error that races the deadline must propagate verbatim, not
+    /// be masked as `LoadDeadlineExceeded` (silent-failure review Finding 1). The
+    /// task swallows cancellation and throws its own error, simulating a failure
+    /// that coincides with the deadline; only `CancellationError` is re-interpreted
+    /// as a timeout, so this surfaces as `Boom`.
+    func testRealErrorAfterDeadlineIsNotMaskedAsTimeout() async {
+        struct Boom: Error {}
+        let task = Task<Void, Error> {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            throw Boom()
+        }
+        do {
+            try await awaitLoadTask(task, deadlineSeconds: 0.2)
+            XCTFail("expected Boom")
+        } catch is Boom {
+            // correct — the real error propagated, not masked as a timeout
+        } catch {
+            XCTFail("expected Boom, got \(error)")
+        }
     }
 
     /// A real load error before the deadline propagates verbatim — the deadline

@@ -385,6 +385,15 @@ public final class InProcessTransport: EngineTransport {
                 try await awaitLoadTask(
                     task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
                 )
+            } else {
+                // Fire-and-forget: the task settles loadState/lastLoadError in the
+                // background and a failure surfaces on the next /v1/stt/status
+                // poll. Log at the dispatch site so that failure is correlatable
+                // here, not only via the NSLog deep inside start().
+                NSLog(
+                    "InProcessTransport: STT load dispatched fire-and-forget for %@; poll /v1/stt/status for completion",
+                    language.rawValue
+                )
             }
         }
         return try await handleSTTStatus()
@@ -443,16 +452,28 @@ public final class InProcessTransport: EngineTransport {
             // failed load (state .failed). The in-process path constructs the SDK
             // type directly, so the engine LoadState is bridged by rawValue.
             let engine = YoozSTTEngine.shared
-            let progress = engine.downloadProgress
-            let engineState = await MainActor.run { engine.loadState }
-            let lastError = await MainActor.run { engine.lastLoadError }
+            let loaded = engine.isRunning
+            // Read the @Published, MainActor-written fields in a single hop so a
+            // poll can't observe a torn snapshot (e.g. the stale ~1.0 progress
+            // mid-reset alongside an already-advanced state).
+            let (rawProgress, engineState, engineError) = await MainActor.run {
+                (engine.downloadProgress, engine.loadState, engine.lastLoadError)
+            }
+            // When the model is resident, force progress nil + state .ready: a
+            // just-finished load leaves downloadProgress at 1.0, and a redundant
+            // enqueueLoad on an already-loaded engine briefly flips loadState to
+            // .loading — neither should surface as "Downloading 100%" / "loading"
+            // for a ready model. While not loaded, a fraction of exactly 1.0 means
+            // "download done, materializing" -> nil (the STT analog of the LLM
+            // `< 1` filter).
+            let resolvedState: EngineCore.LoadState = loaded ? .ready : engineState
             status = SDKSTTStatus(
-                loaded: engine.isRunning,
+                loaded: loaded,
                 language: engine.currentLanguage.rawValue,
                 streaming: engine.isStreaming,
-                progress: progress > 0 ? progress : nil,
-                state: SDKLoadState(rawValue: engineState.rawValue),
-                lastError: lastError
+                progress: loaded ? nil : (rawProgress > 0 && rawProgress < 1 ? rawProgress : nil),
+                state: SDKLoadState(rawValue: resolvedState.rawValue),
+                lastError: loaded ? nil : engineError
             )
         }
         return try JSONEncoder().encode(status)

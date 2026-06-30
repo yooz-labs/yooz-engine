@@ -49,20 +49,38 @@ private final class DeadlineFlag: @unchecked Sendable {
 /// hang a caller indefinitely; mirrors, for the blocking callers that still await
 /// completion, the fire-and-forget + poll contract the loopback `APIServer` uses.
 ///
+/// Error semantics (so a real failure is never masked as a timeout): the deadline
+/// is surfaced ONLY when the load task throws `CancellationError` after the
+/// watchdog fired. A genuine load error (network, missing/corrupt weights, …)
+/// that races the deadline propagates verbatim, and a task that completes — even
+/// a hair after the deadline cancel — reports success, because the load did finish.
+///
 /// Caveat: cancellation only unwinds *cooperatively cancellable* work — the
 /// Hugging Face download + materialization inside `loadModelContainer` (the LLM
 /// switch path) IS cancellable, so the deadline frees the caller promptly there.
 /// A fully synchronous `ParakeetModel.fromDirectory` cannot be interrupted
-/// mid-call, so the `await` below still waits for it; the only blocking in-process
-/// caller of a synchronous STT load is the legacy `loadModel(wait:true)` —
-/// whisper's STT path is fire-and-forget and never reaches here.
+/// mid-call, so the `await` below still blocks until it completes even if the
+/// deadline fires. The blocking in-process callers affected are
+/// `loadModel(wait:true)` and stream opens (`openSTTStream`) for the
+/// parakeet/fastConformer backends; `loadModelAsync` (whisper's pre-warm path)
+/// takes the `wait == false` route and never calls `awaitLoadTask`.
 public func awaitLoadTask(
     _ task: Task<Void, Error>,
     deadlineSeconds: Double
 ) async throws {
     let flag = DeadlineFlag()
+    // Clamp to a finite, positive sleep so a non-finite caller value (e.g. a
+    // `.infinity` "wait forever" sentinel) can't trap the watchdog's UInt64
+    // conversion. The shipping caller passes a fixed 600s.
+    let nanos: UInt64
+    let product = deadlineSeconds * 1_000_000_000
+    if deadlineSeconds.isFinite, product > 0, product < Double(UInt64.max) {
+        nanos = UInt64(product)
+    } else {
+        nanos = .max
+    }
     let watchdog = Task {
-        try? await Task.sleep(nanoseconds: UInt64(deadlineSeconds * 1_000_000_000))
+        try? await Task.sleep(nanoseconds: nanos)
         if !Task.isCancelled {
             flag.markFired()
             task.cancel()
@@ -72,15 +90,15 @@ public func awaitLoadTask(
 
     do {
         try await task.value
-    } catch {
-        // A cancellation/error that lands after the watchdog fired is the
-        // deadline surfacing; otherwise propagate the load's own error verbatim
-        // so a real failure is never masked as a timeout.
+        // The load finished — even if a late watchdog cancel raced in, the work
+        // completed, so report success. Only an actual `CancellationError` below
+        // is re-interpreted as a deadline.
+    } catch is CancellationError {
+        // Either our watchdog cancelled the load (deadline) or the caller did.
         if flag.fired { throw LoadDeadlineExceeded(seconds: deadlineSeconds) }
-        throw error
+        throw CancellationError()
     }
-    // The load completed, but if the watchdog had already fired (a
-    // cancellation-swallowing body that still ran to completion), treat it as a
-    // deadline so the contract is consistent.
-    if flag.fired { throw LoadDeadlineExceeded(seconds: deadlineSeconds) }
+    // A genuine (non-cancellation) load error is NOT caught above, so it
+    // propagates verbatim and is never masked as a timeout — even if it raced
+    // the deadline.
 }

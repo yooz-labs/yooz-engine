@@ -837,8 +837,10 @@ public actor TouchUpEngine {
                 // Route through the cancellable `enqueueLoad` state machine so
                 // the load is bounded (no unbounded `loadModelContainer` await
                 // that hangs the picker) and observable via `loadState(for:)` /
-                // `/v1/llm/status`. `enqueueLoad(.yoozLight)` runs the same
-                // `preloadModel(.yoozLight)` body the inline path used.
+                // `/v1/llm/status`. `enqueueLoad(.yoozLight)` runs
+                // `preloadModel(.yoozLight)`, equivalent to the prior inline load
+                // under normal conditions (it throws rather than silently no-ops
+                // if `createLight` ever returns nil).
                 try await awaitLoadTask(
                     enqueueLoad(.yoozLight),
                     deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds

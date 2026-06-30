@@ -174,7 +174,21 @@ final class InProcessTransportTests: XCTestCase {
         let client = makeClient()
         try await client.connect()
         let status = try await client.llm.status()
-        XCTAssertNotNil(status.state, "in-process LLM status should surface a lifecycle state")
+        // A cold engine should report .idle specifically (was hardcoded nil); a
+        // bare != nil would also pass for an erroneous .failed/.loading.
+        XCTAssertEqual(status.state, .idle)
+    }
+
+    /// The Apple STT status branch now maps loaded -> .ready / not-loaded -> .idle
+    /// (was hardcoded nil), parity with the loopback route. Cold reports .idle.
+    func testInProcessAppleSTTStatusSurfacesIdleStateWhenCold() async throws {
+        let client = makeClient()
+        try await client.connect()
+        _ = try await client.stt.setEngine(id: "apple_stt")
+        let status = try await client.stt.status()
+        XCTAssertEqual(status.state, .idle, "cold Apple STT should report .idle, not nil")
+        // Restore the default backend so test ordering can't strand the singleton.
+        _ = try await client.stt.setEngine(id: "parakeet")
     }
 
     /// `parseWaitQuery` recovers the `?wait` flag the in-process `route()`
