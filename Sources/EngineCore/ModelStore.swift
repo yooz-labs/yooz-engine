@@ -234,16 +234,7 @@ public actor ModelStore {
         var reclaimed: Int64 = 0
 
         if let repoDir = repoDirectoryURL(hfRepoDirName) {
-            reclaimed += directoryAllocatedSize(repoDir)
-            try fileManager.removeItem(at: repoDir)
-            // HubCache parks metadata at <hub>/.metadata/<dirName>; best-effort.
-            let metadataDir = hubCacheDirectory
-                .appendingPathComponent(".metadata")
-                .appendingPathComponent(repoDir.lastPathComponent)
-            if fileManager.fileExists(atPath: metadataDir.path) {
-                reclaimed += directoryAllocatedSize(metadataDir)
-                try? fileManager.removeItem(at: metadataDir)
-            }
+            reclaimed += try removeHubRepo(repoDir)
         }
 
         if let modelsCopy = modelsDirectoryCopyURL(modelsDirSubdir) {
@@ -254,14 +245,41 @@ public actor ModelStore {
         return reclaimed
     }
 
+    /// Remove a hub repo tree plus its sibling `.metadata/<dirName>` entry (which
+    /// HubCache parks outside the repo dir), returning bytes reclaimed. The
+    /// metadata removal is best-effort — it's tiny housekeeping, not the model.
+    private func removeHubRepo(_ repoDir: URL) throws -> Int64 {
+        var reclaimed = directoryAllocatedSize(repoDir)
+        try fileManager.removeItem(at: repoDir)
+        let metadataDir = hubCacheDirectory
+            .appendingPathComponent(".metadata")
+            .appendingPathComponent(repoDir.lastPathComponent)
+        if fileManager.fileExists(atPath: metadataDir.path) {
+            reclaimed += directoryAllocatedSize(metadataDir)
+            try? fileManager.removeItem(at: metadataDir)
+        }
+        return reclaimed
+    }
+
     // MARK: - Collapse superseded snapshots
 
     /// Delete every snapshot of `hfRepoDirName` that is **not** referenced by a
     /// `refs/*` file (the loader resolves `refs/main` -> a commit -> that
     /// snapshot), then garbage-collect blobs no surviving snapshot points at.
-    /// Returns bytes reclaimed. No-op (returns 0) when the repo is absent or no
-    /// ref exists to anchor a survivor — never deletes when it can't prove what is
-    /// live.
+    /// Returns bytes reclaimed.
+    ///
+    /// Fail-safe by construction — it returns 0 (deletes nothing) rather than risk
+    /// removing a live file when it can't prove what is live:
+    /// - No ref to anchor a survivor -> no-op.
+    /// - The ref points at a commit whose snapshot is absent or not yet fully
+    ///   materialized (an interrupted update advances `refs/main` before the new
+    ///   snapshot finishes downloading) -> no-op, so the older working snapshot is
+    ///   never collapsed out from under a half-finished update.
+    /// - A snapshot a ref points at is kept even while still downloading.
+    /// All survivor reads happen before any delete, and an unreadable ref or
+    /// unresolvable snapshot symlink **throws** (never silently exposes a blob to
+    /// GC). Blob GC is skipped entirely when a surviving snapshot uses
+    /// copy-fallback files instead of symlinks (their bytes aren't a mappable blob).
     @discardableResult
     public func collapseSnapshots(hfRepoDirName: String) throws -> Int64 {
         guard let repoDir = repoDirectoryURL(hfRepoDirName) else { return 0 }
@@ -269,31 +287,50 @@ public actor ModelStore {
         let refsDir = repoDir.appendingPathComponent("refs")
         let blobsDir = repoDir.appendingPathComponent("blobs")
 
-        let survivingCommits = referencedCommits(refsDir: refsDir)
-        // Without a ref we cannot tell which snapshot the loader will pick, so we
-        // leave every snapshot in place rather than risk deleting the live one.
-        guard !survivingCommits.isEmpty else { return 0 }
+        let referencedCommits = try referencedCommits(refsDir: refsDir)
+        guard !referencedCommits.isEmpty else { return 0 }
+
+        let present = directoryContents(snapshotsDir)
+        // At least one referenced snapshot must be fully materialized on disk
+        // (config.json + weights). Otherwise the ref is ahead of an unfinished
+        // download and collapsing would delete the only working older snapshot.
+        let hasMaterializedSurvivor = referencedCommits.contains { commit in
+            isCompleteModelDir(snapshotsDir.appendingPathComponent(commit))
+        }
+        guard hasMaterializedSurvivor else { return 0 }
+
+        // Superseded = present but unreferenced. Anything a ref points at — even a
+        // partial, still-downloading snapshot — is kept.
+        let toDelete = present.filter { !referencedCommits.contains($0.lastPathComponent) }
+        let surviving = present.filter { referencedCommits.contains($0.lastPathComponent) }
+
+        // Compute referenced blobs from the SURVIVING snapshots BEFORE deleting
+        // anything, so an unreadable snapshot / unresolvable symlink aborts the
+        // whole collapse with nothing removed.
+        var sawCopyFallback = false
+        let referencedBlobs = try referencedBlobNames(
+            in: surviving, sawCopyFallback: &sawCopyFallback
+        )
 
         var reclaimed: Int64 = 0
-
-        // 1. Drop snapshot directories for superseded commits.
-        for snapshotDir in directoryContents(snapshotsDir) {
-            let commit = snapshotDir.lastPathComponent
-            guard !survivingCommits.contains(commit) else { continue }
+        for snapshotDir in toDelete {
             reclaimed += directoryAllocatedSize(snapshotDir)
             try fileManager.removeItem(at: snapshotDir)
         }
 
-        // 2. GC blobs no surviving snapshot references.
-        let referenced = referencedBlobNames(snapshotsDir: snapshotsDir)
-        for blob in directoryContents(blobsDir) {
-            let name = blob.lastPathComponent
-            // Leave partial downloads (`<etag>.incomplete`) alone — a fetch may be
-            // mid-flight, and they are never referenced by a snapshot anyway.
-            if name.hasSuffix(".incomplete") { continue }
-            if referenced.contains(name) { continue }
-            reclaimed += fileAllocatedSize(blob)
-            try fileManager.removeItem(at: blob)
+        // GC orphan blobs only when every surviving snapshot is symlink-based; a
+        // copy-fallback snapshot's bytes live in the snapshot dir, not a mappable
+        // `blobs/<etag>`, so GC'ing against blob names could free a live blob.
+        if !sawCopyFallback {
+            for blob in directoryContents(blobsDir) {
+                let name = blob.lastPathComponent
+                // Leave partial downloads (`<etag>.incomplete`) alone — a fetch may
+                // be mid-flight, and they are never referenced by a snapshot anyway.
+                if name.hasSuffix(".incomplete") { continue }
+                if referencedBlobs.contains(name) { continue }
+                reclaimed += fileAllocatedSize(blob)
+                try fileManager.removeItem(at: blob)
+            }
         }
 
         return reclaimed
@@ -308,17 +345,25 @@ public actor ModelStore {
     /// second run finds nothing left to reclaim and returns 0.
     ///
     /// Safety: a hub copy is removed only when a *complete* higher-priority copy
-    /// exists (bundled is always complete; a `modelsDirectory` copy must carry a
-    /// `config.json`), so the resolver's chosen copy is never the one deleted.
+    /// exists — bundled (always complete) or a `modelsDirectory` copy carrying
+    /// BOTH `config.json` and weights (`isCompleteModelDir`, matching the loader's
+    /// `isModelCached` predicate) — so the resolver's chosen copy is never deleted.
     public func cleanupAll(descriptors: [ModelCacheDescriptor]) throws -> CleanupReport {
         var report = CleanupReport()
 
-        // 1. Collapse stacked snapshots across all model repos in the hub cache.
+        // 1. Collapse stacked snapshots across all model repos in the hub cache. A
+        // failure in one repo must not abort the whole pass; log and move on.
         for repoDir in directoryContents(hubCacheDirectory)
         where repoDir.lastPathComponent.hasPrefix("models--") {
             let dirName = repoDir.lastPathComponent
-            let freed = (try? collapseSnapshots(hfRepoDirName: dirName)) ?? 0
-            if freed > 0 { report.add(freed, repo: dirName) }
+            do {
+                let freed = try collapseSnapshots(hfRepoDirName: dirName)
+                if freed > 0 { report.add(freed, repo: dirName) }
+            } catch {
+                logger.warning(
+                    "cleanup: snapshot collapse failed for \(dirName, privacy: .public): \(error.localizedDescription, privacy: .public) — skipped"
+                )
+            }
         }
 
         // 2. Remove redundant duplicates the resolver would never load from.
@@ -326,11 +371,10 @@ public actor ModelStore {
             guard let repoDir = repoDirectoryURL(descriptor.hfRepoDirName) else { continue }
             let modelsCopy = modelsDirectoryCopyURL(descriptor.modelsDirSubdir)
             let higherPriorityCopyExists =
-                descriptor.isBundled || (modelsCopy.map(isUsableModelCopy) ?? false)
+                descriptor.isBundled || (modelsCopy.map(isCompleteModelDir) ?? false)
             guard higherPriorityCopyExists else { continue }
 
-            let freed = directoryAllocatedSize(repoDir)
-            try fileManager.removeItem(at: repoDir)
+            let freed = try removeHubRepo(repoDir)
             report.add(freed, repo: repoDir.lastPathComponent)
         }
 
@@ -340,55 +384,99 @@ public actor ModelStore {
     // MARK: - Path helpers
 
     private func repoDirectoryURL(_ hfRepoDirName: String?) -> URL? {
-        guard let name = hfRepoDirName, !name.isEmpty else { return nil }
-        let url = hubCacheDirectory.appendingPathComponent(name)
-        return fileManager.fileExists(atPath: url.path) ? url : nil
+        guard let name = hfRepoDirName,
+              let url = confinedURL(hubCacheDirectory, name),
+              fileManager.fileExists(atPath: url.path) else { return nil }
+        return url
     }
 
     private func modelsDirectoryCopyURL(_ subdir: String?) -> URL? {
-        guard let subdir, !subdir.isEmpty else { return nil }
-        let url = modelsDirectory.appendingPathComponent(subdir)
-        return fileManager.fileExists(atPath: url.path) ? url : nil
+        guard let subdir,
+              let url = confinedURL(modelsDirectory, subdir),
+              fileManager.fileExists(atPath: url.path) else { return nil }
+        return url
     }
 
-    /// A `modelsDirectory` copy is loadable enough to supersede the hub when it
-    /// carries a `config.json` (mirrors the engine's `isModelCached` probe).
-    private func isUsableModelCopy(_ dir: URL) -> Bool {
-        fileManager.fileExists(atPath: dir.appendingPathComponent("config.json").path)
+    /// Append `component` to `base`, returning `nil` if the resolved path would
+    /// escape `base` (path-traversal guard). The public `deleteModel` /
+    /// `collapseSnapshots` surface takes arbitrary id strings; this confines every
+    /// filesystem op to the hub / models directories even if a caller bypasses the
+    /// `hubRepoDirName(forHuggingFaceID:)` factory.
+    private func confinedURL(_ base: URL, _ component: String) -> URL? {
+        guard !component.isEmpty else { return nil }
+        let url = base.appendingPathComponent(component)
+        let basePath = base.standardizedFileURL.path
+        let prefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        guard url.standardizedFileURL.path.hasPrefix(prefix) else { return nil }
+        return url
+    }
+
+    /// Whether a model directory is COMPLETE — both `config.json` and at least one
+    /// `*.safetensors` (resolving symlinks). Matches the loader's `isModelCached` /
+    /// `firstModelDirectory` predicate, so a half-downloaded copy (config present,
+    /// weights missing) is never mistaken for a usable higher-priority copy.
+    private func isCompleteModelDir(_ dir: URL) -> Bool {
+        guard fileManager.fileExists(
+            atPath: dir.appendingPathComponent("config.json").path
+        ) else { return false }
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil
+        )) ?? []
+        return contents.contains { $0.pathExtension == "safetensors" }
     }
 
     /// Commit hashes referenced by any file under `refs/` (refs can nest, e.g.
-    /// `refs/pr/5`), each file's trimmed contents being a commit hash.
-    private func referencedCommits(refsDir: URL) -> Set<String> {
-        var commits = Set<String>()
+    /// `refs/pr/5`), each file's trimmed contents being a commit hash. Returns an
+    /// empty set when `refs/` is absent. **Throws** when `refs/` exists but can't
+    /// be enumerated or a ref file can't be read — a destructive caller must not
+    /// proceed on an incomplete survivor set.
+    private func referencedCommits(refsDir: URL) throws -> Set<String> {
+        guard fileManager.fileExists(atPath: refsDir.path) else { return [] }
         guard let enumerator = fileManager.enumerator(
             at: refsDir,
             includingPropertiesForKeys: [.isRegularFileKey]
-        ) else { return commits }
+        ) else { throw ModelStoreError.unreadableRefs(refsDir.path) }
+
+        var commits = Set<String>()
         for case let url as URL in enumerator {
             guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?
                 .isRegularFile == true else { continue }
-            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+                throw ModelStoreError.unreadableRefs(url.path)
+            }
             let commit = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if !commit.isEmpty { commits.insert(commit) }
         }
         return commits
     }
 
-    /// Blob filenames kept alive by symlinks under the surviving snapshot dirs.
-    private func referencedBlobNames(snapshotsDir: URL) -> Set<String> {
+    /// Blob filenames kept alive by symlinks under the given surviving snapshot
+    /// dirs. **Throws** if a snapshot dir can't be enumerated or a symlink can't be
+    /// resolved — failing closed so a blob is never wrongly GC'd. Sets
+    /// `sawCopyFallback` when a snapshot entry is a real file (HuggingFace
+    /// copy-fallback) instead of a symlink; the caller then skips blob GC.
+    private func referencedBlobNames(
+        in snapshotDirs: [URL], sawCopyFallback: inout Bool
+    ) throws -> Set<String> {
         var names = Set<String>()
-        guard let enumerator = fileManager.enumerator(
-            at: snapshotsDir,
-            includingPropertiesForKeys: [.isSymbolicLinkKey]
-        ) else { return names }
-        for case let url as URL in enumerator {
-            let isLink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?
-                .isSymbolicLink == true
-            guard isLink,
-                  let dest = try? fileManager.destinationOfSymbolicLink(atPath: url.path)
-            else { continue }
-            names.insert((dest as NSString).lastPathComponent)
+        for dir in snapshotDirs {
+            guard let enumerator = fileManager.enumerator(
+                at: dir,
+                includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey]
+            ) else { throw ModelStoreError.unreadableSnapshots(dir.path) }
+            for case let url as URL in enumerator {
+                let values = try? url.resourceValues(
+                    forKeys: [.isSymbolicLinkKey, .isRegularFileKey]
+                )
+                if values?.isSymbolicLink == true {
+                    guard let dest = try? fileManager.destinationOfSymbolicLink(
+                        atPath: url.path
+                    ) else { throw ModelStoreError.unresolvableSymlink(url.path) }
+                    names.insert((dest as NSString).lastPathComponent)
+                } else if values?.isRegularFile == true {
+                    sawCopyFallback = true
+                }
+            }
         }
         return names
     }
@@ -444,4 +532,15 @@ private extension ModelStore.CleanupReport {
         totalReclaimedBytes += bytes
         perRepo[repo, default: 0] += bytes
     }
+}
+
+/// Errors `ModelStore` throws to fail closed on a destructive path rather than
+/// risk deleting a live file when the cache can't be read reliably.
+public enum ModelStoreError: Error, Equatable {
+    /// `refs/` exists but couldn't be enumerated, or a ref file couldn't be read.
+    case unreadableRefs(String)
+    /// A surviving snapshot directory couldn't be enumerated.
+    case unreadableSnapshots(String)
+    /// A snapshot symlink couldn't be resolved to its blob target.
+    case unresolvableSymlink(String)
 }

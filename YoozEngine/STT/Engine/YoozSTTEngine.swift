@@ -998,12 +998,19 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         // live `refs/main` snapshot is preserved.
         if allowFetch, let hfID = language.huggingFaceID,
            let repoDir = ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: hfID) {
-            let reclaimed = (try? await ModelStore()
-                .collapseSnapshots(hfRepoDirName: repoDir)) ?? 0
-            if reclaimed > 0 {
+            do {
+                let reclaimed = try await ModelStore()
+                    .collapseSnapshots(hfRepoDirName: repoDir)
+                if reclaimed > 0 {
+                    NSLog(
+                        "YoozSTTEngine: collapsed superseded snapshots for %@: reclaimed %lld bytes",
+                        language.rawValue, reclaimed
+                    )
+                }
+            } catch {
                 NSLog(
-                    "YoozSTTEngine: collapsed superseded snapshots for %@: reclaimed %lld bytes",
-                    language.rawValue, reclaimed
+                    "YoozSTTEngine: post-fetch snapshot collapse failed for %@: %@ (non-fatal)",
+                    language.rawValue, error.localizedDescription
                 )
             }
         }

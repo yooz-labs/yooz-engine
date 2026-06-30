@@ -738,13 +738,20 @@ public final class InProcessTransport: EngineTransport {
                     message: "Cannot delete the active model '\(id)'"
                 )
             }
-            await TouchUpEngine.shared.unload(modelType)
             let descriptor = LLMModelCatalog.cacheDescriptors().first { $0.id == id }
-            let reclaimed = try await store.deleteModel(
-                hfRepoDirName: descriptor?.hfRepoDirName,
-                modelsDirSubdir: descriptor?.modelsDirSubdir
-            )
-            return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
+            do {
+                // Disk first; free resident weights only on success so a failed
+                // delete leaves the model usable rather than unloaded-but-present.
+                let reclaimed = try await store.deleteModel(
+                    hfRepoDirName: descriptor?.hfRepoDirName,
+                    modelsDirSubdir: descriptor?.modelsDirSubdir
+                )
+                await TouchUpEngine.shared.unload(modelType)
+                return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
+            } catch {
+                NSLog("InProcessTransport: DELETE model '%@' failed: %@", id, error.localizedDescription)
+                throw error
+            }
         }
 
         if id.hasPrefix("models--") {
@@ -754,8 +761,13 @@ public final class InProcessTransport: EngineTransport {
                     message: "Cannot delete the active model '\(id)'"
                 )
             }
-            let reclaimed = try await store.deleteModel(hfRepoDirName: id, modelsDirSubdir: nil)
-            return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
+            do {
+                let reclaimed = try await store.deleteModel(hfRepoDirName: id, modelsDirSubdir: nil)
+                return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
+            } catch {
+                NSLog("InProcessTransport: DELETE model '%@' failed: %@", id, error.localizedDescription)
+                throw error
+            }
         }
 
         throw YoozEngineError.serverError(
@@ -767,13 +779,18 @@ public final class InProcessTransport: EngineTransport {
     /// `POST /v1/models/cleanup` — the one-shot disk-hygiene migration.
     private func handleModelsCleanup() async throws -> Data {
         let store = ModelStore()
-        let report = try await store.cleanupAll(
-            descriptors: LLMModelCatalog.cacheDescriptors()
-        )
-        return try JSONEncoder().encode(ModelCleanupResult(
-            totalReclaimedBytes: report.totalReclaimedBytes,
-            perRepo: report.perRepo
-        ))
+        do {
+            let report = try await store.cleanupAll(
+                descriptors: LLMModelCatalog.cacheDescriptors()
+            )
+            return try JSONEncoder().encode(ModelCleanupResult(
+                totalReclaimedBytes: report.totalReclaimedBytes,
+                perRepo: report.perRepo
+            ))
+        } catch {
+            NSLog("InProcessTransport: model cleanup failed: %@", error.localizedDescription)
+            throw error
+        }
     }
 
     /// LLM rows for the inventory: cache descriptors + live picker state.

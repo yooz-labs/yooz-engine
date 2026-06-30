@@ -280,14 +280,21 @@ final class InProcessTransportTests: XCTestCase {
         let repo = home.appendingPathComponent("hub/models--Foo--Bar")
         let blobs = repo.appendingPathComponent("blobs")
         try fm.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try Data(count: 4_096).write(to: blobs.appendingPathComponent("cfg"))
         try Data(count: 16_384).write(to: blobs.appendingPathComponent("old"))
         try Data(count: 16_384).write(to: blobs.appendingPathComponent("new"))
-        for (commit, blob) in [("old111", "old"), ("new222", "new")] {
+        // Each snapshot is complete (config.json + model.safetensors) so the live
+        // one counts as a materialized survivor.
+        for (commit, weights) in [("old111", "old"), ("new222", "new")] {
             let dir = repo.appendingPathComponent("snapshots/\(commit)")
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             try fm.createSymbolicLink(
-                atPath: dir.appendingPathComponent("m").path,
-                withDestinationPath: "../../blobs/\(blob)"
+                atPath: dir.appendingPathComponent("config.json").path,
+                withDestinationPath: "../../blobs/cfg"
+            )
+            try fm.createSymbolicLink(
+                atPath: dir.appendingPathComponent("model.safetensors").path,
+                withDestinationPath: "../../blobs/\(weights)"
             )
         }
         let refs = repo.appendingPathComponent("refs")

@@ -218,11 +218,17 @@ actor MLXLLMBackend: LLMBackend {
                let repoDir = ModelCacheDescriptor.hubRepoDirName(
                    forHuggingFaceID: modelType.huggingFaceID
                ) {
-                let reclaimed = (try? await ModelStore()
-                    .collapseSnapshots(hfRepoDirName: repoDir)) ?? 0
-                if reclaimed > 0 {
-                    logger.info(
-                        "Collapsed superseded snapshots for \(self.modelType.rawValue): reclaimed \(reclaimed) bytes"
+                do {
+                    let reclaimed = try await ModelStore()
+                        .collapseSnapshots(hfRepoDirName: repoDir)
+                    if reclaimed > 0 {
+                        logger.info(
+                            "Collapsed superseded snapshots for \(self.modelType.rawValue): reclaimed \(reclaimed) bytes"
+                        )
+                    }
+                } catch {
+                    logger.debug(
+                        "Post-load snapshot collapse failed for \(self.modelType.rawValue): \(error.localizedDescription) (non-fatal)"
                     )
                 }
             }

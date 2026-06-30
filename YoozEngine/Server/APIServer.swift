@@ -1288,15 +1288,19 @@ final class APIServer: ObservableObject {
                         code: "model_active"
                     )
                 }
-                await TouchUpEngine.shared.unload(modelType)
                 let descriptor = LLMModelCatalog.cacheDescriptors().first { $0.id == id }
                 do {
+                    // Remove the disk copies first; only free resident weights once
+                    // that succeeds, so a delete failure leaves the model fully
+                    // usable (loaded + on disk) rather than unloaded-but-present.
                     let reclaimed = try await store.deleteModel(
                         hfRepoDirName: descriptor?.hfRepoDirName,
                         modelsDirSubdir: descriptor?.modelsDirSubdir
                     )
+                    await TouchUpEngine.shared.unload(modelType)
                     return try jsonResponse(DeleteModelResponse(id: id, reclaimedBytes: reclaimed))
                 } catch {
+                    logger.error("DELETE /v1/models/\(id) failed: \(error.localizedDescription)")
                     return errorResponse(
                         status: .internalServerError,
                         message: "Failed to delete '\(id)': \(error.localizedDescription)",
@@ -1319,6 +1323,7 @@ final class APIServer: ObservableObject {
                     )
                     return try jsonResponse(DeleteModelResponse(id: id, reclaimedBytes: reclaimed))
                 } catch {
+                    logger.error("DELETE /v1/models/\(id) failed: \(error.localizedDescription)")
                     return errorResponse(
                         status: .internalServerError,
                         message: "Failed to delete '\(id)': \(error.localizedDescription)",
@@ -1347,6 +1352,7 @@ final class APIServer: ObservableObject {
                     perRepo: report.perRepo
                 ))
             } catch {
+                logger.error("POST /v1/models/cleanup failed: \(error.localizedDescription)")
                 return errorResponse(
                     status: .internalServerError,
                     message: "Cleanup failed: \(error.localizedDescription)",

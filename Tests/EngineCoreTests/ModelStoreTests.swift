@@ -37,7 +37,6 @@ final class ModelStoreTests: XCTestCase {
 
     // MARK: - Fixture builder
 
-    /// Writes a blob of `byteCount` bytes into `<repo>/blobs/<name>`.
     @discardableResult
     private func writeBlob(repo: URL, name: String, byteCount: Int) throws -> URL {
         let blobs = repo.appendingPathComponent("blobs")
@@ -47,8 +46,7 @@ final class ModelStoreTests: XCTestCase {
         return url
     }
 
-    /// Creates `<repo>/snapshots/<commit>/<filename>` as a symlink to
-    /// `../../blobs/<blob>`, exactly as swift-huggingface's `HubCache` does.
+    /// `<repo>/snapshots/<commit>/<filename>` as a symlink to `../../blobs/<blob>`.
     private func linkSnapshot(
         repo: URL, commit: String, filename: String, toBlob blob: String
     ) throws {
@@ -60,6 +58,16 @@ final class ModelStoreTests: XCTestCase {
         )
     }
 
+    /// A COMPLETE snapshot — `config.json` + `model.safetensors` symlinks — as the
+    /// HF downloader leaves a finished snapshot. `ModelStore` only treats such a
+    /// snapshot as a materialized survivor.
+    private func materialize(
+        repo: URL, commit: String, configBlob: String, weightsBlob: String
+    ) throws {
+        try linkSnapshot(repo: repo, commit: commit, filename: "config.json", toBlob: configBlob)
+        try linkSnapshot(repo: repo, commit: commit, filename: "model.safetensors", toBlob: weightsBlob)
+    }
+
     private func writeRef(repo: URL, ref: String, commit: String) throws {
         let refs = repo.appendingPathComponent("refs")
         try fm.createDirectory(at: refs, withIntermediateDirectories: true)
@@ -69,6 +77,12 @@ final class ModelStoreTests: XCTestCase {
     }
 
     private func exists(_ url: URL) -> Bool { fm.fileExists(atPath: url.path) }
+    private func snapshot(_ repo: URL, _ commit: String) -> URL {
+        repo.appendingPathComponent("snapshots/\(commit)")
+    }
+    private func blob(_ repo: URL, _ name: String) -> URL {
+        repo.appendingPathComponent("blobs/\(name)")
+    }
 
     // MARK: - Naming helper
 
@@ -84,8 +98,6 @@ final class ModelStoreTests: XCTestCase {
     // MARK: - Size
 
     func testOnDiskSizeCountsBlobsOnceAndSkipsSymlinks() async throws {
-        // Two snapshots share blobA; each symlinks it. A naive recursive sum that
-        // followed symlinks would count blobA three times (blob + 2 links).
         let repo = hub.appendingPathComponent("models--Acme--Demo")
         try writeBlob(repo: repo, name: "blobA", byteCount: 8_192)
         try writeBlob(repo: repo, name: "blobB", byteCount: 16_384)
@@ -98,11 +110,8 @@ final class ModelStoreTests: XCTestCase {
         let size = await store.onDiskSize(
             hfRepoDirName: "models--Acme--Demo", modelsDirSubdir: nil
         )
-
-        // Expected = blobA + blobB + refs/main, each counted once. Recomputed
-        // independently here to pin "blobs once, symlinks skipped".
-        let expected = allocated(repo.appendingPathComponent("blobs/blobA"))
-            + allocated(repo.appendingPathComponent("blobs/blobB"))
+        let expected = allocated(blob(repo, "blobA"))
+            + allocated(blob(repo, "blobB"))
             + allocated(repo.appendingPathComponent("refs/main"))
         XCTAssertEqual(size, expected)
     }
@@ -119,7 +128,7 @@ final class ModelStoreTests: XCTestCase {
         let size = await store.onDiskSize(
             hfRepoDirName: "models--Acme--Demo", modelsDirSubdir: "demo"
         )
-        let expected = allocated(repo.appendingPathComponent("blobs/blobA"))
+        let expected = allocated(blob(repo, "blobA"))
             + allocated(copy.appendingPathComponent("config.json"))
         XCTAssertEqual(size, expected)
     }
@@ -139,25 +148,20 @@ final class ModelStoreTests: XCTestCase {
         try writeBlob(repo: repo, name: "shared", byteCount: 8_192)   // both snapshots
         try writeBlob(repo: repo, name: "old", byteCount: 16_384)     // old only -> orphan
         try writeBlob(repo: repo, name: "new", byteCount: 16_384)     // new only -> kept
-        try linkSnapshot(repo: repo, commit: "old111", filename: "config.json", toBlob: "shared")
-        try linkSnapshot(repo: repo, commit: "old111", filename: "model.bin", toBlob: "old")
-        try linkSnapshot(repo: repo, commit: "new222", filename: "config.json", toBlob: "shared")
-        try linkSnapshot(repo: repo, commit: "new222", filename: "model.bin", toBlob: "new")
+        try materialize(repo: repo, commit: "old111", configBlob: "shared", weightsBlob: "old")
+        try materialize(repo: repo, commit: "new222", configBlob: "shared", weightsBlob: "new")
         try writeRef(repo: repo, ref: "main", commit: "new222")
 
         let store = makeStore()
         let reclaimed = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
 
         XCTAssertGreaterThan(reclaimed, 0)
-        // Superseded snapshot gone, live snapshot kept.
-        XCTAssertFalse(exists(repo.appendingPathComponent("snapshots/old111")))
-        XCTAssertTrue(exists(repo.appendingPathComponent("snapshots/new222")))
-        // Orphan blob GC'd; shared + live blobs survive.
-        XCTAssertFalse(exists(repo.appendingPathComponent("blobs/old")))
-        XCTAssertTrue(exists(repo.appendingPathComponent("blobs/shared")))
-        XCTAssertTrue(exists(repo.appendingPathComponent("blobs/new")))
-        // The live snapshot's symlinks still resolve.
-        let liveConfig = repo.appendingPathComponent("snapshots/new222/config.json")
+        XCTAssertFalse(exists(snapshot(repo, "old111")))
+        XCTAssertTrue(exists(snapshot(repo, "new222")))
+        XCTAssertFalse(exists(blob(repo, "old")))
+        XCTAssertTrue(exists(blob(repo, "shared")))
+        XCTAssertTrue(exists(blob(repo, "new")))
+        let liveConfig = snapshot(repo, "new222").appendingPathComponent("config.json")
         XCTAssertEqual(try Data(contentsOf: liveConfig).count, 8_192)
     }
 
@@ -166,44 +170,109 @@ final class ModelStoreTests: XCTestCase {
         try writeBlob(repo: repo, name: "shared", byteCount: 8_192)
         try writeBlob(repo: repo, name: "old", byteCount: 16_384)
         try writeBlob(repo: repo, name: "new", byteCount: 16_384)
-        try linkSnapshot(repo: repo, commit: "old111", filename: "m", toBlob: "old")
-        try linkSnapshot(repo: repo, commit: "new222", filename: "m", toBlob: "new")
-        try linkSnapshot(repo: repo, commit: "new222", filename: "c", toBlob: "shared")
+        try materialize(repo: repo, commit: "old111", configBlob: "shared", weightsBlob: "old")
+        try materialize(repo: repo, commit: "new222", configBlob: "shared", weightsBlob: "new")
         try writeRef(repo: repo, ref: "main", commit: "new222")
 
         let store = makeStore()
-        _ = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
+        let first = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
+        XCTAssertGreaterThan(first, 0)
         let second = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
         XCTAssertEqual(second, 0)
     }
 
     func testCollapseWithoutRefIsNoOp() async throws {
-        // No refs file -> we can't prove which snapshot is live -> keep everything.
         let repo = hub.appendingPathComponent("models--Acme--Demo")
         try writeBlob(repo: repo, name: "a", byteCount: 8_192)
         try writeBlob(repo: repo, name: "b", byteCount: 8_192)
-        try linkSnapshot(repo: repo, commit: "c1", filename: "m", toBlob: "a")
-        try linkSnapshot(repo: repo, commit: "c2", filename: "m", toBlob: "b")
+        try materialize(repo: repo, commit: "c1", configBlob: "a", weightsBlob: "a")
+        try materialize(repo: repo, commit: "c2", configBlob: "b", weightsBlob: "b")
 
         let store = makeStore()
         let reclaimed = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
         XCTAssertEqual(reclaimed, 0)
-        XCTAssertTrue(exists(repo.appendingPathComponent("snapshots/c1")))
-        XCTAssertTrue(exists(repo.appendingPathComponent("snapshots/c2")))
+        XCTAssertTrue(exists(snapshot(repo, "c1")))
+        XCTAssertTrue(exists(snapshot(repo, "c2")))
     }
 
-    func testCollapsePreservesIncompleteBlobs() async throws {
+    func testCollapsePreservesIncompleteBlobsAndGCsDeadBlobs() async throws {
         let repo = hub.appendingPathComponent("models--Acme--Demo")
+        try writeBlob(repo: repo, name: "cfg", byteCount: 4_096)
         try writeBlob(repo: repo, name: "live", byteCount: 8_192)
         try writeBlob(repo: repo, name: "partial.incomplete", byteCount: 4_096)
-        try linkSnapshot(repo: repo, commit: "c1", filename: "m", toBlob: "live")
+        try writeBlob(repo: repo, name: "dead", byteCount: 8_192)  // orphan
+        try materialize(repo: repo, commit: "c1", configBlob: "cfg", weightsBlob: "live")
         try writeRef(repo: repo, ref: "main", commit: "c1")
 
         let store = makeStore()
         _ = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
-        // In-flight partial download is never reaped.
-        XCTAssertTrue(exists(repo.appendingPathComponent("blobs/partial.incomplete")))
-        XCTAssertTrue(exists(repo.appendingPathComponent("blobs/live")))
+        // In-flight partial never reaped; live blobs kept; dead orphan GC'd.
+        XCTAssertTrue(exists(blob(repo, "partial.incomplete")))
+        XCTAssertTrue(exists(blob(repo, "cfg")))
+        XCTAssertTrue(exists(blob(repo, "live")))
+        XCTAssertFalse(exists(blob(repo, "dead")))
+    }
+
+    /// Data-loss guard: an interrupted update advances `refs/main` to a commit
+    /// whose snapshot hasn't been created yet. Collapsing must NOT delete the only
+    /// working older snapshot.
+    func testCollapseKeepsOldSnapshotWhenRefPointsToAbsentCommit() async throws {
+        let repo = hub.appendingPathComponent("models--Acme--Demo")
+        try writeBlob(repo: repo, name: "cfg", byteCount: 4_096)
+        try writeBlob(repo: repo, name: "weights", byteCount: 8_192)
+        try materialize(repo: repo, commit: "v1", configBlob: "cfg", weightsBlob: "weights")
+        try writeRef(repo: repo, ref: "main", commit: "v2-not-downloaded-yet")
+
+        let store = makeStore()
+        let reclaimed = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
+        XCTAssertEqual(reclaimed, 0)
+        XCTAssertTrue(exists(snapshot(repo, "v1")))
+        XCTAssertTrue(exists(blob(repo, "cfg")))
+        XCTAssertTrue(exists(blob(repo, "weights")))
+    }
+
+    /// Data-loss guard: `refs/main` points at a snapshot dir that exists but is
+    /// only half-downloaded (no `config.json`). Collapse must no-op rather than
+    /// clobber the old working snapshot.
+    func testCollapseKeepsEverythingWhenReferencedSnapshotIsPartial() async throws {
+        let repo = hub.appendingPathComponent("models--Acme--Demo")
+        try writeBlob(repo: repo, name: "cfg", byteCount: 4_096)
+        try writeBlob(repo: repo, name: "weights", byteCount: 8_192)
+        try writeBlob(repo: repo, name: "partialW", byteCount: 8_192)
+        try materialize(repo: repo, commit: "v1", configBlob: "cfg", weightsBlob: "weights")
+        // v2 present but incomplete: weights only, no config.json.
+        try linkSnapshot(repo: repo, commit: "v2", filename: "model.safetensors", toBlob: "partialW")
+        try writeRef(repo: repo, ref: "main", commit: "v2")
+
+        let store = makeStore()
+        let reclaimed = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
+        XCTAssertEqual(reclaimed, 0)
+        XCTAssertTrue(exists(snapshot(repo, "v1")))
+        XCTAssertTrue(exists(snapshot(repo, "v2")))
+        XCTAssertTrue(exists(blob(repo, "weights")))
+        XCTAssertTrue(exists(blob(repo, "partialW")))
+    }
+
+    /// When a surviving snapshot uses HF copy-fallback (real files, not symlinks),
+    /// blob GC is skipped — a copy's bytes aren't a mappable `blobs/<etag>`, so
+    /// GC'ing against blob names could free a live blob.
+    func testCollapseSkipsBlobGCForCopyFallbackSnapshot() async throws {
+        let repo = hub.appendingPathComponent("models--Acme--Demo")
+        let blobs = repo.appendingPathComponent("blobs")
+        try fm.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try Data(count: 8_192).write(to: blobs.appendingPathComponent("dead"))
+        // c1 as real-file copies (no symlinks).
+        let c1 = snapshot(repo, "c1")
+        try fm.createDirectory(at: c1, withIntermediateDirectories: true)
+        try Data(count: 4_096).write(to: c1.appendingPathComponent("config.json"))
+        try Data(count: 8_192).write(to: c1.appendingPathComponent("model.safetensors"))
+        try writeRef(repo: repo, ref: "main", commit: "c1")
+
+        let store = makeStore()
+        _ = try await store.collapseSnapshots(hfRepoDirName: "models--Acme--Demo")
+        // GC skipped: the orphan blob survives rather than risk a live blob.
+        XCTAssertTrue(exists(blob(repo, "dead")))
+        XCTAssertTrue(exists(c1))
     }
 
     // MARK: - Delete
@@ -211,7 +280,7 @@ final class ModelStoreTests: XCTestCase {
     func testDeleteModelRemovesHubAndModelsDirCopies() async throws {
         let repo = hub.appendingPathComponent("models--Acme--Demo")
         try writeBlob(repo: repo, name: "blobA", byteCount: 32_768)
-        try linkSnapshot(repo: repo, commit: "c1", filename: "m", toBlob: "blobA")
+        try materialize(repo: repo, commit: "c1", configBlob: "blobA", weightsBlob: "blobA")
         try writeRef(repo: repo, ref: "main", commit: "c1")
         let copy = modelsDir.appendingPathComponent("demo")
         try fm.createDirectory(at: copy, withIntermediateDirectories: true)
@@ -227,6 +296,21 @@ final class ModelStoreTests: XCTestCase {
         XCTAssertFalse(exists(copy))
     }
 
+    /// Path-traversal guard: a crafted id that resolves outside the hub directory
+    /// is a no-op, never touching the sibling directory.
+    func testDeleteModelRejectsPathTraversalId() async throws {
+        let secret = root.appendingPathComponent("secret")
+        try fm.createDirectory(at: secret, withIntermediateDirectories: true)
+        try Data(count: 1_024).write(to: secret.appendingPathComponent("keep.txt"))
+
+        let store = makeStore()
+        let reclaimed = try await store.deleteModel(
+            hfRepoDirName: "../secret", modelsDirSubdir: nil
+        )
+        XCTAssertEqual(reclaimed, 0)
+        XCTAssertTrue(exists(secret), "traversal id must not escape the hub directory")
+    }
+
     // MARK: - Cleanup migration
 
     func testCleanupCollapsesAllReposAndDedupesDuplicates() async throws {
@@ -235,30 +319,30 @@ final class ModelStoreTests: XCTestCase {
         try writeBlob(repo: stacked, name: "shared", byteCount: 8_192)
         try writeBlob(repo: stacked, name: "old", byteCount: 16_384)
         try writeBlob(repo: stacked, name: "new", byteCount: 16_384)
-        try linkSnapshot(repo: stacked, commit: "o", filename: "m", toBlob: "old")
-        try linkSnapshot(repo: stacked, commit: "n", filename: "m", toBlob: "new")
-        try linkSnapshot(repo: stacked, commit: "n", filename: "c", toBlob: "shared")
+        try materialize(repo: stacked, commit: "o", configBlob: "shared", weightsBlob: "old")
+        try materialize(repo: stacked, commit: "n", configBlob: "shared", weightsBlob: "new")
         try writeRef(repo: stacked, ref: "main", commit: "n")
 
         // Repo 2: bundled duplicate -> whole hub repo removed.
         let bundled = hub.appendingPathComponent("models--Acme--Bundled")
         try writeBlob(repo: bundled, name: "b", byteCount: 32_768)
-        try linkSnapshot(repo: bundled, commit: "c1", filename: "m", toBlob: "b")
+        try materialize(repo: bundled, commit: "c1", configBlob: "b", weightsBlob: "b")
         try writeRef(repo: bundled, ref: "main", commit: "c1")
 
-        // Repo 3: modelsDirectory copy (complete) -> hub repo removed.
+        // Repo 3: COMPLETE modelsDirectory copy -> hub repo removed.
         let mirrored = hub.appendingPathComponent("models--Acme--Mirrored")
         try writeBlob(repo: mirrored, name: "b", byteCount: 32_768)
-        try linkSnapshot(repo: mirrored, commit: "c1", filename: "m", toBlob: "b")
+        try materialize(repo: mirrored, commit: "c1", configBlob: "b", weightsBlob: "b")
         try writeRef(repo: mirrored, ref: "main", commit: "c1")
         let mirroredCopy = modelsDir.appendingPathComponent("mirrored")
         try fm.createDirectory(at: mirroredCopy, withIntermediateDirectories: true)
         try Data(count: 4_096).write(to: mirroredCopy.appendingPathComponent("config.json"))
+        try Data(count: 4_096).write(to: mirroredCopy.appendingPathComponent("model.safetensors"))
 
         // Repo 4: no higher-priority copy -> kept.
         let kept = hub.appendingPathComponent("models--Acme--Kept")
         try writeBlob(repo: kept, name: "b", byteCount: 32_768)
-        try linkSnapshot(repo: kept, commit: "c1", filename: "m", toBlob: "b")
+        try materialize(repo: kept, commit: "c1", configBlob: "b", weightsBlob: "b")
         try writeRef(repo: kept, ref: "main", commit: "c1")
 
         let descriptors = [
@@ -283,27 +367,51 @@ final class ModelStoreTests: XCTestCase {
         let report = try await store.cleanupAll(descriptors: descriptors)
 
         XCTAssertGreaterThan(report.totalReclaimedBytes, 0)
-        // Stacked collapsed: orphan gone, repo retained.
-        XCTAssertFalse(exists(stacked.appendingPathComponent("blobs/old")))
-        XCTAssertTrue(exists(stacked.appendingPathComponent("blobs/new")))
-        // Duplicates removed.
+        XCTAssertFalse(exists(blob(stacked, "old")))
+        XCTAssertTrue(exists(blob(stacked, "new")))
         XCTAssertFalse(exists(bundled))
         XCTAssertFalse(exists(mirrored))
-        // No-higher-priority repo kept.
         XCTAssertTrue(exists(kept))
+    }
+
+    /// Data-loss guard: a half-downloaded modelsDirectory copy (config but no
+    /// weights) is NOT a usable higher-priority copy, so the complete hub copy is
+    /// kept.
+    func testCleanupKeepsHubWhenModelsDirCopyIncomplete() async throws {
+        let repo = hub.appendingPathComponent("models--Acme--Q")
+        try writeBlob(repo: repo, name: "b", byteCount: 32_768)
+        try materialize(repo: repo, commit: "c1", configBlob: "b", weightsBlob: "b")
+        try writeRef(repo: repo, ref: "main", commit: "c1")
+        // Incomplete copy: config.json present, weights missing.
+        let copy = modelsDir.appendingPathComponent("q")
+        try fm.createDirectory(at: copy, withIntermediateDirectories: true)
+        try Data(count: 4_096).write(to: copy.appendingPathComponent("config.json"))
+
+        let descriptors = [
+            ModelCacheDescriptor(
+                id: "q", module: "llm",
+                hfRepoDirName: "models--Acme--Q",
+                modelsDirSubdir: "q", isBundled: false
+            )
+        ]
+
+        let store = makeStore()
+        _ = try await store.cleanupAll(descriptors: descriptors)
+        XCTAssertTrue(exists(repo), "incomplete models-dir copy must not trigger hub deletion")
     }
 
     func testCleanupIsIdempotent() async throws {
         let stacked = hub.appendingPathComponent("models--Acme--Stacked")
+        try writeBlob(repo: stacked, name: "shared", byteCount: 8_192)
         try writeBlob(repo: stacked, name: "old", byteCount: 16_384)
         try writeBlob(repo: stacked, name: "new", byteCount: 16_384)
-        try linkSnapshot(repo: stacked, commit: "o", filename: "m", toBlob: "old")
-        try linkSnapshot(repo: stacked, commit: "n", filename: "m", toBlob: "new")
+        try materialize(repo: stacked, commit: "o", configBlob: "shared", weightsBlob: "old")
+        try materialize(repo: stacked, commit: "n", configBlob: "shared", weightsBlob: "new")
         try writeRef(repo: stacked, ref: "main", commit: "n")
 
         let bundled = hub.appendingPathComponent("models--Acme--Bundled")
         try writeBlob(repo: bundled, name: "b", byteCount: 32_768)
-        try linkSnapshot(repo: bundled, commit: "c1", filename: "m", toBlob: "b")
+        try materialize(repo: bundled, commit: "c1", configBlob: "b", weightsBlob: "b")
         try writeRef(repo: bundled, ref: "main", commit: "c1")
 
         let descriptors = [
@@ -324,8 +432,6 @@ final class ModelStoreTests: XCTestCase {
 
     // MARK: - Independent size oracle
 
-    /// Allocated size of one regular file, recomputed independently of
-    /// `ModelStore` so size assertions don't just echo the implementation.
     private func allocated(_ url: URL) -> Int64 {
         let values = try? url.resourceValues(forKeys: [
             .totalFileAllocatedSizeKey, .fileSizeKey,
