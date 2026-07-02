@@ -93,6 +93,18 @@ otherwise prompts to trust on first run. The Xcode UI handles this prompt; CLI
 and CI builds need the flag. CI sets it automatically (see
 `.github/workflows/ci.yml`).
 
+**Gotcha (engine#227):** building `YoozEngineXPCHarness` (which resolves
+`STTModule` via the local SPM package graph — Package.swift excludes
+`Models/Qwen3ASR` from that target) and one of the native app variants
+(`YoozEngine`/`YoozEngineWhisper`/`YoozEngineLite`, whose xcodegen `STTModule`
+framework target includes `Models/Qwen3ASR` with no excludes) into the SAME
+`-derivedDataPath` can produce a stale-module-cache error on the SECOND build
+— `cannot find type 'Qwen3ASRError' in scope` in `APIServer.swift` — because
+two genuinely different `STTModule` module interfaces collide under one
+DerivedData directory. Not a source bug: each scheme builds clean on its own
+DerivedData. Use separate `-derivedDataPath` values (or `rm -rf build`
+between the two) if you build both in one session.
+
 ### Running tests
 
 ```bash
@@ -156,7 +168,7 @@ The engine modules are portable — epic #192 (closed 2026-06-23) made this conc
 |---|---|---|---|
 | **Loopback** (`HTTPTransport`) | HTTP/WebSocket over `127.0.0.1:<port>` | Default, fully shipping | super-yooz host (planned — super-yooz has no code against the substrate yet as of 2026-07) + local dev; the standalone `Yooz Engine.app` helper `.app` shape (`Contents/Helpers/`) fails App Store validation (ITMS-90296) so it is **not** the App Store packaging |
 | **In-process** (`InProcessTransport`, product `YoozEngineInProcess`) | Direct calls into the linked module actors, no socket | Shipping — Yooz Whisper links this today (see `yooz-whisper` `project.yml`, engine pinned by revision, currently 0.7.5) | App Store standalone apps |
-| **XPC** (`XPCTransport` + `XPCServiceHandler`) | `NSXPCConnection` to a sandboxed XPC service, code-signing pinned | Code-complete and unit-tested (epic #192 Phase 3, PRs #203/#205) but **no `.xpc` service target is packaged anywhere** — no app builds `Contents/XPCServices/` yet. Tracked by #227 | Not shipping yet |
+| **XPC** (`XPCTransport` + `XPCServiceHandler`) | `NSXPCConnection` to a sandboxed XPC service, code-signing pinned | Packaged (#227): `project.yml`'s `YoozEngineXPC` target builds `Contents/XPCServices/YoozEngineXPC.xpc` (Whisper module set via `YoozEngineInProcess`, entitlements per `docs/engine-app-packaging.md`, app-group weights wiring via `AppGroupWeightsLocation`); `YoozEngineXPCHarness` embeds it and round-trips health + streaming STT. See `docs/CONSUMER_INTEGRATION.md` "XPC service embed recipe" for the consumer-side embed pattern | Reference packaging only — no shipping app has adopted it yet (Whisper's migration is a follow-up, whisper#267) |
 
 One known gap in `InProcessTransport` (a transport-routing gap, not a module gap — the underlying actors work fine over loopback):
 
