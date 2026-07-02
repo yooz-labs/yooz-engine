@@ -32,8 +32,8 @@
 // Recognition authorization already granted it fails fast with a typed
 // error instead of downloading anything or hanging on a permission prompt
 // (`AppleSTTEngine.start` only reads `SFSpeechRecognizer.authorizationStatus`,
-// it never calls `requestAuthorization` itself) — see the "Live round-trip"
-// note in docs/CONSUMER_INTEGRATION.md for what a passing run looks like
+// it never calls `requestAuthorization` itself) — see "Verifying the round
+// trip" in docs/CONSUMER_INTEGRATION.md for what a passing run looks like
 // with permission granted vs. not.
 
 import Foundation
@@ -64,12 +64,19 @@ struct HarnessMain {
             let result = try await stream.receive()
             stream.close()
             log("STREAM_OK result=\(String(describing: result))")
-        } catch {
+        } catch let error as YoozEngineError {
             // A typed engine error still proves the round trip: the request
             // crossed the XPC wire, the service dispatched it, and a
             // structured failure came back through `XPCErrorBridge` rather
             // than a hang or a raw connection-level error.
             log("STREAM_TYPED_ERROR \(error)")
+        } catch {
+            // Anything that ISN'T a `YoozEngineError` (a raw connection
+            // error `XPCErrorBridge` failed to bridge, a decoding crash,
+            // etc.) is a genuine packaging/wiring problem, not proof the
+            // round trip works — fail loudly instead of reporting success.
+            log("STREAM_UNEXPECTED_ERROR \(error)")
+            exit(1)
         }
 
         log("HARNESS_DONE")

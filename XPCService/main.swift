@@ -15,9 +15,10 @@ import YoozEngineInProcess
 // Forwards every request to `InProcessTransport`, exactly like a standalone
 // app's in-process build: there is no third route table. The service is the
 // SAME dispatch surface as `YoozEngineInProcess`, just reached over
-// `NSXPCConnection` instead of a direct call, so this file stays a few lines
-// on purpose (see `XPCServiceHandler.swift`'s doc comment, which this
-// mirrors verbatim).
+// `NSXPCConnection` instead of a direct call, so the listener setup below
+// stays a few lines on purpose — it mirrors the delegate/listener wiring in
+// `XPCServiceHandler.swift`'s doc comment verbatim; the app-group redirect
+// step ahead of it is this file's one addition beyond that reference shape.
 
 // Redirect the HF weights cache into the shared app-group container
 // (docs/engine-app-packaging.md "Weights") BEFORE any module touches the HF
