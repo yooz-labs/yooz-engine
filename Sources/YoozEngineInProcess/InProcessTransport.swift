@@ -482,7 +482,8 @@ public final class InProcessTransport: EngineTransport {
         let text = try await TouchUpEngine.shared.generate(
             prompt: request.prompt,
             systemPrompt: request.systemPrompt ?? "",
-            modelType: modelType
+            modelType: modelType,
+            workloadClass: (request.workloadClass.flatMap(MLXWorkloadClass.init(rawValue:))) ?? .background
         )
         let response = SDKLLMGenerateResponse(
             text: text,
@@ -718,7 +719,9 @@ public final class InProcessTransport: EngineTransport {
         // in-process cleanup silently passed text through. Each backend now
         // lazy-loads on first use (mirrors the STT lazy-load).
         let result = await TouchUpEngine.shared.processWithActiveModel(
-            text: request.text, mode: engineMode
+            text: request.text,
+            mode: engineMode,
+            workloadClass: (request.workloadClass.flatMap(MLXWorkloadClass.init(rawValue:))) ?? .background
         )
         let response = SDKTouchUpResponse(
             result: result.text,
@@ -942,6 +945,11 @@ private struct LLMBody: Decodable {
     let prompt: String
     let model: String?
     let systemPrompt: String?
+    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). Kept as
+    /// a plain `String?` here (rather than decoding the enum directly) so an
+    /// unrecognized future case degrades to the `.background` default
+    /// instead of failing the whole request decode.
+    let workloadClass: String?
 }
 
 private struct SetBackendBody: Decodable {
@@ -957,6 +965,9 @@ private struct TouchUpBody: Decodable {
     let text: String
     let mode: String
     let language: String?
+    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). See
+    /// `LLMBody.workloadClass` for why this stays a plain `String?`.
+    let workloadClass: String?
 }
 
 private struct SetModelBody: Decodable {

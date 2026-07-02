@@ -1,4 +1,5 @@
 import AppleSTTModule
+import EngineCore
 import Foundation
 import STTModule
 import YoozEngineClient
@@ -36,6 +37,15 @@ final class InProcessSTTStreamSession: STTStreamSession, @unchecked Sendable {
 
     init(backend: Backend) {
         self.backend = backend
+        // GPU admission (engine#228): an in-process streaming STT session is
+        // just as latency-sensitive as the loopback WS path — signal
+        // interactive load so a concurrently running background MLX
+        // submission (TouchUp/LLM) queues or yields instead of contending
+        // for the GPU. `init` is synchronous; the signal is best-effort
+        // (a fire-and-forget Task) and is cleared exactly once, paired in
+        // `finalizeAndFinish()`, which `close()` guarantees runs at most
+        // once per session via `closeTriggered`.
+        Task { await MLXAdmissionGate.shared.beginInteractive() }
     }
 
     func sendAudio(_ samples: [Float]) async throws {
@@ -174,6 +184,10 @@ final class InProcessSTTStreamSession: STTStreamSession, @unchecked Sendable {
     }
 
     private func finalizeAndFinish() async {
+        // Pairs the `beginInteractive()` fired from `init`. `close()` only
+        // ever schedules one `finalizeAndFinish()` Task per session
+        // (guarded by `closeTriggered`), so this fires exactly once.
+        defer { Task { await MLXAdmissionGate.shared.endInteractive() } }
         do {
             let result: StreamingSTTResult
             switch backend {
