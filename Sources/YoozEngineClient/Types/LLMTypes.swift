@@ -4,15 +4,21 @@ public struct LLMGenerateRequest: Codable, Sendable {
     public let prompt: String
     public let model: String?
     public let systemPrompt: String?
+    /// Optional GPU-admission override (engine#228). Nil (the default)
+    /// lets the engine classify this call as `.background` — see
+    /// `GPUWorkloadClass`.
+    public let workloadClass: GPUWorkloadClass?
 
     public init(
         prompt: String,
         model: String? = nil,
-        systemPrompt: String? = nil
+        systemPrompt: String? = nil,
+        workloadClass: GPUWorkloadClass? = nil
     ) {
         self.prompt = prompt
         self.model = model
         self.systemPrompt = systemPrompt
+        self.workloadClass = workloadClass
     }
 }
 

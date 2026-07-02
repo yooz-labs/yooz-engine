@@ -3,6 +3,7 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 import os.log
 
@@ -176,13 +177,19 @@ public enum TouchUpProcessor {
     ///   - lightModel: Fast model for proofreading (Yooz-Light)
     ///   - qualityModel: Quality model for validation (Yooz-Quality)
     ///   - proofreadPrompt: System prompt for proofreading (allows mode-specific selection)
+    ///   - workloadClass: GPU admission class (engine#228). Defaults to
+    ///     `.background` — TouchUp generation is throughput work per the
+    ///     issue's classification, so it queues/yields behind a
+    ///     concurrently-active interactive workload (a live streaming STT
+    ///     session) rather than contending for the GPU.
     /// - Returns: Processed result with final text and metadata
     static func process(
         text: String,
         replacements: [Replacement],
         lightModel: any LLMBackend,
         qualityModel: any LLMBackend,
-        proofreadPrompt: String = TouchUpPrompts.proofread
+        proofreadPrompt: String = TouchUpPrompts.proofread,
+        workloadClass: MLXWorkloadClass = .background
     ) async -> ProcessResult {
         let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -200,7 +207,8 @@ public enum TouchUpProcessor {
             do {
                 let response = try await lightModel.generate(
                     prompt: processedText,
-                    systemPrompt: proofreadPrompt
+                    systemPrompt: proofreadPrompt,
+                    workloadClass: workloadClass
                 )
 
                 let (resultText, success) = parseProofreadResponse(response, fallback: processedText)
@@ -214,6 +222,21 @@ public enum TouchUpProcessor {
                     modelUsed: .light,
                     latencyMs: latencyMs,
                     fallbackReason: nil
+                )
+            } catch is CancellationError {
+                // Cancelled while queued at the GPU admission gate or
+                // mid-generation (engine#228) — the caller went away, so
+                // nobody consumes this result. Return the regex-processed
+                // text with a truthful reason instead of logging a phantom
+                // "model failed" error that would pollute failure triage.
+                logger.debug("Light model generation cancelled")
+                let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                return ProcessResult(
+                    text: processedText,
+                    keepDecisions: [],
+                    modelUsed: .fallbackRegex,
+                    latencyMs: latencyMs,
+                    fallbackReason: "Generation cancelled"
                 )
             } catch {
                 logger.error("Light model failed: \(error.localizedDescription)")
@@ -236,7 +259,8 @@ public enum TouchUpProcessor {
             do {
                 let response = try await qualityModel.generate(
                     prompt: prompt,
-                    systemPrompt: TouchUpPrompts.validateAndProofread
+                    systemPrompt: TouchUpPrompts.validateAndProofread,
+                    workloadClass: workloadClass
                 )
 
                 let (resultText, keepDecisions, _) = parseValidateResponse(
@@ -269,6 +293,18 @@ public enum TouchUpProcessor {
                     modelUsed: .quality,
                     latencyMs: latencyMs,
                     fallbackReason: nil
+                )
+            } catch is CancellationError {
+                // See the light-path twin above: a cancelled request is not
+                // a model fault; keep failure triage clean.
+                logger.debug("Quality model generation cancelled")
+                let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                return ProcessResult(
+                    text: processedText,
+                    keepDecisions: replacements.map { _ in true },
+                    modelUsed: .fallbackRegex,
+                    latencyMs: latencyMs,
+                    fallbackReason: "Generation cancelled"
                 )
             } catch {
                 logger.error("Quality model failed: \(error.localizedDescription)")

@@ -482,7 +482,8 @@ public final class InProcessTransport: EngineTransport {
         let text = try await TouchUpEngine.shared.generate(
             prompt: request.prompt,
             systemPrompt: request.systemPrompt ?? "",
-            modelType: modelType
+            modelType: modelType,
+            workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
         )
         let response = SDKLLMGenerateResponse(
             text: text,
@@ -698,6 +699,29 @@ public final class InProcessTransport: EngineTransport {
         return try JSONEncoder().encode(await llmModelInfo(modelType))
     }
 
+    /// Resolve the optional GPU-admission class from its raw wire string
+    /// (engine#228). Nil/omitted means today's default (`.background`); an
+    /// unrecognized value is a hard 400 — parity with the loopback server
+    /// (whose typed `Decodable` enum rejects unknown values as
+    /// `invalid_request`) and with this transport's own mode handling
+    /// ("an unknown mode is a hard error"): a declared scheduling class is
+    /// explicit caller intent, and silently downgrading a mistyped
+    /// `.interactive` to `.background` would make the request queue behind
+    /// other work with no trace of why.
+    private static func resolveWorkloadClass(
+        _ raw: String?
+    ) throws -> MLXWorkloadClass {
+        guard let raw, !raw.isEmpty else { return .background }
+        guard let resolved = MLXWorkloadClass(rawValue: raw) else {
+            throw YoozEngineError.serverError(
+                statusCode: 400,
+                code: "invalid_request",
+                message: "Unknown workloadClass '\(raw)'"
+            )
+        }
+        return resolved
+    }
+
     private func handleTouchUp(_ body: Data) async throws -> Data {
         let request = try JSONDecoder().decode(TouchUpBody.self, from: body)
         // The requested mode is explicit caller intent (off/light/standard/full),
@@ -718,7 +742,9 @@ public final class InProcessTransport: EngineTransport {
         // in-process cleanup silently passed text through. Each backend now
         // lazy-loads on first use (mirrors the STT lazy-load).
         let result = await TouchUpEngine.shared.processWithActiveModel(
-            text: request.text, mode: engineMode
+            text: request.text,
+            mode: engineMode,
+            workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
         )
         let response = SDKTouchUpResponse(
             result: result.text,
@@ -942,6 +968,11 @@ private struct LLMBody: Decodable {
     let prompt: String
     let model: String?
     let systemPrompt: String?
+    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). Kept as
+    /// a plain `String?` at the decode layer; `resolveWorkloadClass` maps
+    /// nil/empty to `.background` and rejects unknown values with a 400
+    /// (see its doc for the parity rationale).
+    let workloadClass: String?
 }
 
 private struct SetBackendBody: Decodable {
@@ -957,6 +988,9 @@ private struct TouchUpBody: Decodable {
     let text: String
     let mode: String
     let language: String?
+    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). See
+    /// `LLMBody.workloadClass` — same decode/resolve split.
+    let workloadClass: String?
 }
 
 private struct SetModelBody: Decodable {

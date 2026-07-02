@@ -440,11 +440,16 @@ public actor TouchUpEngine {
     ///   - prompt: The user prompt
     ///   - systemPrompt: System prompt for the model
     ///   - modelType: Which model to use (defaults to light)
+    ///   - workloadClass: GPU admission class (engine#228). Defaults to
+    ///     `.background` — matches the issue's classification of raw
+    ///     `/v1/llm/generate` calls as throughput work. Callers with a
+    ///     genuinely latency-sensitive one-off generation can override.
     /// - Returns: Generated text
     public func generate(
         prompt: String,
         systemPrompt: String,
-        modelType: LLMModelType = .yoozLight
+        modelType: LLMModelType = .yoozLight,
+        workloadClass: MLXWorkloadClass = .background
     ) async throws -> String {
         let model: MLXLLMBackend
 
@@ -469,7 +474,9 @@ public actor TouchUpEngine {
             model = quality
         }
 
-        return try await model.generate(prompt: prompt, systemPrompt: systemPrompt)
+        return try await model.generate(
+            prompt: prompt, systemPrompt: systemPrompt, workloadClass: workloadClass
+        )
     }
 
     /// Generate text using Apple Intelligence (Foundation Models).
@@ -497,11 +504,15 @@ public actor TouchUpEngine {
     ///   - text: Transcribed text (with replacements already applied)
     ///   - mode: Processing mode controlling prompt and model selection
     ///   - replacements: List of (original, replacement) tuples to validate
+    ///   - workloadClass: GPU admission class (engine#228). Defaults to
+    ///     `.background` — TouchUp generation is throughput work per the
+    ///     issue's classification.
     /// - Returns: ProcessResult with cleaned text and metadata
     public func process(
         text: String,
         mode: TouchUpMode,
-        replacements: [(original: String, replacement: String)] = []
+        replacements: [(original: String, replacement: String)] = [],
+        workloadClass: MLXWorkloadClass = .background
     ) async -> TouchUpProcessor.ProcessResult {
         let replacementStructs = replacements.map {
             TouchUpProcessor.Replacement(original: $0.original, replacement: $0.replacement)
@@ -564,7 +575,8 @@ public actor TouchUpEngine {
                 replacements: [],
                 lightModel: light,
                 qualityModel: light,
-                proofreadPrompt: proofreadPrompt
+                proofreadPrompt: proofreadPrompt,
+                workloadClass: workloadClass
             )
             // If quality was needed but failed to load, report degraded service
             if !replacements.isEmpty, let loadError = qualityLoadError {
@@ -583,7 +595,8 @@ public actor TouchUpEngine {
                 replacements: replacementStructs,
                 lightModel: light,
                 qualityModel: quality,
-                proofreadPrompt: proofreadPrompt
+                proofreadPrompt: proofreadPrompt,
+                workloadClass: workloadClass
             )
         } else {
             // Should not reach here since qualityAvailable was true,
@@ -593,7 +606,8 @@ public actor TouchUpEngine {
                 replacements: [],
                 lightModel: light,
                 qualityModel: light,
-                proofreadPrompt: proofreadPrompt
+                proofreadPrompt: proofreadPrompt,
+                workloadClass: workloadClass
             )
         }
     }
@@ -901,13 +915,16 @@ public actor TouchUpEngine {
     public func processWithActiveModel(
         text: String,
         mode: TouchUpMode,
-        replacements: [(original: String, replacement: String)] = []
+        replacements: [(original: String, replacement: String)] = [],
+        workloadClass: MLXWorkloadClass = .background
     ) async -> TouchUpProcessor.ProcessResult {
         switch activeModel {
         case .foundationModels:
             return await processWithFoundationModels(text: text, mode: mode)
         case .yoozLight:
-            return await process(text: text, mode: mode, replacements: replacements)
+            return await process(
+                text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+            )
         case .yoozQuality:
             // Force the quality backend on both routing slots so the
             // user's pick is honored even when no replacements are
@@ -919,10 +936,14 @@ public actor TouchUpEngine {
                 // Quality load failed — fall back to the legacy MLX
                 // path. The fallback uses the light model and
                 // surfaces the load failure as a warning string.
-                return await process(text: text, mode: mode, replacements: replacements)
+                return await process(
+                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                )
             }
             guard let quality = qualityModel, await quality.isLoaded else {
-                return await process(text: text, mode: mode, replacements: replacements)
+                return await process(
+                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                )
             }
             let proofreadPrompt = selectPrompt(for: mode, qualityAvailable: true)
             let replacementStructs = replacements.map {
@@ -935,7 +956,8 @@ public actor TouchUpEngine {
                 replacements: replacementStructs,
                 lightModel: quality,
                 qualityModel: quality,
-                proofreadPrompt: proofreadPrompt
+                proofreadPrompt: proofreadPrompt,
+                workloadClass: workloadClass
             )
             // Relabel: `TouchUpProcessor.process` hard-codes the
             // `modelUsed` field based on which routing slot it took,

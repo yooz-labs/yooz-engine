@@ -11,11 +11,21 @@ public struct TouchUpRequest: Codable, Sendable {
     public let text: String
     public let mode: TouchUpMode
     public let language: String?
+    /// Optional GPU-admission override (engine#228). Nil (the default)
+    /// lets the engine classify this call as `.background` — see
+    /// `GPUWorkloadClass`.
+    public let workloadClass: GPUWorkloadClass?
 
-    public init(text: String, mode: TouchUpMode, language: String? = nil) {
+    public init(
+        text: String,
+        mode: TouchUpMode,
+        language: String? = nil,
+        workloadClass: GPUWorkloadClass? = nil
+    ) {
         self.text = text
         self.mode = mode
         self.language = language
+        self.workloadClass = workloadClass
     }
 }
 

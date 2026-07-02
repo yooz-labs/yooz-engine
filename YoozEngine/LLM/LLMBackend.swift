@@ -3,6 +3,7 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 
 // MARK: - Model Types
@@ -116,5 +117,16 @@ protocol LLMBackend: Actor {
 
     func load() async throws
     func unload()
-    func generate(prompt: String, systemPrompt: String) async throws -> String
+    /// `workloadClass` (engine#228) tells the backend whether this call is
+    /// latency-sensitive (`.interactive`, admitted immediately) or
+    /// throughput work that can queue/yield behind interactive activity
+    /// (`.background`, the default every existing caller gets via
+    /// `TouchUpProcessor.process`). No default here — the one existential
+    /// call site (`TouchUpProcessor.process`) passes it explicitly so the
+    /// classification is never accidentally implicit.
+    func generate(
+        prompt: String,
+        systemPrompt: String,
+        workloadClass: MLXWorkloadClass
+    ) async throws -> String
 }
