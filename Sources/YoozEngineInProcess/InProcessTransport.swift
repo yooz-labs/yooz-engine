@@ -287,7 +287,7 @@ public final class InProcessTransport: EngineTransport {
             result.sessionId, result.fanoutCount
         )
         return try JSONEncoder().encode(
-            SessionBeginBody(sessionId: result.sessionId, ts: result.ts)
+            SessionBeginResponse(sessionId: result.sessionId, ts: result.ts)
         )
     }
 
@@ -303,7 +303,7 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleGrammar(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(GrammarBody.self, from: body)
+        let request = try JSONDecoder().decode(GrammarCheckRequest.self, from: body)
         let outcome = await GrammarEngine.shared.check(
             text: request.text,
             categories: request.categories,
@@ -318,7 +318,7 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleVAD(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(VADBody.self, from: body)
+        let request = try JSONDecoder().decode(VADRequest.self, from: body)
         if await !VADEngine.shared.isLoaded {
             try await VADEngine.shared.load()
         }
@@ -339,17 +339,28 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleBatch(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(BatchBody.self, from: body)
-        guard let language = STTModule.STTLanguage.fromCode(request.language) else {
+        let request = try JSONDecoder().decode(BatchSTTRequest.self, from: body)
+        // `language`/`mode` are optional on the canonical `BatchSTTRequest`
+        // (the loopback server tolerates an absent value on some call paths),
+        // but every SDK caller supplies both — guard explicitly so a missing
+        // key still fails fast here exactly as it did when this handler
+        // decoded a mirror struct with non-optional fields (#225).
+        guard let rawLanguage = request.language else {
+            throw YoozEngineError.serverError(
+                statusCode: 400, code: "invalid_request",
+                message: "Missing 'language' field"
+            )
+        }
+        guard let language = STTModule.STTLanguage.fromCode(rawLanguage) else {
             throw YoozEngineError.serverError(
                 statusCode: 400,
                 code: "invalid_language",
-                message: "Unknown STT language '\(request.language)'"
+                message: "Unknown STT language '\(rawLanguage)'"
             )
         }
         // Unknown mode falls back to `.normal` for parity with the loopback
         // server (APIServer `/v1/stt/batch`), which also coerces rather than 400s.
-        let mode = STTModule.AudioMode(rawValue: request.mode) ?? .normal
+        let mode = request.mode.flatMap(STTModule.AudioMode.init(rawValue:)) ?? .normal
         try await YoozSTTEngine.shared.start(language: language)
 
         // `batchTranscribe` is non-throwing and returns `ParakeetResult.empty`
@@ -365,7 +376,7 @@ public final class InProcessTransport: EngineTransport {
             throw YoozEngineError.serverError(
                 statusCode: 503,
                 code: "stt_not_loaded",
-                message: "STT model failed to load for language '\(request.language)'"
+                message: "STT model failed to load for language '\(rawLanguage)'"
             )
         }
 
@@ -381,7 +392,7 @@ public final class InProcessTransport: EngineTransport {
                 text: result.text,
                 finalized: result.text,
                 draft: "",
-                language: request.language,
+                language: rawLanguage,
                 tokens: tokens
             )
             return try JSONEncoder().encode(response)
@@ -395,7 +406,7 @@ public final class InProcessTransport: EngineTransport {
             text: result.text,
             finalized: result.finalized,
             draft: result.draft,
-            language: request.language,
+            language: rawLanguage,
             tokens: nil
         )
         return try JSONEncoder().encode(response)
@@ -418,20 +429,31 @@ public final class InProcessTransport: EngineTransport {
     /// The same lazy `start()` also runs on the first `batch`/stream call, so
     /// this endpoint is a pre-warm, not a prerequisite, for transcription.
     private func handleSTTLoad(_ body: Data, wait: Bool) async throws -> Data {
-        let request = try JSONDecoder().decode(STTLoadBody.self, from: body)
-        guard let language = STTModule.STTLanguage.fromCode(request.language) else {
+        let request = try JSONDecoder().decode(STTLoadRequest.self, from: body)
+        // `language` is optional on the canonical `STTLoadRequest` (the
+        // loopback server falls back to the current backend's default when
+        // absent), but every SDK caller supplies one — guard explicitly so a
+        // missing key still fails fast here exactly as it did when this
+        // handler decoded a mirror struct with a non-optional field (#225).
+        guard let rawLanguage = request.language else {
+            throw YoozEngineError.serverError(
+                statusCode: 400, code: "invalid_request",
+                message: "Missing 'language' field"
+            )
+        }
+        guard let language = STTModule.STTLanguage.fromCode(rawLanguage) else {
             throw YoozEngineError.serverError(
                 statusCode: 400,
                 code: "invalid_language",
-                message: "Unknown STT language '\(request.language)'"
+                message: "Unknown STT language '\(rawLanguage)'"
             )
         }
         switch YoozSTTEngine.shared.currentBackend {
         case .appleSTT:
-            guard let appleLang = AppleSTTLanguage.from(rawCode: request.language) else {
+            guard let appleLang = AppleSTTLanguage.from(rawCode: rawLanguage) else {
                 throw YoozEngineError.serverError(
                     statusCode: 400, code: "invalid_language",
-                    message: "Language '\(request.language)' is not supported by Apple STT"
+                    message: "Language '\(rawLanguage)' is not supported by Apple STT"
                 )
             }
             // Apple STT has no HF download/materialize phase; load synchronously.
@@ -462,7 +484,7 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleLLM(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(LLMBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMGenerateRequest.self, from: body)
         // An unrecognized model name is a hard error (parity with the loopback
         // server's `invalid_model` 400) — never a silent downgrade to Light,
         // which would return a response whose `model` field lies about what ran.
@@ -483,7 +505,7 @@ public final class InProcessTransport: EngineTransport {
             prompt: request.prompt,
             systemPrompt: request.systemPrompt ?? "",
             modelType: modelType,
-            workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
+            workloadClass: request.workloadClass ?? .background
         )
         let response = LLMGenerateResponse(
             text: text,
@@ -624,7 +646,7 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleSetSTTEngine(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(SetBackendBody.self, from: body)
+        let request = try JSONDecoder().decode(STTSetBackendRequest.self, from: body)
         guard let backend = STTModule.STTBackendID(rawValue: request.id) else {
             throw YoozEngineError.serverError(
                 statusCode: 400, code: "invalid_backend",
@@ -679,35 +701,37 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleSetLLMModel(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMModelSelection.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         await TouchUpEngine.shared.setPreferredModel(modelType)
         return try await handleLLMModels()
     }
 
     private func handleLLMPreload(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMModelSelection.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         try await TouchUpEngine.shared.preloadModel(modelType)
         return try JSONEncoder().encode(await llmModelInfo(modelType))
     }
 
     private func handleLLMUnload(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMModelSelection.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         await TouchUpEngine.shared.unload(modelType)
         return try JSONEncoder().encode(await llmModelInfo(modelType))
     }
 
     /// Resolve the optional GPU-admission class from its raw wire string
-    /// (engine#228). Nil/omitted means today's default (`.background`); an
-    /// unrecognized value is a hard 400 — parity with the loopback server
-    /// (whose typed `Decodable` enum rejects unknown values as
-    /// `invalid_request`) and with this transport's own mode handling
-    /// ("an unknown mode is a hard error"): a declared scheduling class is
-    /// explicit caller intent, and silently downgrading a mistyped
+    /// (engine#228) for the `TouchUpBody` decode shim below. Nil/omitted means
+    /// today's default (`.background`); an unrecognized value is a hard 400 —
+    /// parity with the loopback server (whose typed `Decodable` enum rejects
+    /// unknown values as `invalid_request`) and with this transport's own mode
+    /// handling ("an unknown mode is a hard error"): a declared scheduling
+    /// class is explicit caller intent, and silently downgrading a mistyped
     /// `.interactive` to `.background` would make the request queue behind
-    /// other work with no trace of why.
+    /// other work with no trace of why. (`handleLLM` needs no equivalent: it
+    /// decodes the canonical `LLMGenerateRequest`, whose typed
+    /// `workloadClass` field rejects unknown values at decode.)
     private static func resolveWorkloadClass(
         _ raw: String?
     ) throws -> MLXWorkloadClass {
@@ -764,7 +788,7 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleSetTouchUpModel(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(SetModelBody.self, from: body)
+        let request = try JSONDecoder().decode(TouchUpSetModelRequest.self, from: body)
         guard let selection = TouchUpModelSelection(rawValue: request.id) else {
             throw YoozEngineError.serverError(
                 statusCode: 400, code: "invalid_model",
@@ -922,77 +946,25 @@ public final class InProcessTransport: EngineTransport {
 
 }
 
-// MARK: - Wire request mirrors
+// MARK: - TouchUp mode decode shim
 //
-// Decode structs matching the keys each SDK sub-client encodes. Mirrors (rather
-// than the SDK request types) because several SDK request structs are internal
-// to the SDK module; the field names/keys here are the wire contract.
-
-private struct GrammarBody: Decodable {
-    let text: String
-    let categories: [String]?
-    let usePOS: Bool?
-}
-
-private struct VADBody: Decodable {
-    let samples: [Float]
-    let reset: Bool?
-}
-
-private struct BatchBody: Decodable {
-    let samples: [Float]
-    let language: String
-    let mode: String
-    let aligned: Bool?
-}
-
-private struct STTLoadBody: Decodable {
-    let language: String
-}
-
-private struct LLMBody: Decodable {
-    let prompt: String
-    let model: String?
-    let systemPrompt: String?
-    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). Kept as
-    /// a plain `String?` at the decode layer; `resolveWorkloadClass` maps
-    /// nil/empty to `.background` and rejects unknown values with a 400
-    /// (see its doc for the parity rationale).
-    let workloadClass: String?
-}
-
-private struct SetBackendBody: Decodable {
-    let id: String
-    let preload: Bool?
-}
-
-private struct ModelSelectionBody: Decodable {
-    let model: String
-}
+// `TouchUpBody` stays a local, minimal decode struct rather than the
+// canonical `TouchUpRequest` (#225): `TouchUpRequest.mode` is the strict
+// `TouchUpMode` enum, whose decode failure on an unrecognized string would
+// surface as an opaque `DecodingError` instead of the `invalid_mode`
+// `YoozEngineError.serverError` this handler has always returned. Decoding
+// the raw string here and resolving it against `TouchUpMode(rawValue:)`
+// explicitly preserves that error contract byte-for-byte. Every other
+// former mirror struct in this section decoded a shape with no such
+// custom-error behavior riding on it, so those were deleted outright in
+// favor of the shared `YoozEngineWire` request types.
 
 private struct TouchUpBody: Decodable {
     let text: String
     let mode: String
     let language: String?
-    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). See
-    /// `LLMBody.workloadClass` — same decode/resolve split.
+    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). Kept as
+    /// a plain `String?` at the decode layer; `resolveWorkloadClass` maps
+    /// nil/empty to `.background` and rejects unknown values with a 400.
     let workloadClass: String?
-}
-
-private struct SetModelBody: Decodable {
-    let id: String
-    let preload: Bool?
-}
-
-// MARK: - Wire response mirrors
-//
-// Encode structs matching the keys the SDK sub-client (or, for `/v1/session`,
-// the raw `EngineTransport.post` caller) decodes. Mirrors the app-target
-// `SessionBeginResponse` (`YoozEngine/Server/APITypes.swift`), which cannot be
-// reused directly here because it conforms to Hummingbird's `ResponseCodable`,
-// a protocol not available to a plain SPM target.
-
-private struct SessionBeginBody: Encodable {
-    let sessionId: String
-    let ts: String
 }
