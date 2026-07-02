@@ -5,8 +5,8 @@ Project-specific agent instructions. The ecosystem-wide rules live in `../AGENTS
 ## Project Overview
 
 - **Product:** Standalone macOS service providing local AI capabilities to all Yooz apps
-- **Version:** 0.5.0
-- **Status:** Phase 5 — Thin Client Migration (ready)
+- **Version:** 0.7.5 (`EngineConfig.version`, `Sources/EngineCore/EngineConfig.swift:42`)
+- **Status:** Modular engine + three-transport SDK shipped. Epic #192 ("in-sandbox engine packaging") closed 2026-06-23 via PR #206, phase PRs #196-#205; the 0.7.x hardening arc continued through PR #221 (2026-06-30) under adjacent epics (GPU residency #216, whisper zero-download whisper#253). Follow-on work tracked by epic #230 ("engine substrate contract v2", opened from the 2026-07-02 architecture review) — see `.context/plan.md` for the current sub-issue list.
 - **Tech Stack:** Swift 5.9+, SwiftUI, Hummingbird (HTTP/WebSocket), MLX-Swift
 
 All AI modules are complete and synced. The engine is the source of truth for STT, LLM, TouchUp, Grammar, and VAD. The Rust `text-cleanup` source lives in this repo.
@@ -24,47 +24,54 @@ Rule of thumb: anything that reveals how an LLM weight was produced (training co
 
 ## Architecture
 
-`YoozEngine.app` is a macOS menu bar service running a local API on `localhost:19920`. All Yooz apps (Whisper, Notes, Voice, Crisp, Remi) are thin clients that hit this API via the `YoozEngineClient` Swift Package.
+The engine modules are plain `public actor`s — xcodegen framework targets, most of which are also SPM library products (epic #192; `InfiniteModule` is the exception, see "Packaging and transports") — reachable over three interchangeable transports behind one `YoozEngineClient` SDK surface. See "Packaging and transports" below for which transport each consumer uses today. The loopback packaging (`YoozEngine.app`, a macOS menu bar service on `localhost:19920`) is the super-yooz / local-dev shape; App Store standalones (e.g. Yooz Whisper) link the modules in-process instead.
 
 ```
-YoozEngine.app (menu bar service)
-├── Local API Server (localhost:19920)
-│   ├── REST: /v1/health, /v1/models
-│   ├── REST: /v1/stt/{languages,status,load,batch}
-│   ├── REST: /v1/llm/generate
-│   ├── REST: /v1/touchup
-│   ├── REST: /v1/grammar/check
-│   ├── REST: /v1/vad/detect
-│   ├── WebSocket: /v1/stt/stream
-│   └── Future: /v1/tts/synthesize
+Local API Server (localhost:19920, loopback packaging only)
+├── REST: /v1/health, /v1/models, /v1/modules
+├── REST: /v1/session/{begin,end}
+├── REST: /v1/stt/{languages,status,load,batch,engine}
+├── REST: /v1/llm/generate
+├── REST: /v1/touchup, /v1/touchup/{models,model}
+├── REST: /v1/grammar/check
+├── REST: /v1/vad/detect
+├── REST: /v1/infinite/{models,model,status,sessions,...}
+├── WebSocket: /v1/stt/stream
+└── Future: /v1/tts/synthesize
+
+Engine modules (framework targets; all but Infinite also SPM products — epic #192)
 ├── STT Module (Parakeet TDT, FastConformer, Apple STT)
 ├── LLM Module (MLX: Qwen 0.5B, 1.7B; Apple Intelligence on macOS 26+)
 ├── TouchUp Module (regex + grammar + LLM pipeline)
 ├── Grammar Module (Rust text-cleanup xcframework + source)
 ├── VAD Module (Silero v6.0.0 CoreML, energy-based fallback)
+├── Infinite Module (long-context sessions, native MLX backend — loopback-only consumer today)
 └── TTS Module [future]
 
-YoozEngineClient (Swift Package)
-├── Auto-discovery + auto-launch
-├── REST + WebSocket clients
+YoozEngineClient (Swift Package) — identical SDK surface over any transport
+├── HTTPTransport (loopback), InProcessTransport (YoozEngineInProcess), XPCTransport
+├── Auto-discovery + auto-launch (loopback)
 └── Shared types
 ```
 
-**No embedded fallback.** Apps auto-launch the engine if it's not running.
+**No embedded fallback.** Apps that use the loopback transport auto-launch the engine helper if it's not running; apps using in-process/XPC link the modules directly.
 
 ## Repository Layout
 
 ```
 yooz-engine/
-├── YoozEngine/                # macOS app (menu bar service)
-│   ├── App/                   # Entry, lifecycle
-│   ├── Server/                # Hummingbird HTTP/WS
-│   ├── STT/, LLM/, TouchUp/, VAD/, Grammar/, TTS/, Core/
-├── Sources/YoozEngineClient/  # Swift Package (thin client SDK)
+├── YoozEngine/                    # macOS app targets (loopback + module sources)
+│   ├── App/                       # Entry, lifecycle
+│   ├── Server/                    # Hummingbird HTTP/WS (APIServer.swift)
+│   ├── STT/, LLM/, TouchUp/, VAD/, Grammar/, Infinite/, TTS/, Core/
+├── Sources/EngineCore/            # Module-agnostic core (SPM product, epic #192)
+├── Sources/YoozEngineClient/      # Swift Package (thin client SDK) + Transport/ seam
+├── Sources/YoozEngineInProcess/   # In-process EngineTransport facade (SPM product)
+├── docs/                          # CONSUMER_INTEGRATION.md, INFINITE_MODULE.md, RELEASE.md
 ├── Tests/
-├── Vendor/YoozTextCleanup/    # Rust xcframework (prebuilt)
-├── text-cleanup/              # Rust source (engine owns this)
-└── project.yml                # XcodeGen
+├── Vendor/YoozTextCleanup/        # Rust xcframework (prebuilt, gitignored; fetched from HF)
+├── text-cleanup/                  # Rust source (engine owns this)
+└── project.yml                    # XcodeGen
 ```
 
 ## Build
@@ -106,13 +113,15 @@ KVCOMPRESSION_LIVE=1 xcodebuild -project YoozEngine.xcodeproj \
 
 ## API
 
-Fixed port: **19920** (localhost only).
+This table describes the loopback `APIServer` route surface (fixed port **19920**, localhost only). The in-process and XPC transports serve most of the same paths without a socket — see "Packaging and transports" for the routing gaps between transports.
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/v1/health` | Service health; reports per-module statuses |
-| GET | `/v1/models` | Loaded and available models |
+| GET | `/v1/models` | Disk-hygiene model inventory (real on-disk sizes + delete targets) |
 | GET | `/v1/modules` | Build variant + per-module health manifest |
+| POST | `/v1/session/begin` | Fan `resetForNewSession()` out to every `SessionResettable` module; returns a session id. Drops per-recording state (KV caches, streaming buffers) without unloading models |
+| POST | `/v1/session/end` | Same reset fan-out, called at end of a recording |
 | GET | `/v1/stt/languages` | Available STT languages |
 | GET | `/v1/stt/status` | STT model load status |
 | GET | `/v1/stt/engine` | Current + available STT backends + capability flags |
@@ -125,7 +134,36 @@ Fixed port: **19920** (localhost only).
 | GET | `/v1/touchup/models` | Picker: list TouchUp models with state |
 | POST | `/v1/touchup/model` | Picker: set active TouchUp model + preload |
 | POST | `/v1/grammar/check` | Rule-based grammar correction |
-| POST | `/v1/vad/detect` | Voice activity detection (501 on Whisper / Lite variants) |
+| POST | `/v1/vad/detect` | Voice activity detection (501 on Whisper / Lite variants, no VAD) |
+| GET | `/v1/infinite/models` | Picker: long-context models with RAM-tier gating |
+| POST | `/v1/infinite/model` | Picker: set active Infinite model + preload |
+| GET | `/v1/infinite/status` | Infinite module status |
+| GET/POST | `/v1/infinite/sessions` | List / create long-context sessions (max 16 active) |
+| GET/DELETE | `/v1/infinite/sessions/:sessionID` | Fetch / delete a session |
+| POST | `/v1/infinite/sessions/:sessionID/append` | Append context to a session |
+| POST | `/v1/infinite/sessions/:sessionID/generate` | Generate on Swift-runtime-supported models; `501 generation_unavailable` for retrieval-only models |
+| POST | `/v1/infinite/sessions/:sessionID/checkpoint` | Checkpoint a session |
+
+`/v1/infinite/*` is 501 `module_not_bundled` on `YoozEngineWhisper` and `YoozEngineLite` (neither links `InfiniteModule`; see "Build Variants" below).
+
+## Packaging and transports
+
+The engine modules are portable — epic #192 (closed 2026-06-23) made this concrete by exposing `EngineCore`, `STTModule`, `LLMModule`, `GrammarModule`, `AppleSTTModule`, and `VADModule` as SwiftPM library products (`Package.swift`, PR #196) alongside the same source dirs the xcodegen framework targets ingest. `InfiniteModule` is the deliberate exception: it exists only as an xcodegen framework target (full `YoozEngine` variant), not as an SPM product — its consumer is the loopback host, and `YoozEngineInProcess` intentionally does not depend on it. The `YoozEngineClient` SDK surface is served by three interchangeable `EngineTransport` implementations (`Sources/YoozEngineClient/Transport/EngineTransport.swift` is the seam):
+
+| Transport | Type | Status as of 2026-07 | Who ships it |
+|---|---|---|---|
+| **Loopback** (`HTTPTransport`) | HTTP/WebSocket over `127.0.0.1:<port>` | Default, fully shipping | super-yooz host (planned — super-yooz has no code against the substrate yet as of 2026-07) + local dev; the standalone `Yooz Engine.app` helper `.app` shape (`Contents/Helpers/`) fails App Store validation (ITMS-90296) so it is **not** the App Store packaging |
+| **In-process** (`InProcessTransport`, product `YoozEngineInProcess`) | Direct calls into the linked module actors, no socket | Shipping — Yooz Whisper links this today (see `yooz-whisper` `project.yml`, engine pinned by revision, currently 0.7.5) | App Store standalone apps |
+| **XPC** (`XPCTransport` + `XPCServiceHandler`) | `NSXPCConnection` to a sandboxed XPC service, code-signing pinned | Code-complete and unit-tested (epic #192 Phase 3, PRs #203/#205) but **no `.xpc` service target is packaged anywhere** — no app builds `Contents/XPCServices/` yet. Tracked by #227 | Not shipping yet |
+
+Two known gaps in `InProcessTransport` (both are transport-routing gaps, not module gaps — the underlying actors work fine over loopback):
+
+- `/v1/session/*` is not yet routed in-process, so the per-recording reset fan-out does not fire for in-process consumers (whisper) today. Tracked by #222.
+- `/v1/infinite/*` is intentionally unrouted in-process — Infinite's consumer is the loopback host (super-yooz), per the header comment in `InProcessTransport.swift`. `XPCServiceHandler` forwards to `InProcessTransport`, so this gap (and the session gap, until #222 lands) carries forward into XPC once #227 packages it.
+
+There is no automated check that `APIServer` and `InProcessTransport` stay in sync; route drift is caught by hand (#223 tracks adding a parity test with an explicit loopback-only allowlist).
+
+Full design rationale + macOS feasibility research (sandboxing, entitlements, Metal/MLX-under-XPC): `docs/engine-app-packaging.md` in the private `yooz` ecosystem repo (sibling checkout, e.g. `../yooz/docs/engine-app-packaging.md`).
 
 ## Module model picker pattern
 
@@ -180,6 +218,7 @@ Adopters today:
 |---|---|---|---|
 | TouchUp | `TouchUpModelSelection` | `TouchUpModelInfo` / `TouchUpModelsResponse` | `GET/POST /v1/touchup/model[s]` |
 | STT engine | `STTBackendID` | `STTBackendInfo` / `STTBackendsResponse` (+ `supportsBatch`, `supportsStreaming`, `supportedLanguages`) | `GET/POST /v1/stt/engine` |
+| Infinite | `InfiniteModelSelection` | `InfiniteModelInfo` / `InfiniteModelsResponse` (+ RAM-tier gating fields) | `GET/POST /v1/infinite/model[s]` |
 
 ### SDK
 
@@ -229,15 +268,15 @@ The TouchUp module is the reference implementation — copy from there.
 
 ## Build Variants (Phase 5)
 
-Each consuming app bundles only the modules it needs. See `.context/phase5_epic.md`.
+Each consuming app bundles only the modules it needs (`project.yml` target `dependencies:` is the source of truth). See `.context/phase5_epic.md`.
 
 | Variant | Modules | Consumer | Bundle |
 |---|---|---|---|
-| `YoozEngine` | STT + AppleSTT + Grammar + LLM + VAD | Standalone menu bar service | full |
-| `YoozEngineWhisper` | STT + AppleSTT + Grammar + LLM (no VAD) | Yooz Whisper helper | full-minus-VAD |
-| `YoozEngineLite` | AppleSTT + Grammar + LLM (no MLX STT, no VAD) | Remi-class apps, iOS | sub-GB |
+| `YoozEngine` | STT + AppleSTT + Grammar + LLM + VAD + **Infinite** | Standalone menu bar service (dev-only, loopback) / super-yooz host | full |
+| `YoozEngineWhisper` | STT + AppleSTT + Grammar + LLM (no VAD, **no Infinite**) | Yooz Whisper helper (in-process today) | full-minus-VAD-minus-Infinite |
+| `YoozEngineLite` | AppleSTT + Grammar + LLM (no MLX STT, no VAD, no Infinite) | Remi-class apps, iOS | sub-GB |
 
-VAD stays whisper-embedded (~64ms call rate makes HTTP round-trip non-viable).
+VAD stays whisper-embedded (~64ms call rate makes HTTP round-trip non-viable). Infinite is loopback-only by design (its consumer is the loopback host, per `InProcessTransport.swift`), so it is dropped from `YoozEngineWhisper` and `YoozEngineLite` regardless of transport.
 
 ## Migration Status
 
@@ -250,9 +289,12 @@ VAD stays whisper-embedded (~64ms call rate makes HTTP round-trip non-viable).
 | 4 | Grammar | yooz-stt-engine/text-cleanup | [x] Done |
 | 4 | VAD | yooz-whisper/Audio | [x] Done |
 | 4.5 | Engine sync | — | [x] Done (v0.5.0) |
-| 5 | Modular engine + whisper thin-client | — | [x] Done (v0.6.0); integration hardening in flight |
-| 6 | Archive yooz-stt-engine | — | PR #80 open; archive after whisper → stable |
-| 7 | TTS (Kokoro) | Future | Not started |
+| 5 | Modular engine + whisper thin-client | — | [x] Done (v0.6.0) |
+| 6 | Archive yooz-stt-engine | — | [x] Done — `yooz-stt-engine` archived 2026-05-08 (issue #79, PR #80 in that repo) |
+| 6.5 | InfiniteModule (long-context, native MLX backend) | New | [x] Done — epic (engine#171), Phases 1-7, PRs #166-#170/#183/#185; follow-on Gemma4 model onboarding in #188/#189 and (partly) #190 |
+| 7 | In-sandbox packaging: SPM module products, in-process facade, XPC transport | New | [x] Done — epic #192 closed 2026-06-23 via PR #206 (phase PRs #196-#205); 0.7.x hardening continued through #221 under adjacent epics |
+| 8 | Engine substrate contract v2 (session routing parity, XPC packaging, model-selection state) | New | In flight — epic #230 (2026-07-02 architecture review), tracking #222-#229; see `.context/plan.md` |
+| 9 | TTS (Kokoro) | Future | Not started |
 
 ## Conventions
 

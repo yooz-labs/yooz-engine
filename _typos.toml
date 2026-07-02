@@ -25,3 +25,6 @@ hel = "hel"
 WHT = "WHT"
 # `arange` is the numpy-style range builder, not a misspelling of `arrange`.
 arange = "arange"
+# ITMS-90296 is Apple's App Store Connect validation error code for an
+# unsandboxed bundle executable, not a misspelling of "ITEMS".
+ITMS = "ITMS"
