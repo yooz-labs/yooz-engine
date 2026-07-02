@@ -301,8 +301,27 @@ public actor InfiniteEngine {
                 temperature: 0.7
             )
         } catch let error as InfiniteError {
+            infiniteEngineLogger.error(
+                "Infinite generation failed for session \(sessionID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
             throw error
+        } catch is CancellationError {
+            // Task cancellation (client disconnect, caller teardown — the
+            // admission gate's `checkpoint()` is the newest cancellation
+            // source, engine#228) is not a model fault: rethrow it typed so
+            // it never masquerades as `generation_failed` in logs or on the
+            // wire. Debug-level on purpose.
+            infiniteEngineLogger.debug(
+                "Infinite generation cancelled for session \(sessionID, privacy: .public)"
+            )
+            throw CancellationError()
         } catch {
+            // Log here — this used to be the engine's only completely silent
+            // failure path (the HTTP response body was the sole trace of a
+            // real MLX/Metal fault during Infinite generation).
+            infiniteEngineLogger.error(
+                "Infinite generation failed for session \(sessionID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
             throw InfiniteError.generationFailed(error.localizedDescription)
         }
 

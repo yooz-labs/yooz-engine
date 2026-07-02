@@ -430,31 +430,25 @@ enum ServerTouchUpMode: String, Codable, Sendable {
     #endif
 }
 
-/// Wire enum for the optional GPU-admission workload-class override on
-/// `POST /v1/touchup` and `POST /v1/llm/generate` (engine#228). Optional and
-/// additive: omitting the field preserves today's behavior — both routes
-/// default to `.background`, matching the issue's classification of
-/// touch-up/raw generation as throughput work that queues/yields behind an
-/// active interactive workload (a live streaming STT session). A caller
-/// with a genuinely latency-sensitive one-off generation can override to
-/// `.interactive` so `MLXAdmissionGate` admits it immediately.
-enum ServerWorkloadClass: String, Codable, Sendable {
-    case interactive
-    case background
-
-    var asDomain: MLXWorkloadClass {
-        switch self {
-        case .interactive: return .interactive
-        case .background: return .background
-        }
-    }
-}
+// The optional GPU-admission workload-class override on `POST /v1/touchup`
+// and `POST /v1/llm/generate` (engine#228) uses `EngineCore.MLXWorkloadClass`
+// directly — the same pattern as `LoadState` / `ModelTier` elsewhere in this
+// file (only the client SDK, which cannot import EngineCore, carries a
+// hand-duplicated mirror: `GPUWorkloadClass`). Optional and additive:
+// omitting the field preserves today's behavior — both routes default to
+// `.background`, matching the issue's classification of touch-up/raw
+// generation as throughput work that queues/yields behind an active
+// interactive workload. A caller with a genuinely latency-sensitive one-off
+// generation can override to `.interactive` so `MLXAdmissionGate` admits it
+// immediately. Unknown values fail the body decode → 400 `invalid_request`
+// (a declared scheduling class is explicit caller intent; a silent
+// downgrade would hide a client-side typo or version skew).
 
 struct LLMGenerateServerRequest: Decodable {
     let prompt: String
     let model: String?
     let systemPrompt: String?
-    let workloadClass: ServerWorkloadClass?
+    let workloadClass: MLXWorkloadClass?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: LLMGenerateRequestKey.self)
@@ -462,10 +456,11 @@ struct LLMGenerateServerRequest: Decodable {
         self.model = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("model"))
         self.systemPrompt = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("systemPrompt"))
             ?? container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("system_prompt"))
+        // camelCase only — the snake_case fallback above is a legacy-client
+        // compat shim for `system_prompt`; `workloadClass` is new with #228,
+        // so no second spelling is grandfathered in.
         self.workloadClass = try container.decodeIfPresent(
-            ServerWorkloadClass.self, forKey: LLMGenerateRequestKey("workloadClass")
-        ) ?? container.decodeIfPresent(
-            ServerWorkloadClass.self, forKey: LLMGenerateRequestKey("workload_class")
+            MLXWorkloadClass.self, forKey: LLMGenerateRequestKey("workloadClass")
         )
     }
 }
@@ -521,8 +516,9 @@ struct TouchUpServerRequest: Decodable {
     let mode: ServerTouchUpMode
     let language: String?
     /// Optional GPU-admission override (engine#228). Nil defaults to
-    /// `.background` at the route handler — see `ServerWorkloadClass`.
-    let workloadClass: ServerWorkloadClass?
+    /// `.background` at the route handler — see the workload-class note
+    /// above `LLMGenerateServerRequest`.
+    let workloadClass: MLXWorkloadClass?
 }
 
 struct TouchUpServerResponse: ResponseCodable {

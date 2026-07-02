@@ -223,6 +223,21 @@ public enum TouchUpProcessor {
                     latencyMs: latencyMs,
                     fallbackReason: nil
                 )
+            } catch is CancellationError {
+                // Cancelled while queued at the GPU admission gate or
+                // mid-generation (engine#228) — the caller went away, so
+                // nobody consumes this result. Return the regex-processed
+                // text with a truthful reason instead of logging a phantom
+                // "model failed" error that would pollute failure triage.
+                logger.debug("Light model generation cancelled")
+                let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                return ProcessResult(
+                    text: processedText,
+                    keepDecisions: [],
+                    modelUsed: .fallbackRegex,
+                    latencyMs: latencyMs,
+                    fallbackReason: "Generation cancelled"
+                )
             } catch {
                 logger.error("Light model failed: \(error.localizedDescription)")
                 let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
@@ -278,6 +293,18 @@ public enum TouchUpProcessor {
                     modelUsed: .quality,
                     latencyMs: latencyMs,
                     fallbackReason: nil
+                )
+            } catch is CancellationError {
+                // See the light-path twin above: a cancelled request is not
+                // a model fault; keep failure triage clean.
+                logger.debug("Quality model generation cancelled")
+                let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                return ProcessResult(
+                    text: processedText,
+                    keepDecisions: replacements.map { _ in true },
+                    modelUsed: .fallbackRegex,
+                    latencyMs: latencyMs,
+                    fallbackReason: "Generation cancelled"
                 )
             } catch {
                 logger.error("Quality model failed: \(error.localizedDescription)")
