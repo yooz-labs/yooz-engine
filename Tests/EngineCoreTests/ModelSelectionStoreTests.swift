@@ -103,4 +103,53 @@ final class ModelSelectionStoreTests: XCTestCase {
         let id = await store.activeId(for: "touchup")
         XCTAssertEqual(id, "yooz-quality-v2")
     }
+
+    /// The on-disk artifact is the migration/debug contract: a flat
+    /// `{module: activeId}` JSON object. Pin it against the RAW file bytes
+    /// (not just the actor API round trip) so a future refactor that
+    /// changes the serialization silently — stranding every user's
+    /// persisted selection on upgrade — fails here (PR #239 review).
+    func testOnDiskFileIsFlatModuleToIdJSONObject() async throws {
+        let fileURL = makeTempFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let store = ModelSelectionStore(fileURL: fileURL)
+        await store.setActiveId("yooz-quality-v2", for: "touchup")
+        await store.setActiveId("parakeet", for: "stt")
+
+        let raw = try Data(contentsOf: fileURL)
+        let decoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: raw) as? [String: String],
+            "on-disk shape must be a flat {module: activeId} string map"
+        )
+        XCTAssertEqual(decoded, ["touchup": "yooz-quality-v2", "stt": "parakeet"])
+    }
+
+    /// A persist failure is best-effort but must be OBSERVABLE: it sets
+    /// `lastPersistError`, and a subsequent successful persist clears it
+    /// (PR #239 review). An unwritable directory path (a FILE occupying
+    /// the parent-directory path) forces the failure deterministically.
+    func testPersistFailureSetsLastPersistErrorAndSuccessClearsIt() async throws {
+        // Parent path is a FILE, so createDirectory/write must fail.
+        let blockingFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("model-selection-block-\(UUID().uuidString)")
+        try Data("block".utf8).write(to: blockingFile)
+        defer { try? FileManager.default.removeItem(at: blockingFile) }
+
+        let failingStore = ModelSelectionStore(
+            fileURL: blockingFile.appendingPathComponent("nested.json")
+        )
+        await failingStore.setActiveId("yooz-light-v2", for: "touchup")
+        let failure = await failingStore.lastPersistError
+        XCTAssertNotNil(failure, "a failed persist must record lastPersistError")
+
+        // In-memory selection still took effect despite the disk failure.
+        let inMemory = await failingStore.activeId(for: "touchup")
+        XCTAssertEqual(inMemory, "yooz-light-v2")
+
+        // A store with a writable path clears the error on success.
+        let workingStore = ModelSelectionStore(fileURL: makeTempFileURL())
+        await workingStore.setActiveId("yooz-light-v2", for: "touchup")
+        let cleared = await workingStore.lastPersistError
+        XCTAssertNil(cleared)
+    }
 }

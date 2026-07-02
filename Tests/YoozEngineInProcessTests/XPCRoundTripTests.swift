@@ -123,4 +123,26 @@ final class XPCRoundTripTests: XCTestCase {
             }
         }
     }
+
+    /// `/v1/events` is deliberately not implemented over XPC yet
+    /// (engine#226; deferred to the #227 service-packaging epic — see
+    /// `XPCTransport.openEvents()`'s doc). Pin the documented behavior so
+    /// the gap can't silently morph into a hang or a generic error, and so
+    /// wiring it up later forces this test (and the doc) to be updated.
+    func testOpenEventsThrowsUnsupportedOverXPC() async throws {
+        let service = Service()
+        defer { service.invalidate() }
+        let connection = NSXPCConnection(listenerEndpoint: service.listener.endpoint)
+        let transport = XPCTransport(connection: connection)
+
+        do {
+            _ = try await transport.openEvents()
+            XCTFail("expected unsupportedOperation from XPCTransport.openEvents()")
+        } catch let error as YoozEngineError {
+            guard case .unsupportedOperation = error else {
+                XCTFail("expected unsupportedOperation, got \(error)")
+                return
+            }
+        }
+    }
 }

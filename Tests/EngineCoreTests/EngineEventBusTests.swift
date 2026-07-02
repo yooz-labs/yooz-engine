@@ -98,4 +98,78 @@ final class EngineEventBusTests: XCTestCase {
         XCTAssertFalse(event.ts.isEmpty)
         XCTAssertNotNil(ISO8601DateFormatter().date(from: event.ts))
     }
+
+    /// Concurrent publishers racing a live consumer (PR #239 review): the
+    /// actor serializes `publish`, so every event from every publisher must
+    /// arrive exactly once — no drops, no duplicates — even when many tasks
+    /// publish simultaneously while the subscriber drains.
+    func testConcurrentPublishersDeliverEveryEventExactlyOnce() async {
+        let bus = EngineEventBus()
+        let stream = await bus.subscribe()
+
+        let publisherCount = 8
+        let eventsPerPublisher = 20
+        let total = publisherCount * eventsPerPublisher
+
+        let consumer = Task { () -> [String] in
+            var received: [String] = []
+            for await event in stream {
+                if let id = event.modelId { received.append(id) }
+                if received.count == total { break }
+            }
+            return received
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            for publisher in 0..<publisherCount {
+                group.addTask {
+                    for n in 0..<eventsPerPublisher {
+                        await bus.publish(EngineEvent(
+                            kind: .downloadProgress, module: "touchup",
+                            modelId: "p\(publisher)-e\(n)", progress: 0.5
+                        ))
+                    }
+                }
+            }
+        }
+
+        let received = await consumer.value
+        XCTAssertEqual(received.count, total)
+        XCTAssertEqual(
+            Set(received).count, total,
+            "every published event must arrive exactly once (no duplicates)"
+        )
+    }
+
+    /// The per-subscriber buffer is bounded (PR #239 review): a subscriber
+    /// that never consumes cannot grow engine memory without limit — once
+    /// the buffer is full, older events drop and only the newest
+    /// `subscriberBufferLimit` remain.
+    func testStalledSubscriberBufferIsBoundedToNewest() async {
+        let bus = EngineEventBus()
+        let stream = await bus.subscribe()
+
+        let overfill = EngineEventBus.subscriberBufferLimit + 50
+        for n in 0..<overfill {
+            await bus.publish(EngineEvent(
+                kind: .downloadProgress, module: "touchup",
+                modelId: "e\(n)", progress: 0.5
+            ))
+        }
+
+        // Drain whatever was buffered; the stream stays open, so stop
+        // reading once we've seen the newest event.
+        var received: [String] = []
+        for await event in stream {
+            if let id = event.modelId { received.append(id) }
+            if event.modelId == "e\(overfill - 1)" { break }
+        }
+
+        XCTAssertEqual(received.count, EngineEventBus.subscriberBufferLimit)
+        XCTAssertEqual(
+            received.first, "e\(overfill - EngineEventBus.subscriberBufferLimit)",
+            "bufferingNewest must drop the OLDEST events when full"
+        )
+        XCTAssertEqual(received.last, "e\(overfill - 1)")
+    }
 }

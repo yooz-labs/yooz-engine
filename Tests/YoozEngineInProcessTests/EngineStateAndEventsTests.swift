@@ -142,6 +142,50 @@ final class EngineStateAndEventsTests: XCTestCase {
         XCTAssertTrue(loaded, "background preload must eventually reach .loaded")
     }
 
+    /// Rapid picker double-switch (engine#226; PR #239 review): with tier
+    /// A's background preload still in flight, switching to tier B must
+    /// end with B active and RESIDENT — A's late completion must not evict
+    /// B (the `activeModel == selection` + `Task.isCancelled` guards in
+    /// `preloadActiveSelectionInBackground`). Needs two real MLX loads to
+    /// exercise authentically, so gated like the other live-load tests.
+    func testRapidDoubleSwitchKeepsTheSecondTierResident() async throws {
+        try XCTSkipUnless(
+            llmLoadEnabled,
+            "Set YOOZ_LLM_LOAD_MODELS=1 (app-hosted xctest) to exercise the double-switch eviction guard."
+        )
+        let engine = TouchUpEngine()
+
+        // Kick A's background load and immediately switch to B while A is
+        // (almost certainly) still loading.
+        _ = try await engine.setActiveModelAsync(.yoozQuality, preload: true)
+        _ = try await engine.setActiveModelAsync(.yoozLight, preload: true)
+
+        // Wait for both dust clouds to settle: B must reach .loaded.
+        var lightLoaded = false
+        for _ in 0..<400 {
+            let models = await engine.availableModels()
+            if models.first(where: { $0.id == TouchUpModelSelection.yoozLight.rawValue })?.loadState == .loaded {
+                lightLoaded = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        XCTAssertTrue(lightLoaded, "the second (current) tier must finish loading")
+
+        // Give A's superseded dispatch time to complete + (incorrectly)
+        // evict, if the guard were broken.
+        try await Task.sleep(for: .seconds(2))
+
+        let active = await engine.activeModel
+        XCTAssertEqual(active, .yoozLight, "the second switch must win")
+        let models = await engine.availableModels()
+        XCTAssertEqual(
+            models.first(where: { $0.id == TouchUpModelSelection.yoozLight.rawValue })?.loadState,
+            .loaded,
+            "A's late completion must not evict the tier the user switched to"
+        )
+    }
+
     // MARK: - Persisted selection (engine#226)
 
     /// The headline acceptance criterion: the active model survives a
