@@ -135,8 +135,9 @@ final class EndpointTableTests: XCTestCase {
 
     func testDuplicateSpecThrowsDuplicateEndpointError() {
         // The table's core invariant — one declaration per route — must be
-        // enforced AND testable; production call sites use `try!` so a
-        // duplicate still crashes at static-table construction.
+        // enforced AND testable; production call sites go through
+        // `EndpointTable.trusted(_:)`, which turns this error into a
+        // fatalError at static-table construction.
         let spec = EndpointSpec(.get, "/v1/dup")
         XCTAssertThrowsError(try EndpointTable([
             Endpoint(spec, handler: Self.okHandler),

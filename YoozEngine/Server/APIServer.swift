@@ -1329,7 +1329,7 @@ final class APIServer: ObservableObject {
         // from `EndpointSpecs`; the hand-written registrations these replace
         // are gone, so a converted route cannot drift between transports.
         register(
-            try! EndpointTable(
+            EndpointTable.trusted(
                 SessionEndpoints.endpoints()
                     + TouchUpEndpoints.pickerEndpoints()
                     + ModelManagementEndpoints.endpoints(

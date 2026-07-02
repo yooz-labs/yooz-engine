@@ -153,8 +153,9 @@ public struct Endpoint: Sendable {
 /// `(method, path)` — two declarations of one route, exactly what the table
 /// exists to prevent. A typed error (rather than a `precondition`) so the
 /// invariant is testable (`EndpointTableTests`); production call sites bind
-/// their static tables with `try!`, which keeps the same
-/// crash-at-first-use semantics a precondition would have.
+/// their static tables through `EndpointTable.trusted(_:)`, which converts
+/// it into a `fatalError` — the same crash-at-first-use semantics a
+/// precondition would have.
 public struct DuplicateEndpointError: Error, Sendable {
     /// The duplicated `EndpointSpec.key`.
     public let key: String
@@ -169,6 +170,24 @@ public struct EndpointTable: Sendable {
     private let parameterized: [Endpoint]
 
     public let endpoints: [Endpoint]
+
+    /// Build a table whose entries are statically known to be
+    /// duplicate-free — the production entry point for binding the static
+    /// transport tables. A duplicate spec is a programming error (two
+    /// declarations of one route, exactly what the table exists to
+    /// prevent), so it halts at table construction with the offending key
+    /// in the message rather than surfacing as a recoverable error. The
+    /// throwing `init` below remains the testable surface for the
+    /// invariant (`EndpointTableTests.testDuplicateSpecThrowsDuplicateEndpointError`).
+    public static func trusted(_ endpoints: [Endpoint]) -> EndpointTable {
+        do {
+            return try EndpointTable(endpoints)
+        } catch let error as DuplicateEndpointError {
+            fatalError("duplicate endpoint declaration: \(error.key)")
+        } catch {
+            fatalError("endpoint table construction failed: \(error)")
+        }
+    }
 
     /// - Throws: `DuplicateEndpointError` when two endpoints share a
     ///   `(method, path)` spec.
