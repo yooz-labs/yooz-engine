@@ -20,9 +20,32 @@ public actor TouchUpEngine {
 
     // MARK: - Singleton
 
-    public static let shared = TouchUpEngine()
+    /// Production singleton. Explicitly wired to `ModelSelectionStore.shared`
+    /// (the real, disk-backed instance under `EngineConfig.stateDirectory`)
+    /// so the persisted-selection contract (engine#226) is only real for
+    /// this instance — see `init(selectionStore:)`.
+    public static let shared = TouchUpEngine(selectionStore: .shared)
 
     // MARK: - Properties
+
+    /// Module key `ModelSelectionStore` / `EngineEventBus` use for
+    /// TouchUp's persisted selection + events. Stable — renaming changes
+    /// the persisted file's existing key (stranding a user's prior
+    /// selection) and breaks any subscriber filtering `EngineEvent.module`.
+    static let selectionStoreModule = "touchup"
+
+    /// Engine-owned persisted-selection store (engine#226). Defaults to a
+    /// throwaway, per-instance temp-file-backed store — NOT
+    /// `ModelSelectionStore.shared` — so a plain `TouchUpEngine()` (the
+    /// documented test-fresh-instance pattern above) never touches a
+    /// developer's real Application Support directory and never leaks
+    /// state between test instances. `.shared` overrides this to the real
+    /// production store.
+    private let selectionStore: ModelSelectionStore
+
+    /// Guards `restorePersistedSelectionIfNeeded()` so it runs at most
+    /// once per instance.
+    private var hasRestoredPersistedSelection = false
 
     /// The light model backend (Yooz-Light, Qwen2.5-0.5B)
     private var lightModel: MLXLLMBackend?
@@ -58,12 +81,32 @@ public actor TouchUpEngine {
     /// (idempotent dedup).
     private var inFlightLoadTasks: [LLMModelType: Task<Void, Error>] = [:]
 
+    /// Backing storage for `activeModel`. Defaults to `.yoozLight` so
+    /// callers that never `setActiveModel` see the pre-picker behaviour.
+    private var _activeModel: TouchUpModelSelection = .yoozLight
+
     /// Currently active TouchUp model. Drives `/v1/touchup` routing
     /// via `processWithActiveModel(...)` and is reflected back to
     /// clients through the picker API (`GET /v1/touchup/models`).
-    /// Defaults to `.yoozLight` so callers that never `setActiveModel`
-    /// see the pre-picker behaviour.
-    public private(set) var activeModel: TouchUpModelSelection = .yoozLight
+    ///
+    /// A computed `async` property (engine#226), not a plain stored one, so
+    /// EVERY read — including one that bypasses `availableModels()` /
+    /// `setActiveModel(Async)` / `processWithActiveModel` — restores the
+    /// persisted selection first. Several existing call sites read
+    /// `.activeModel` directly without calling any of those first (e.g.
+    /// `ModelManagementEndpoints`'s delete-guard, `/v1/llm/status`); those
+    /// would otherwise silently observe the compiled-in `.yoozLight`
+    /// default instead of a real persisted selection until some OTHER
+    /// route happened to run first. External call-site syntax is
+    /// unchanged (`await engine.activeModel` already required `await` —
+    /// actor property access always does), so this closes the gap with no
+    /// external API break.
+    public var activeModel: TouchUpModelSelection {
+        get async {
+            await restorePersistedSelectionIfNeeded()
+            return _activeModel
+        }
+    }
 
     /// Whether the engine has been preloaded
     public private(set) var isPreloaded: Bool = false
@@ -126,8 +169,21 @@ public actor TouchUpEngine {
     /// `LLMModule` consumers. Production code must go through `.shared` so
     /// the singleton contract holds; tests that need a fresh instance
     /// construct one directly under `@testable import LLMModule`.
-    init(bundleIdentifier: String = "live.yooz.engine") {
+    ///
+    /// `selectionStore`'s default constructs a fresh, isolated instance
+    /// PER CALL (a new temp-file path each time) — every plain
+    /// `TouchUpEngine()` test instance gets its own throwaway persistence,
+    /// never the shared production file. See the `selectionStore` property
+    /// doc for why this matters.
+    init(
+        bundleIdentifier: String = "live.yooz.engine",
+        selectionStore: ModelSelectionStore = ModelSelectionStore(
+            fileURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("touchup-selection-\(UUID().uuidString).json")
+        )
+    ) {
         self.bundleIdentifier = bundleIdentifier
+        self.selectionStore = selectionStore
     }
 
     // MARK: - Lifecycle
@@ -758,6 +814,7 @@ public actor TouchUpEngine {
     /// case is added to `TouchUpModelSelection` without updating
     /// this method's row list.
     public func availableModels() async -> [TouchUpModelInfo] {
+        await restorePersistedSelectionIfNeeded()
         let lightLoaded = await isLightModelLoaded
         let qualityLoaded = await isQualityModelLoaded
         let lightCached = await isLightModelCached
@@ -793,6 +850,14 @@ public actor TouchUpEngine {
     /// Build a single picker row from a selection + resolved load
     /// state. Centralises the mapping so a new selection case is a
     /// one-line addition (plus the `availableModels()` enumeration).
+    ///
+    /// Reads `_activeModel` (the private backing field), not the public
+    /// `activeModel` accessor: every caller of `row(for:loadState:)` is
+    /// `availableModels()`, which already ran
+    /// `restorePersistedSelectionIfNeeded()` before calling this, so
+    /// re-checking here would be redundant — and `row` stays a cheap
+    /// synchronous helper instead of needing `async` just to read a value
+    /// that's already current.
     private func row(
         for selection: TouchUpModelSelection,
         loadState: ModelLoadState
@@ -804,7 +869,7 @@ public actor TouchUpEngine {
             tier: selection.tier,
             sizeBytes: selection.estimatedSize,
             loadState: loadState,
-            isActive: activeModel == selection
+            isActive: _activeModel == selection
         )
     }
 
@@ -845,6 +910,7 @@ public actor TouchUpEngine {
         _ selection: TouchUpModelSelection,
         preload: Bool = true
     ) async throws -> TouchUpModelInfo {
+        await restorePersistedSelectionIfNeeded()
         switch selection {
         case .yoozLight:
             if preload {
@@ -884,14 +950,16 @@ public actor TouchUpEngine {
             foundationModelsBackend = backend
         }
 
-        activeModel = selection
-        logger.info("TouchUp active model set to \(selection.rawValue, privacy: .public)")
+        await recordActiveModel(selection)
 
         // Strict single-resident: now that the newly-selected tier is loaded
         // and active, drop every other tier so RAM tracks only the active
         // model. Done after the load above so a failed switch never leaves the
         // engine with nothing resident.
         await evictModelsExcept(selection)
+        await EngineEventBus.shared.publish(EngineEvent(
+            kind: .residencyChanged, module: Self.selectionStoreModule, modelId: selection.rawValue
+        ))
 
         // `availableModels()` always emits exactly one row per
         // selection (precondition'd above). The `first(where:)` is
@@ -899,6 +967,179 @@ public actor TouchUpEngine {
         // intentionally absent.
         let models = await availableModels()
         return models.first(where: { $0.isActive })!
+    }
+
+    // MARK: - Persisted selection + events (engine#226)
+
+    /// Restore the persisted active-model selection on first touch of this
+    /// instance. Idempotent — a no-op after the first call. Deliberately
+    /// NOT run from `init` (an actor's synchronous `init` cannot `await`
+    /// the store's file read); instead invoked from the `activeModel`
+    /// getter itself, so EVERY read restores — direct property access,
+    /// `availableModels()`, `setActiveModel(Async)`, and
+    /// `processWithActiveModel` alike — with no way for a caller to
+    /// observe the compiled-in `.yoozLight` default when a persisted
+    /// selection exists.
+    ///
+    /// Restoring only updates `_activeModel` — it never preloads weights.
+    /// The existing lazy-load contract (`process()` loads the light model
+    /// on first use; `processWithActiveModel` loads whichever tier is
+    /// active on first use) is unchanged; this just makes sure THAT lazy
+    /// load targets the right tier after a restart.
+    private func restorePersistedSelectionIfNeeded() async {
+        guard !hasRestoredPersistedSelection else { return }
+        hasRestoredPersistedSelection = true
+        guard let storedId = await selectionStore.activeId(for: Self.selectionStoreModule),
+              let selection = TouchUpModelSelection(rawValue: storedId)
+        else { return }
+        _activeModel = selection
+        logger.info(
+            "TouchUp active model restored from persistence: \(selection.rawValue, privacy: .public)"
+        )
+    }
+
+    /// Update `activeModel`, persist it (engine#226), and publish
+    /// `modelChanged`. Shared by both the blocking `setActiveModel` and the
+    /// non-blocking `setActiveModelAsync` so the two entry points can never
+    /// diverge on the persistence/eventing contract.
+    private func recordActiveModel(_ selection: TouchUpModelSelection) async {
+        _activeModel = selection
+        logger.info("TouchUp active model set to \(selection.rawValue, privacy: .public)")
+        await selectionStore.setActiveId(selection.rawValue, for: Self.selectionStoreModule)
+        await EngineEventBus.shared.publish(EngineEvent(
+            kind: .modelChanged, module: Self.selectionStoreModule, modelId: selection.rawValue
+        ))
+    }
+
+    /// Non-blocking counterpart to `setActiveModel(_:preload:)`
+    /// (engine#226): records + persists the selection and returns
+    /// immediately — the preload (when requested) runs on a detached
+    /// background `Task` whose progress and terminal state are observable
+    /// only through `EngineEventBus` (`loadStateChanged` /
+    /// `downloadProgress` / `residencyChanged`) or a follow-up
+    /// `GET /v1/touchup/models` poll, never through this call's return
+    /// value — which reflects state at the MOMENT of the call, before the
+    /// background load has had a chance to run.
+    ///
+    /// Foundation Models has no download to bound — its availability check
+    /// is a synchronous OS-capability probe, so it still runs inline here,
+    /// matching `setActiveModel`'s contract: an unsupported system throws
+    /// `LLMError.notAvailable` from THIS call (mapped to the route's 501
+    /// `model_unavailable`), not silently from the background task where
+    /// no caller could observe it.
+    @discardableResult
+    public func setActiveModelAsync(
+        _ selection: TouchUpModelSelection,
+        preload: Bool = true
+    ) async throws -> TouchUpModelInfo {
+        await restorePersistedSelectionIfNeeded()
+
+        if selection == .foundationModels {
+            let backend = foundationModelsBackend ?? FoundationModelsBackend()
+            guard backend.isAvailable() else {
+                throw LLMError.notAvailable(
+                    "Apple Intelligence is not available on this system. Requires macOS 26+ and an opted-in user."
+                )
+            }
+        }
+
+        await recordActiveModel(selection)
+        let rows = await availableModels()
+        let row = rows.first(where: { $0.isActive })!
+
+        guard preload else { return row }
+
+        Task { await self.preloadActiveSelectionInBackground(selection) }
+        return row
+    }
+
+    /// Background load + single-resident eviction for
+    /// `setActiveModelAsync`. Runs disconnected from the HTTP/in-process
+    /// request that triggered it — every observable outcome goes through
+    /// `EngineEventBus`, never a return value.
+    private func preloadActiveSelectionInBackground(_ selection: TouchUpModelSelection) async {
+        switch selection {
+        case .foundationModels:
+            // Availability was already validated synchronously in
+            // `setActiveModelAsync`; opening a `LanguageModelSession` is
+            // cheap (no download), so this still completes quickly, but
+            // stays off the request path for uniformity with the MLX tiers.
+            do {
+                let backend = foundationModelsBackend ?? FoundationModelsBackend()
+                if await !backend.isLoaded {
+                    try await backend.load()
+                }
+                foundationModelsBackend = backend
+                await publishLoadStateChanged(selection, state: .loaded)
+            } catch {
+                await publishLoadStateChanged(
+                    selection, state: .available, message: error.localizedDescription
+                )
+                return
+            }
+        case .yoozLight, .yoozQuality:
+            guard let modelType = LLMModelType(rawValue: selection.rawValue) else { return }
+            let task = enqueueLoad(modelType)
+            let progressWatcher = Task { await self.watchDownloadProgress(modelType, selection: selection) }
+            do {
+                try await task.value
+                progressWatcher.cancel()
+                await publishLoadStateChanged(selection, state: .loaded)
+            } catch {
+                progressWatcher.cancel()
+                // A cooperative cancellation (e.g. a rapid picker
+                // double-switch cancelling this tier's in-flight load via
+                // `unload`) is not a user-facing failure — omit `message`
+                // so the picker UI doesn't render a spurious error toast.
+                let message = error is CancellationError ? nil : error.localizedDescription
+                await publishLoadStateChanged(selection, state: .available, message: message)
+                return
+            }
+        }
+
+        // Only reached on a successful load. Guarded on `activeModel ==
+        // selection` so a rapid picker double-switch (tier B selected
+        // while tier A's background load is still finishing) does not
+        // have A's late completion evict the tier the user has since
+        // switched to.
+        guard await activeModel == selection else { return }
+        await evictModelsExcept(selection)
+        await EngineEventBus.shared.publish(EngineEvent(
+            kind: .residencyChanged, module: Self.selectionStoreModule, modelId: selection.rawValue
+        ))
+    }
+
+    /// Poll `downloadProgress(for:)` while a background load is in flight
+    /// and publish throttled `downloadProgress` events. Cancelled by the
+    /// caller once the load's terminal outcome is known. Polling (rather
+    /// than a push callback from `MLXLLMBackend`) keeps this change
+    /// contained to `TouchUpEngine` — `MLXLLMBackend` already exposes the
+    /// live fraction via `downloadProgress(for:)` (used by `/v1/llm/status`
+    /// today), so no new callback plumbing is needed.
+    private func watchDownloadProgress(
+        _ modelType: LLMModelType, selection: TouchUpModelSelection
+    ) async {
+        var lastPublished: Double = -1
+        while !Task.isCancelled {
+            let fraction = await downloadProgress(for: modelType) ?? 0
+            if fraction > 0, fraction < 1, fraction - lastPublished >= 0.02 {
+                lastPublished = fraction
+                await EngineEventBus.shared.publish(EngineEvent(
+                    kind: .downloadProgress, module: Self.selectionStoreModule,
+                    modelId: selection.rawValue, progress: fraction
+                ))
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
+
+    private func publishLoadStateChanged(
+        _ selection: TouchUpModelSelection, state: ModelLoadState, message: String? = nil
+    ) async {
+        await EngineEventBus.shared.publish(EngineEvent(
+            kind: .loadStateChanged, module: Self.selectionStoreModule,
+            modelId: selection.rawValue, loadState: state, message: message
+        ))
     }
 
     /// Process text through the currently active model. Used by the
@@ -918,7 +1159,8 @@ public actor TouchUpEngine {
         replacements: [(original: String, replacement: String)] = [],
         workloadClass: MLXWorkloadClass = .background
     ) async -> TouchUpProcessor.ProcessResult {
-        switch activeModel {
+        await restorePersistedSelectionIfNeeded()
+        switch await activeModel {
         case .foundationModels:
             return await processWithFoundationModels(text: text, mode: mode)
         case .yoozLight:

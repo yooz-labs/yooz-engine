@@ -33,6 +33,15 @@ public enum TouchUpEndpoints {
             // defaults to true so a one-shot picker change warms the model
             // before the next `/v1/touchup` call. Returns the new active row
             // so clients don't need a follow-up GET.
+            //
+            // Non-blocking (engine#226): routes through
+            // `setActiveModelAsync`, which records + persists the selection
+            // and returns immediately — a multi-GB download never holds the
+            // HTTP/in-process request open (the pre-#226 contract, which
+            // timed out on slow links; engine#125 deferred fixing this for
+            // the analogous STT picker). Progress and the eventual
+            // loaded/failed outcome arrive via `/v1/events`, not this
+            // response.
             Endpoint(EndpointSpecs.touchUpSetModel) { request in
                 let body: TouchUpSetModelRequest
                 do {
@@ -52,7 +61,7 @@ public enum TouchUpEndpoints {
                 }
 
                 do {
-                    let active = try await TouchUpEngine.shared.setActiveModel(
+                    let active = try await TouchUpEngine.shared.setActiveModelAsync(
                         selection,
                         preload: body.preload ?? true
                     )
