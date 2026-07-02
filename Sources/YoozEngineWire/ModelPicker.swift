@@ -1,5 +1,5 @@
 // ModelPicker.swift
-// EngineCore
+// YoozEngineWire
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
@@ -9,8 +9,7 @@ import Foundation
 /// future). Module-neutral name — earlier `TouchUpModelTier` was
 /// renamed in #99 because the second adopter (STT) made the
 /// TouchUp prefix nonsensical when STT backends carry a `tier`
-/// field. The old name is retained as a typealias on the SDK for
-/// one release to ease consumer migration.
+/// field.
 ///
 /// `unknown` is the forward-compat fallback: an SDK consumer
 /// running against a newer engine that ships a fifth tier sees

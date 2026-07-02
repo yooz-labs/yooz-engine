@@ -1,5 +1,5 @@
 // LoadState.swift
-// EngineCore
+// YoozEngineWire
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
@@ -7,12 +7,10 @@ import Foundation
 
 /// Lifecycle state for an in-flight model load (engine#125).
 ///
-/// Lives in `EngineCore` so both the engine app target and the
-/// STT/LLM modules can produce values of this type, plus the
-/// `YoozEngineClient` SDK consumes the wire shape with matching
-/// `rawValue`s. Decode-safe: pre-#125 servers omit the field
-/// entirely, so SDK consumers see `state == nil` and infer state
-/// from `loaded` + `progress`.
+/// Lives in `YoozEngineWire` so the server, the SDK, and the in-process
+/// transport all produce/consume the exact same wire type. Decode-safe:
+/// pre-#125 servers omit the field entirely, so consumers see `state == nil`
+/// and infer state from `loaded` + `progress`.
 ///
 /// Transitions per load:
 /// - `.idle → .loading` when a load is enqueued

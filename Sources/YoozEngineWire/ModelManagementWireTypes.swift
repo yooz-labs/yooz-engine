@@ -1,15 +1,20 @@
+// ModelManagementWireTypes.swift
+// YoozEngineWire
+//
+// Copyright 2026 Yooz Labs. All rights reserved.
+
 import Foundation
 
 /// One row in the model-management inventory (`GET /v1/models`).
 ///
 /// Unlike the per-module picker rows (`TouchUpModelInfo`, `STTBackendInfo`),
 /// this is a disk-hygiene view: `sizeBytes` is the **real on-disk footprint**
-/// the engine measured (not a static estimate), and `deletable` says whether the
-/// app may offer a Delete button for it. The app's "Manage Models" tab renders
-/// these directly.
+/// the engine measured (not a static estimate), and `deletable` says whether
+/// the app may offer a Delete button for it.
 public struct ManagedModelInfo: Codable, Sendable, Equatable {
     /// Stable delete handle: an LLM model id (e.g. `yooz-quality-v2`) or the
-    /// HuggingFace hub directory name (`models--<ns>--<repo>`) for a swept model.
+    /// HuggingFace hub directory name (`models--<ns>--<repo>`) for a swept
+    /// model.
     public let id: String
     /// Owning module: `llm`, `stt`, etc. Drives grouping/labels in the UI.
     public let module: String
@@ -68,7 +73,8 @@ public struct DeleteModelResult: Codable, Sendable, Equatable {
     }
 }
 
-/// Response for `POST /v1/models/cleanup` — the one-shot disk-hygiene migration.
+/// Response for `POST /v1/models/cleanup` — the one-shot disk-hygiene
+/// migration.
 public struct ModelCleanupResult: Codable, Sendable, Equatable {
     public let totalReclaimedBytes: Int64
     /// Bytes reclaimed per hub repo directory name.

@@ -136,8 +136,9 @@ final class LLMModuleTests: XCTestCase {
     // MARK: - TouchUpMode (always runs)
 
     func testTouchUpModeRawValues() {
-        // Raw values are stable across the module ↔ wire boundary; APIServer
-        // round-trips them through ServerTouchUpMode.rawValue -> asDomain.
+        // Raw values are the wire contract: since #225 there is a single
+        // `YoozEngineWire.TouchUpMode` shared by the server routes, the SDK,
+        // and this module — renaming a rawValue is a wire break.
         XCTAssertEqual(TouchUpMode.off.rawValue, "off")
         XCTAssertEqual(TouchUpMode.light.rawValue, "light")
         XCTAssertEqual(TouchUpMode.standard.rawValue, "standard")

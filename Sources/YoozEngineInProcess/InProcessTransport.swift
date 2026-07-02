@@ -232,10 +232,10 @@ public final class InProcessTransport: EngineTransport {
         let vadReady = await VADEngine.shared.isLoaded
         let sttReady = YoozSTTEngine.shared.isRunning
 
-        let status = SDKHealthStatus(
+        let status = HealthStatus(
             status: "ok",
             version: EngineConfig.version,
-            modules: SDKModuleStatus(
+            modules: ModuleStatus(
                 stt: sttReady,
                 llm: llmReady,
                 touchup: llmReady,
@@ -250,11 +250,11 @@ public final class InProcessTransport: EngineTransport {
 
     private func handleModules() async throws -> Data {
         let modules = await ModuleRegistry.shared.all()
-        var manifests: [SDKModuleManifest] = []
+        var manifests: [ModuleManifest] = []
         for module in modules {
             let health = await module.healthCheck()
             manifests.append(
-                SDKModuleManifest(
+                ModuleManifest(
                     name: type(of: module).name,
                     version: EngineConfig.version,
                     loaded: health.loaded,
@@ -265,7 +265,7 @@ public final class InProcessTransport: EngineTransport {
         }
         manifests.sort { $0.name < $1.name }
 
-        let response = SDKModulesResponse(
+        let response = ModulesResponse(
             engineVersion: EngineConfig.version,
             buildVariant: BuildVariant.current.rawValue,
             modules: manifests
@@ -287,7 +287,7 @@ public final class InProcessTransport: EngineTransport {
             result.sessionId, result.fanoutCount
         )
         return try JSONEncoder().encode(
-            SessionBeginBody(sessionId: result.sessionId, ts: result.ts)
+            SessionBeginResponse(sessionId: result.sessionId, ts: result.ts)
         )
     }
 
@@ -303,13 +303,13 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleGrammar(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(GrammarBody.self, from: body)
+        let request = try JSONDecoder().decode(GrammarCheckRequest.self, from: body)
         let outcome = await GrammarEngine.shared.check(
             text: request.text,
             categories: request.categories,
             usePOS: request.usePOS ?? true
         )
-        let response = SDKGrammarCheckResponse(
+        let response = GrammarCheckResponse(
             result: outcome.result,
             correctionsApplied: outcome.correctionsApplied,
             ruleCount: GrammarEngine.shared.ruleCount
@@ -318,7 +318,7 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleVAD(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(VADBody.self, from: body)
+        let request = try JSONDecoder().decode(VADRequest.self, from: body)
         if await !VADEngine.shared.isLoaded {
             try await VADEngine.shared.load()
         }
@@ -326,9 +326,9 @@ public final class InProcessTransport: EngineTransport {
             samples: request.samples,
             resetState: request.reset ?? true
         )
-        let response = SDKVADResponse(
+        let response = VADResponse(
             segments: segments.map {
-                SDKSpeechSegment(
+                SpeechSegment(
                     startMs: $0.startMs,
                     endMs: $0.endMs,
                     probability: $0.probability
@@ -339,7 +339,13 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleBatch(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(BatchBody.self, from: body)
+        let request = try JSONDecoder().decode(BatchSTTRequest.self, from: body)
+        // A missing `language`/`mode` key decodes as `"en"`/`"normal"` — the
+        // defaults live on the canonical `BatchSTTRequest` itself, so this
+        // handler and the loopback route agree by construction (#225 review).
+        // An unknown language string is still a hard 400; an unknown mode
+        // string coerces to `.normal` for parity with the loopback server,
+        // which also coerces rather than 400s.
         guard let language = STTModule.STTLanguage.fromCode(request.language) else {
             throw YoozEngineError.serverError(
                 statusCode: 400,
@@ -347,8 +353,6 @@ public final class InProcessTransport: EngineTransport {
                 message: "Unknown STT language '\(request.language)'"
             )
         }
-        // Unknown mode falls back to `.normal` for parity with the loopback
-        // server (APIServer `/v1/stt/batch`), which also coerces rather than 400s.
         let mode = STTModule.AudioMode(rawValue: request.mode) ?? .normal
         try await YoozSTTEngine.shared.start(language: language)
 
@@ -418,7 +422,11 @@ public final class InProcessTransport: EngineTransport {
     /// The same lazy `start()` also runs on the first `batch`/stream call, so
     /// this endpoint is a pre-warm, not a prerequisite, for transcription.
     private func handleSTTLoad(_ body: Data, wait: Bool) async throws -> Data {
-        let request = try JSONDecoder().decode(STTLoadBody.self, from: body)
+        let request = try JSONDecoder().decode(STTLoadRequest.self, from: body)
+        // A missing `language` key decodes as `"en"` — the default lives on
+        // the canonical `STTLoadRequest` itself, so this handler and the
+        // loopback route agree by construction (#225 review). An unknown
+        // language string is still a hard 400.
         guard let language = STTModule.STTLanguage.fromCode(request.language) else {
             throw YoozEngineError.serverError(
                 statusCode: 400,
@@ -426,6 +434,10 @@ public final class InProcessTransport: EngineTransport {
                 message: "Unknown STT language '\(request.language)'"
             )
         }
+        // Honored by the MLX branch below; parity with the loopback route's
+        // `runSTTLoad(language:allowFetch:)`. Apple STT ignores the flag —
+        // its model is supplied by the OS.
+        let allowFetch = request.allowFetch ?? true
         switch YoozSTTEngine.shared.currentBackend {
         case .appleSTT:
             guard let appleLang = AppleSTTLanguage.from(rawCode: request.language) else {
@@ -441,7 +453,9 @@ public final class InProcessTransport: EngineTransport {
             throw YoozEngineError.unsupportedOperation(operation: "load qwen3 preview")
         case .parakeet, .fastConformer:
             let task = await YoozSTTEngine.shared.enqueueLoad(language: language) {
-                try await YoozSTTEngine.shared.start(language: language)
+                try await YoozSTTEngine.shared.start(
+                    language: language, allowFetch: allowFetch
+                )
             }
             if wait {
                 try await awaitLoadTask(
@@ -462,7 +476,7 @@ public final class InProcessTransport: EngineTransport {
     }
 
     private func handleLLM(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(LLMBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMGenerateRequest.self, from: body)
         // An unrecognized model name is a hard error (parity with the loopback
         // server's `invalid_model` 400) — never a silent downgrade to Light,
         // which would return a response whose `model` field lies about what ran.
@@ -483,9 +497,9 @@ public final class InProcessTransport: EngineTransport {
             prompt: request.prompt,
             systemPrompt: request.systemPrompt ?? "",
             modelType: modelType,
-            workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
+            workloadClass: request.workloadClass ?? .background
         )
-        let response = SDKLLMGenerateResponse(
+        let response = LLMGenerateResponse(
             text: text,
             model: modelType.rawValue,
             tokensGenerated: nil,
@@ -497,13 +511,13 @@ public final class InProcessTransport: EngineTransport {
     // MARK: - Status
 
     private func handleSTTStatus() async throws -> Data {
-        let status: SDKSTTStatus
+        let status: STTStatus
         if YoozSTTEngine.shared.currentBackend == .appleSTT {
             let loaded = await AppleSTTEngine.shared.isLoaded
             let language = await AppleSTTEngine.shared.currentLanguage.rawValue
             let streaming = await AppleSTTEngine.shared.isStreaming
             // Apple STT has no fetcher/materialize lifecycle; map loaded → ready.
-            status = SDKSTTStatus(
+            status = STTStatus(
                 loaded: loaded, language: language, streaming: streaming,
                 progress: nil, state: loaded ? .ready : .idle, lastError: nil
             )
@@ -530,12 +544,12 @@ public final class InProcessTransport: EngineTransport {
             // "download done, materializing" -> nil (the STT analog of the LLM
             // `< 1` filter).
             let resolvedState: EngineCore.LoadState = loaded ? .ready : engineState
-            status = SDKSTTStatus(
+            status = STTStatus(
                 loaded: loaded,
                 language: engine.currentLanguage.rawValue,
                 streaming: engine.isStreaming,
                 progress: loaded ? nil : (rawProgress > 0 && rawProgress < 1 ? rawProgress : nil),
-                state: SDKLoadState(rawValue: resolvedState.rawValue),
+                state: LoadState(rawValue: resolvedState.rawValue),
                 lastError: loaded ? nil : engineError
             )
         }
@@ -590,9 +604,9 @@ public final class InProcessTransport: EngineTransport {
             engineState = loaded ? .ready : .idle
             lastError = nil
         }
-        let status = SDKLLMStatus(
+        let status = LLMStatus(
             loaded: loaded, modelId: active.rawValue, progress: progress,
-            state: SDKLoadState(rawValue: engineState.rawValue),
+            state: LoadState(rawValue: engineState.rawValue),
             lastError: lastError
         )
         return try JSONEncoder().encode(status)
@@ -602,14 +616,14 @@ public final class InProcessTransport: EngineTransport {
 
     private func handleSTTLanguages() async throws -> Data {
         let infos = YoozSTTEngine.shared.availableLanguages.map {
-            SDKSTTLanguageInfo(
+            STTLanguageInfo(
                 code: $0.rawValue,
                 name: $0.displayName,
                 implemented: $0.isImplemented,
                 family: $0.modelFamily.rawValue
             )
         }
-        return try JSONEncoder().encode(SDKSTTLanguagesResponse(languages: infos))
+        return try JSONEncoder().encode(STTLanguagesResponse(languages: infos))
     }
 
     private func handleSTTEngine() async throws -> Data {
@@ -619,12 +633,12 @@ public final class InProcessTransport: EngineTransport {
             sttBackendInfo($0, active: active, activeLoaded: activeLoaded)
         }
         return try JSONEncoder().encode(
-            SDKSTTBackendsResponse(backends: backends, activeId: active.rawValue)
+            STTBackendsResponse(backends: backends, activeId: active.rawValue)
         )
     }
 
     private func handleSetSTTEngine(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(SetBackendBody.self, from: body)
+        let request = try JSONDecoder().decode(STTSetBackendRequest.self, from: body)
         guard let backend = STTModule.STTBackendID(rawValue: request.id) else {
             throw YoozEngineError.serverError(
                 statusCode: 400, code: "invalid_backend",
@@ -641,13 +655,13 @@ public final class InProcessTransport: EngineTransport {
         _ backend: STTModule.STTBackendID,
         active: STTModule.STTBackendID,
         activeLoaded: Bool
-    ) -> SDKSTTBackendInfo {
+    ) -> STTBackendInfo {
         let isActive = backend == active
-        return SDKSTTBackendInfo(
+        return STTBackendInfo(
             id: backend.rawValue,
             displayName: backend.displayName,
             description: backend.pickerDescription,
-            tier: SDKModelTier(rawValue: backend.pickerTier.rawValue) ?? .unknown,
+            tier: ModelTier(rawValue: backend.pickerTier.rawValue) ?? .unknown,
             sizeBytes: backend.estimatedDownloadMB.map { Int64($0) * 1_000_000 },
             loadState: (isActive && activeLoaded) ? .loaded : .available,
             isActive: isActive,
@@ -674,40 +688,42 @@ public final class InProcessTransport: EngineTransport {
             )
         }
         return try JSONEncoder().encode(
-            SDKLLMModelsResponse(current: active.rawValue, available: available)
+            LLMModelsResponse(current: active.rawValue, available: available)
         )
     }
 
     private func handleSetLLMModel(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMModelSelection.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         await TouchUpEngine.shared.setPreferredModel(modelType)
         return try await handleLLMModels()
     }
 
     private func handleLLMPreload(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMModelSelection.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         try await TouchUpEngine.shared.preloadModel(modelType)
         return try JSONEncoder().encode(await llmModelInfo(modelType))
     }
 
     private func handleLLMUnload(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(ModelSelectionBody.self, from: body)
+        let request = try JSONDecoder().decode(LLMModelSelection.self, from: body)
         let modelType = try resolveLLMModel(request.model)
         await TouchUpEngine.shared.unload(modelType)
         return try JSONEncoder().encode(await llmModelInfo(modelType))
     }
 
     /// Resolve the optional GPU-admission class from its raw wire string
-    /// (engine#228). Nil/omitted means today's default (`.background`); an
-    /// unrecognized value is a hard 400 — parity with the loopback server
-    /// (whose typed `Decodable` enum rejects unknown values as
-    /// `invalid_request`) and with this transport's own mode handling
-    /// ("an unknown mode is a hard error"): a declared scheduling class is
-    /// explicit caller intent, and silently downgrading a mistyped
+    /// (engine#228) for the `TouchUpBody` decode shim below. Nil/omitted means
+    /// today's default (`.background`); an unrecognized value is a hard 400 —
+    /// parity with the loopback server (whose typed `Decodable` enum rejects
+    /// unknown values as `invalid_request`) and with this transport's own mode
+    /// handling ("an unknown mode is a hard error"): a declared scheduling
+    /// class is explicit caller intent, and silently downgrading a mistyped
     /// `.interactive` to `.background` would make the request queue behind
-    /// other work with no trace of why.
+    /// other work with no trace of why. (`handleLLM` needs no equivalent: it
+    /// decodes the canonical `LLMGenerateRequest`, whose typed
+    /// `workloadClass` field rejects unknown values at decode.)
     private static func resolveWorkloadClass(
         _ raw: String?
     ) throws -> MLXWorkloadClass {
@@ -726,10 +742,8 @@ public final class InProcessTransport: EngineTransport {
         let request = try JSONDecoder().decode(TouchUpBody.self, from: body)
         // The requested mode is explicit caller intent (off/light/standard/full),
         // not a forward-compat wire value — an unknown mode is a hard error, never
-        // a silent run at a different cleanup level. (Both enums share rawValues.)
-        guard let engineMode = LLMModule.TouchUpMode(rawValue: request.mode),
-              let sdkMode = SDKTouchUpMode(rawValue: request.mode)
-        else {
+        // a silent run at a different cleanup level.
+        guard let mode = TouchUpMode(rawValue: request.mode) else {
             throw YoozEngineError.serverError(
                 statusCode: 400, code: "invalid_mode",
                 message: "Unknown TouchUp mode '\(request.mode)'"
@@ -743,12 +757,12 @@ public final class InProcessTransport: EngineTransport {
         // lazy-loads on first use (mirrors the STT lazy-load).
         let result = await TouchUpEngine.shared.processWithActiveModel(
             text: request.text,
-            mode: engineMode,
+            mode: mode,
             workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
         )
-        let response = SDKTouchUpResponse(
+        let response = TouchUpResponse(
             result: result.text,
-            mode: sdkMode,
+            mode: mode,
             processingTimeMs: Int(result.latencyMs),
             modelUsed: result.modelUsed.rawValue,
             warnings: result.fallbackReason.map { [$0] }
@@ -759,15 +773,14 @@ public final class InProcessTransport: EngineTransport {
     private func handleTouchUpModels() async throws -> Data {
         let models = await TouchUpEngine.shared.availableModels()
         let active = await TouchUpEngine.shared.activeModel
-        let mapped = models.map(touchUpModelInfo)
-        let activeId = mapped.first(where: \.isActive)?.id ?? active.rawValue
+        let activeId = models.first(where: \.isActive)?.id ?? active.rawValue
         return try JSONEncoder().encode(
-            SDKTouchUpModelsResponse(models: mapped, activeId: activeId)
+            TouchUpModelsResponse(models: models, activeId: activeId)
         )
     }
 
     private func handleSetTouchUpModel(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(SetModelBody.self, from: body)
+        let request = try JSONDecoder().decode(TouchUpSetModelRequest.self, from: body)
         guard let selection = TouchUpModelSelection(rawValue: request.id) else {
             throw YoozEngineError.serverError(
                 statusCode: 400, code: "invalid_model",
@@ -777,7 +790,7 @@ public final class InProcessTransport: EngineTransport {
         let info = try await TouchUpEngine.shared.setActiveModel(
             selection, preload: request.preload ?? true
         )
-        return try JSONEncoder().encode(touchUpModelInfo(info))
+        return try JSONEncoder().encode(info)
     }
 
     // MARK: - Model management (disk hygiene)
@@ -923,90 +936,27 @@ public final class InProcessTransport: EngineTransport {
         )
     }
 
-    private func touchUpModelInfo(_ info: LLMModule.TouchUpModelInfo) -> SDKTouchUpModelInfo {
-        SDKTouchUpModelInfo(
-            id: info.id,
-            displayName: info.displayName,
-            description: info.description,
-            tier: SDKModelTier(rawValue: info.tier.rawValue) ?? .unknown,
-            sizeBytes: info.sizeBytes,
-            loadState: SDKModelLoadState(rawValue: info.loadState.rawValue) ?? .unavailable,
-            isActive: info.isActive
-        )
-    }
 }
 
-// MARK: - Wire request mirrors
+// MARK: - TouchUp mode decode shim
 //
-// Decode structs matching the keys each SDK sub-client encodes. Mirrors (rather
-// than the SDK request types) because several SDK request structs are internal
-// to the SDK module; the field names/keys here are the wire contract.
-
-private struct GrammarBody: Decodable {
-    let text: String
-    let categories: [String]?
-    let usePOS: Bool?
-}
-
-private struct VADBody: Decodable {
-    let samples: [Float]
-    let reset: Bool?
-}
-
-private struct BatchBody: Decodable {
-    let samples: [Float]
-    let language: String
-    let mode: String
-    let aligned: Bool?
-}
-
-private struct STTLoadBody: Decodable {
-    let language: String
-}
-
-private struct LLMBody: Decodable {
-    let prompt: String
-    let model: String?
-    let systemPrompt: String?
-    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). Kept as
-    /// a plain `String?` at the decode layer; `resolveWorkloadClass` maps
-    /// nil/empty to `.background` and rejects unknown values with a 400
-    /// (see its doc for the parity rationale).
-    let workloadClass: String?
-}
-
-private struct SetBackendBody: Decodable {
-    let id: String
-    let preload: Bool?
-}
-
-private struct ModelSelectionBody: Decodable {
-    let model: String
-}
+// `TouchUpBody` stays a local, minimal decode struct rather than the
+// canonical `TouchUpRequest` (#225): `TouchUpRequest.mode` is the strict
+// `TouchUpMode` enum, whose decode failure on an unrecognized string would
+// surface as an opaque `DecodingError` instead of the `invalid_mode`
+// `YoozEngineError.serverError` this handler has always returned. Decoding
+// the raw string here and resolving it against `TouchUpMode(rawValue:)`
+// explicitly preserves that error contract byte-for-byte. Every other
+// former mirror struct in this section decoded a shape with no such
+// custom-error behavior riding on it, so those were deleted outright in
+// favor of the shared `YoozEngineWire` request types.
 
 private struct TouchUpBody: Decodable {
     let text: String
     let mode: String
     let language: String?
-    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). See
-    /// `LLMBody.workloadClass` — same decode/resolve split.
+    /// Raw wire value of `EngineCore.MLXWorkloadClass` (engine#228). Kept as
+    /// a plain `String?` at the decode layer; `resolveWorkloadClass` maps
+    /// nil/empty to `.background` and rejects unknown values with a 400.
     let workloadClass: String?
-}
-
-private struct SetModelBody: Decodable {
-    let id: String
-    let preload: Bool?
-}
-
-// MARK: - Wire response mirrors
-//
-// Encode structs matching the keys the SDK sub-client (or, for `/v1/session`,
-// the raw `EngineTransport.post` caller) decodes. Mirrors the app-target
-// `SessionBeginResponse` (`YoozEngine/Server/APITypes.swift`), which cannot be
-// reused directly here because it conforms to Hummingbird's `ResponseCodable`,
-// a protocol not available to a plain SPM target.
-
-private struct SessionBeginBody: Encodable {
-    let sessionId: String
-    let ts: String
 }

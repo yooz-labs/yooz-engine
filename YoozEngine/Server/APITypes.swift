@@ -6,6 +6,24 @@ import InfiniteModule
 #if canImport(LLMModule)
 import LLMModule
 #endif
+// Explicit import (redundant with `EngineCore`'s re-export for every other
+// wire type) needed only to spell the qualified `YoozEngineWire.LLMModelInfo`
+// below: `LLMModule` has its own internal `LLMModelInfo` domain type
+// (`TouchUp/TouchUpEngine.swift`, fields `type` / `isLoaded` / `isCached`),
+// so the bare name is ambiguous wherever both modules are imported together.
+import YoozEngineWire
+
+// Every request/response DTO that also crosses the SDK or the in-process
+// transport now lives once in `YoozEngineWire` (#225), imported here
+// transitively via `EngineCore`'s re-export
+// (`Sources/EngineCore/WireReexport.swift`). This file holds:
+//   - Hummingbird `ResponseEncodable`/`ResponseCodable` conformances for
+//     those shared types (a wire-transport concern, not a `YoozEngineWire`
+//     concern — that target stays dependency-free, so it can't import
+//     Hummingbird itself).
+//   - Types that are genuinely server-only: the `/v1/health` envelope, the
+//     structured error envelope, the STT WebSocket message frames, and the
+//     legacy `POST /v1/stt/engine` decode shim.
 
 struct HealthResponse: ResponseCodable {
     let status: String
@@ -21,6 +39,16 @@ struct HealthResponse: ResponseCodable {
 /// `unavailable`) so clients can render a spinner or a neutral tag
 /// instead of a red dot. See `ModuleReadiness` for the wire-level
 /// rawValues clients should branch on.
+///
+/// Not moved to `YoozEngineWire` (#225): `detail`'s value type
+/// (`ModuleDetail`) lives in the app target's `ModuleEagerLoader.swift`,
+/// which is eager-load diagnostics machinery, not a plain DTO — pulling it
+/// into the dependency-free wire target would need moving that machinery
+/// too, which is out of scope for the picker / models-status-modules /
+/// STT-LLM-TouchUp-Grammar-VAD-bodies families #225 covers. The SDK's
+/// `HealthStatus`/`ModuleStatus` (a strict subset — no `detail`) stays a
+/// separate, intentionally different shape; it decodes this response fine
+/// since Codable ignores the extra key.
 struct EngineModules: Codable {
     let stt: Bool
     let llm: Bool
@@ -35,289 +63,95 @@ struct EngineModules: Codable {
     let detail: ModuleDetailMap
 }
 
-/// `GET /v1/models` — the model-management inventory (disk hygiene). Keys mirror
-/// the SDK's `ManagedModelsResponse`/`ManagedModelInfo` so the client decodes it
-/// directly. This supersedes the prior loaded-models-only shape (which had no
-/// consumer).
-struct ModelsResponse: ResponseCodable {
-    let models: [ModelInfo]
-}
-
-struct ModelInfo: Codable {
-    let id: String
-    let module: String
-    let displayName: String
-    let sizeBytes: Int64
-    let cached: Bool
-    let loaded: Bool
-    let isActive: Bool
-    let deletable: Bool
-}
-
-/// `DELETE /v1/models/:id`.
-struct DeleteModelResponse: ResponseCodable {
-    let id: String
-    let reclaimedBytes: Int64
-}
-
-/// `POST /v1/models/cleanup`.
-struct ModelCleanupResponse: ResponseCodable {
-    let totalReclaimedBytes: Int64
-    let perRepo: [String: Int64]
-}
-
 struct ErrorResponse: ResponseCodable {
     let error: String
     let code: String
 }
 
-// MARK: - Session Types
-
-/// Response for `POST /v1/session/begin` (engine issue #114).
-///
-/// `sessionId` is a fresh UUID per call. Engine state itself doesn't pin to
-/// the value — `begin` is idempotent and unconditionally fans out
-/// `resetForNewSession()` to every `SessionResettable` module — but
-/// returning a UUID lets consumer apps tag their own logs / metrics so a
-/// recording can be correlated end-to-end across engine + client traces.
-/// `ts` is an ISO-8601 UTC timestamp captured server-side at fan-out start.
-struct SessionBeginResponse: ResponseCodable {
-    let sessionId: String
-    let ts: String
-}
-
-// MARK: - STT Types
-
-struct BatchSTTRequest: Decodable {
-    let samples: [Float]
-    let language: String?
-    let mode: String?
-    /// Request per-token timestamps in the response.
-    ///
-    /// When `true`, the handler routes to each backend's alignment-aware
-    /// entry point (`YoozSTTEngine.batchTranscribeAligned` for MLX,
-    /// `AppleSTTEngine.batchTranscribeAligned` for Apple STT) and returns
-    /// `BatchSTTResponse.tokens`. Absent / `false` keeps today's
-    /// token-less behaviour byte-identical with v0.5.x clients.
-    let aligned: Bool?
-}
-
-struct BatchSTTResponse: ResponseCodable {
-    let text: String
-    let finalized: String
-    let draft: String
-    let language: String
-    /// Non-nil iff the request set `aligned = true`. Timestamps are in
-    /// seconds from the start of the submitted audio buffer. `encodeIfPresent`
-    /// keeps the field off the wire for non-aligned responses so v0.5.x
-    /// clients see byte-identical traffic.
-    let tokens: [AlignedTokenWire]?
-
-    init(
-        text: String,
-        finalized: String,
-        draft: String,
-        language: String,
-        tokens: [AlignedTokenWire]? = nil
-    ) {
-        self.text = text
-        self.finalized = finalized
-        self.draft = draft
-        self.language = language
-        self.tokens = tokens
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case text, finalized, draft, language, tokens
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(text, forKey: .text)
-        try container.encode(finalized, forKey: .finalized)
-        try container.encode(draft, forKey: .draft)
-        try container.encode(language, forKey: .language)
-        try container.encodeIfPresent(tokens, forKey: .tokens)
-    }
-}
-
-/// Wire-level aligned-token shape for `/v1/stt/batch` with `aligned=true`.
-///
-/// Mirrors `YoozEngineClient.AlignedToken` exactly (text + start + end as
-/// seconds). Engine-side `AlignedToken` types from STTModule
-/// (`start + duration`) and AppleSTTModule (derived from
-/// `SFTranscriptionSegment`) are both mapped into this shape at the route
-/// boundary so the SDK surface stays backend-agnostic.
-struct AlignedTokenWire: Codable, Sendable {
-    let text: String
-    let start: Float
-    let end: Float
-}
-
-struct STTLanguagesResponse: ResponseCodable {
-    let languages: [STTLanguageInfo]
-}
-
-struct STTLanguageInfo: Codable {
-    let code: String
-    let name: String
-    let implemented: Bool
-    let family: String
-}
-
-struct STTLoadRequest: Decodable {
-    let language: String?
-    /// When true (or unset), the engine fetches the model from
-    /// Hugging Face if no local snapshot is staged. When false, the
-    /// load fails with `model_not_cached` rather than touching the
-    /// network. Honored by every backend that owns a first-run fetch
-    /// path (Parakeet via the shared HF cache, plus the
-    /// `qwen3_asr_preview` URLSession fetcher). Apple STT ignores
-    /// the flag — its model is supplied by the OS.
-    let allowFetch: Bool?
-}
-
-struct LLMStatusResponse: ResponseCodable {
-    /// True if the active LLM tier (or any tier) has finished loading.
-    let loaded: Bool
-    /// Wire id of the preferred LLM model
-    /// (e.g. `"yooz-light-v2"`).
-    let modelId: String?
-    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
-    /// download for the preferred LLM tier. `nil` when no download
-    /// is in flight (idle or already loaded). Mirrors
-    /// `STTStatusResponse.progress` shape.
-    let progress: Double?
-    /// Lifecycle state for the active LLM tier (engine#125). `nil`
-    /// on builds that predate the fire-and-forget rollout — consumers
-    /// MAY infer state from `loaded` + `progress` when nil.
-    let state: LoadState?
-    /// Human-readable error message when `state == .failed`. `nil`
-    /// in every other state.
-    let lastError: String?
-
-    init(
-        loaded: Bool,
-        modelId: String?,
-        progress: Double?,
-        state: LoadState? = nil,
-        lastError: String? = nil
-    ) {
-        self.loaded = loaded
-        self.modelId = modelId
-        self.progress = progress
-        self.state = state
-        self.lastError = lastError
-    }
-}
-
-struct STTStatusResponse: ResponseCodable {
-    let loaded: Bool
-    let language: String?
-    let streaming: Bool
-    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
-    /// download. `nil` when no download is in flight (idle, loaded,
-    /// or Apple STT — which has no HF pull). Non-nil only while the
-    /// snapshot is actively streaming in. Mirrors
-    /// `LLMStatusResponse.progress` shape; same filter applied
-    /// server-side by `/v1/stt/status` (engine#145).
-    let progress: Double?
-    /// Lifecycle state for the active STT backend (engine#125). `nil`
-    /// on builds that predate the fire-and-forget rollout — consumers
-    /// MAY infer state from `loaded` + `progress` when nil.
-    let state: LoadState?
-    /// Human-readable error message when `state == .failed`. `nil`
-    /// in every other state.
-    let lastError: String?
-
-    init(
-        loaded: Bool,
-        language: String?,
-        streaming: Bool,
-        progress: Double?,
-        state: LoadState? = nil,
-        lastError: String? = nil
-    ) {
-        self.loaded = loaded
-        self.language = language
-        self.streaming = streaming
-        self.progress = progress
-        self.state = state
-        self.lastError = lastError
-    }
-}
-
-// MARK: - STT Backend Picker (canonical module-picker pattern, second adopter)
+// MARK: - Wire-shared response conformances (#225)
 //
-// Mirrors the TouchUp picker shape from #97 / AGENTS.md "Module
-// model picker pattern". Same `id / displayName / description /
-// tier / sizeBytes / loadState / isActive` fields; STT-specific
-// capability flags (`supportsBatch`, `supportsStreaming`,
-// `supportedLanguages`) are added as optional extensions per the
-// AGENTS.md "Module-specific picker extensions" guidance.
+// `ResponseEncodable`/`ResponseCodable` extensions for `YoozEngineWire`
+// types this server returns directly from a route handler (bypassing the
+// `jsonResponse(...)` helper) or that carried the conformance historically;
+// added uniformly for parity. `YoozEngineWire` itself stays Hummingbird-free.
+
+extension ManagedModelsResponse: ResponseEncodable {}
+extension DeleteModelResult: ResponseEncodable {}
+extension ModelCleanupResult: ResponseEncodable {}
+extension SessionBeginResponse: ResponseEncodable {}
+extension TranscriptionResult: ResponseEncodable {}
+extension STTLanguagesResponse: ResponseEncodable {}
+extension LLMStatus: ResponseEncodable {}
+extension STTStatus: ResponseEncodable {}
+extension STTBackendInfo: ResponseEncodable {}
+extension STTBackendsResponse: ResponseEncodable {}
+extension LLMGenerateResponse: ResponseEncodable {}
+extension YoozEngineWire.LLMModelInfo: ResponseEncodable {}
+extension LLMModelsResponse: ResponseEncodable {}
+extension TouchUpResponse: ResponseEncodable {}
+extension TouchUpModelInfo: ResponseEncodable {}
+extension TouchUpModelsResponse: ResponseEncodable {}
+extension GrammarCheckResponse: ResponseEncodable {}
+extension VADResponse: ResponseEncodable {}
+
+// MARK: - Legacy STT engine-selection decode shim
 //
-// The legacy `STTEngineGetResponse` / `STTEnginePostRequest`
-// shapes are kept available on the wire (POST accepts both `id`
-// and the legacy `engine` field) so an in-flight whisper build
-// against a one-week-old SDK still works through one release.
-
-/// One STT backend in the picker. Canonical fields match
-/// `TouchUpModelInfo`; STT-specific fields are optional so the
-/// generic `ModelPickerStore<T>` template still works.
-struct STTBackendInfo: Codable, Sendable, Equatable, ResponseEncodable {
-    /// Stable wire id (e.g. `parakeet`, `fast_conformer`,
-    /// `apple_stt`, `qwen3_asr_preview`). Matches
-    /// `STTBackendID.rawValue`.
-    let id: String
-    /// Picker-visible name.
-    let displayName: String
-    /// One-line subtitle for picker UX.
-    let description: String
-    /// Coarse tier (`light` / `quality` / `premium` / `unknown`).
-    /// MLX backends report `.quality`; Apple STT reports `.premium`
-    /// (OS-provided); preview backends report `.unknown` so the UI
-    /// can render a "preview" hint without inventing a new tier.
-    let tier: ModelTier
-    /// Approximate first-run download size. `nil` for backends
-    /// that do not require a download (Apple, bundled MLX).
-    let sizeBytes: Int64?
-    /// Lifecycle state. Same total ordering as TouchUp picker.
-    let loadState: ModelLoadState
-    /// Whether `/v1/stt/batch` + `/v1/stt/stream` currently route
-    /// through this backend. Exactly one row per response has
-    /// `isActive == true`.
-    let isActive: Bool
-    // MARK: - STT-specific extensions (optional per AGENTS.md
-    // "Module-specific picker extensions"). Optional on the wire
-    // so a future engine that drops a capability (e.g. once every
-    // backend streams, `supportsStreaming` becomes meaningless)
-    // does not brick older SDK consumers.
-    let supportsBatch: Bool?
-    let supportsStreaming: Bool?
-    let supportedLanguages: [String]?
-}
-
-/// Response for `GET /v1/stt/engine` (canonical shape).
-struct STTBackendsResponse: Codable, Sendable, ResponseCodable {
-    let backends: [STTBackendInfo]
-    let activeId: String
-}
-
-/// Request body for `POST /v1/stt/engine` (canonical shape).
-/// The legacy `engine` field is accepted as a fallback for
-/// pre-#99 clients; the route handler reads `id` first, then
-/// `engine` if `id` is absent.
-struct STTSetBackendRequest: Codable {
+// `POST /v1/stt/engine` decode-only concern: pre-#99 clients post
+// `{"engine": "parakeet"}`; current clients post `{"id": "parakeet",
+// "preload": true}`. The canonical shared `STTSetBackendRequest`
+// (`YoozEngineWire`) only has the modern shape — this shim is what the
+// route handler actually decodes the raw body into, then resolves `id ??
+// engine` itself. Kept local (not promoted to `YoozEngineWire`) because no
+// other transport needs the legacy fallback: the SDK only ever encodes the
+// modern shape, and the in-process transport has no equivalent legacy
+// callers to support. `Codable` (not just `Decodable`) so tests can encode
+// a legacy-shaped payload directly rather than hand-building JSON strings.
+struct LegacySTTSetBackendRequest: Codable {
     let id: String?
     let preload: Bool?
-    /// Legacy field accepted as a fallback. Old SDK clients post
-    /// `{ "engine": "parakeet" }`; new clients post
-    /// `{ "id": "parakeet", "preload": true }`. Removed once
-    /// every shipped SDK is on the new shape.
     let engine: String?
 }
 
+/// `POST /v1/llm/generate` decode-only concern: some pre-SDK callers post
+/// the snake_case `system_prompt` spelling. The canonical shared
+/// `LLMGenerateRequest` (`YoozEngineWire`) carries only the camelCase key —
+/// this shim is what the route handler actually decodes the raw body into,
+/// accepting both spellings. Same pattern (and same rationale) as
+/// `LegacySTTSetBackendRequest` above: legacy tolerance stays a
+/// loopback-server concern, keeping the shared DTO free of
+/// transport-specific compat baggage. `workloadClass` (engine#228) is
+/// camelCase only — new with #228, so no second spelling is grandfathered
+/// in; an unknown value fails the typed decode → 400 `invalid_request` (a
+/// declared scheduling class is explicit caller intent; a silent downgrade
+/// would hide a client-side typo or version skew).
+struct LegacyLLMGenerateRequest: Decodable {
+    let prompt: String
+    let model: String?
+    let systemPrompt: String?
+    let workloadClass: MLXWorkloadClass?
+
+    private enum CodingKeys: String, CodingKey {
+        case prompt, model, systemPrompt, system_prompt, workloadClass
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.prompt = try container.decode(String.self, forKey: .prompt)
+        self.model = try container.decodeIfPresent(String.self, forKey: .model)
+        self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+            ?? container.decodeIfPresent(String.self, forKey: .system_prompt)
+        self.workloadClass = try container.decodeIfPresent(
+            MLXWorkloadClass.self, forKey: .workloadClass
+        )
+    }
+}
+
 // MARK: - WebSocket STT Messages
+//
+// Not moved to `YoozEngineWire` (#225): these are the `/v1/stt/stream`
+// WebSocket frame shapes, a loopback-only wire protocol the in-process
+// transport has no socket to serve (see `InProcessTransport`'s
+// `openSTTStream`). Out of scope for the REST DTO families #225 names.
 
 struct WSSTTConfig: Decodable {
     let type: String  // "config"
@@ -406,149 +240,15 @@ struct WSSTTWarning: Encodable {
     let message: String
 }
 
-// MARK: - LLM Types
-
-/// Server-side touch-up mode (mirrors client's TouchUpMode)
-enum ServerTouchUpMode: String, Codable, Sendable {
-    case off
-    case light
-    case standard
-    case full
-
-    #if canImport(LLMModule)
-    /// Map the wire enum to the LLMModule domain enum. The two enums are
-    /// intentionally distinct so the module stays free of server DTOs;
-    /// mapping lives here, at the wire boundary.
-    var asDomain: TouchUpMode {
-        switch self {
-        case .off: return .off
-        case .light: return .light
-        case .standard: return .standard
-        case .full: return .full
-        }
-    }
-    #endif
-}
-
-// The optional GPU-admission workload-class override on `POST /v1/touchup`
-// and `POST /v1/llm/generate` (engine#228) uses `EngineCore.MLXWorkloadClass`
-// directly — the same pattern as `LoadState` / `ModelTier` elsewhere in this
-// file (only the client SDK, which cannot import EngineCore, carries a
-// hand-duplicated mirror: `GPUWorkloadClass`). Optional and additive:
-// omitting the field preserves today's behavior — both routes default to
-// `.background`, matching the issue's classification of touch-up/raw
-// generation as throughput work that queues/yields behind an active
-// interactive workload. A caller with a genuinely latency-sensitive one-off
-// generation can override to `.interactive` so `MLXAdmissionGate` admits it
-// immediately. Unknown values fail the body decode → 400 `invalid_request`
-// (a declared scheduling class is explicit caller intent; a silent
-// downgrade would hide a client-side typo or version skew).
-
-struct LLMGenerateServerRequest: Decodable {
-    let prompt: String
-    let model: String?
-    let systemPrompt: String?
-    let workloadClass: MLXWorkloadClass?
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: LLMGenerateRequestKey.self)
-        self.prompt = try container.decode(String.self, forKey: LLMGenerateRequestKey("prompt"))
-        self.model = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("model"))
-        self.systemPrompt = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("systemPrompt"))
-            ?? container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("system_prompt"))
-        // camelCase only — the snake_case fallback above is a legacy-client
-        // compat shim for `system_prompt`; `workloadClass` is new with #228,
-        // so no second spelling is grandfathered in.
-        self.workloadClass = try container.decodeIfPresent(
-            MLXWorkloadClass.self, forKey: LLMGenerateRequestKey("workloadClass")
-        )
-    }
-}
-
-/// Coding key shim for accepting both camelCase and snake_case wire keys
-/// without committing to a global strategy on the Hummingbird decoder.
-/// Used by `LLMGenerateServerRequest` to backward-compatibly accept
-/// `systemPrompt` / `system_prompt`.
-private struct LLMGenerateRequestKey: CodingKey {
-    var stringValue: String
-    init(_ stringValue: String) { self.stringValue = stringValue }
-    init?(stringValue: String) { self.stringValue = stringValue }
-    var intValue: Int? { nil }
-    init?(intValue: Int) { return nil }
-}
-
-struct LLMGenerateServerResponse: ResponseCodable {
-    let text: String
-    let model: String
-    let tokensGenerated: Int?
-    let processingTimeMs: Int?
-}
-
-// MARK: - LLM Model Management Types
-
-/// Wire body for `GET /v1/llm/models` response. Field set mirrors the
-/// SDK's `LLMModelInfo` exactly so JSON round-trips through the thin
-/// client without custom CodingKeys.
-struct LLMModelInfoServer: ResponseCodable {
-    let id: String
-    let displayName: String
-    let sizeBytes: Int64?
-    let loaded: Bool
-    let latencyHintMs: Int?
-}
-
-struct LLMModelsServerResponse: ResponseCodable {
-    let current: String
-    let available: [LLMModelInfoServer]
-}
-
-/// Shared body for `POST /v1/llm/model`, `POST /v1/llm/preload`, and
-/// `POST /v1/llm/unload`. Single field so new options can be added
-/// without breaking existing clients.
-struct LLMModelSelectionRequest: Decodable {
-    let model: String
-}
-
-// MARK: - TouchUp Types
-
-struct TouchUpServerRequest: Decodable {
-    let text: String
-    let mode: ServerTouchUpMode
-    let language: String?
-    /// Optional GPU-admission override (engine#228). Nil defaults to
-    /// `.background` at the route handler — see the workload-class note
-    /// above `LLMGenerateServerRequest`.
-    let workloadClass: MLXWorkloadClass?
-}
-
-struct TouchUpServerResponse: ResponseCodable {
-    let result: String
-    let mode: ServerTouchUpMode
-    let processingTimeMs: Int?
-    let modelUsed: String?
-    let warnings: [String]?
-}
-
-// MARK: - TouchUp Picker (canonical module-picker pattern)
-//
-// Wire shape used by `GET /v1/touchup/models` and
-// `POST /v1/touchup/model`. The same shape — `models`, `activeId`,
-// `id / displayName / description / tier / sizeBytes / loadState /
-// isActive` — is the documented canon for every future module
-// picker (STT engine selection, TTS voice, etc.) so SDK + UI code
-// can be templated. See AGENTS.md "Module model picker pattern".
-//
-// Visibility note: the picker types now live in LLMModule
-// (`YoozEngine/TouchUp/TouchUpPickerTypes.swift`) so the producer
-// (TouchUpEngine) can construct them without depending on Hummingbird.
-// `ModelTier` and `ModelLoadState` live in EngineCore (shared with
-// STTModule). The Hummingbird `ResponseEncodable` / `ResponseCodable`
-// conformances are added as extensions in this file because the wire
-// concern belongs here, not in LLMModule.
-extension TouchUpModelInfo: ResponseEncodable {}
-extension TouchUpModelsResponse: ResponseEncodable {}
-
 // MARK: - Infinite Picker (engine-owned long-context module)
+//
+// Not moved to `YoozEngineWire` (#225): Infinite is loopback-only by design
+// (its only consumer is the super-yooz host; `YoozEngineInProcess` doesn't
+// even depend on `InfiniteModule`, per `RouteParityAllowlist` in
+// `Sources/EngineCore/RouteManifest.swift`)
+// and isn't one of the families the issue names. `InfiniteModelInfo` etc.
+// already live once, in `InfiniteModule` — this is only the Hummingbird
+// conformance, same pattern as the TouchUp picker below.
 
 #if canImport(InfiniteModule)
 extension InfiniteModelInfo: ResponseEncodable {}
@@ -561,39 +261,3 @@ extension InfiniteGenerateSessionResponse: ResponseEncodable {}
 extension InfiniteCheckpointSessionResponse: ResponseEncodable {}
 extension InfiniteDeleteSessionResponse: ResponseEncodable {}
 #endif
-
-// MARK: - Grammar Types
-
-struct GrammarCheckServerRequest: Decodable {
-    let text: String
-    let categories: [String]?
-    /// Use NLTagger POS tagging for more accurate correction. Defaults to true.
-    let usePOS: Bool?
-}
-
-struct GrammarCheckServerResponse: ResponseCodable {
-    let result: String
-    let correctionsApplied: Int
-    let ruleCount: Int?
-}
-
-// MARK: - VAD Types
-
-struct VADDetectServerRequest: Decodable {
-    let samples: [Float]
-
-    /// When true, resets the RNN hidden/cell state before detection.
-    /// Defaults to true. Set to false when sending consecutive chunks from
-    /// the same recording to preserve inter-frame state continuity.
-    let reset: Bool?
-}
-
-struct VADDetectServerResponse: ResponseCodable {
-    let segments: [VADSegment]
-}
-
-struct VADSegment: Codable {
-    let startMs: Int
-    let endMs: Int
-    let probability: Float
-}

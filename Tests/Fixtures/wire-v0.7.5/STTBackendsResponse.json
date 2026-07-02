@@ -1,0 +1,20 @@
+{
+  "activeId" : "parakeet",
+  "backends" : [
+    {
+      "description" : "High-accuracy MLX STT",
+      "displayName" : "Parakeet TDT",
+      "id" : "parakeet",
+      "isActive" : true,
+      "loadState" : "loaded",
+      "sizeBytes" : 600000000,
+      "supportedLanguages" : [
+        "en",
+        "es"
+      ],
+      "supportsBatch" : true,
+      "supportsStreaming" : true,
+      "tier" : "quality"
+    }
+  ]
+}

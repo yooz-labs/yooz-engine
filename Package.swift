@@ -46,6 +46,18 @@ let package = Package(
         ),
         .library(name: "Qwen3ASR", targets: ["Qwen3ASR"]),
 
+        // Single wire-type home (#225): every request/response DTO the
+        // loopback server, the SDK, and the in-process transport share,
+        // declared exactly once. Deliberately its own target rather than
+        // folded into `EngineCore` — `EngineCore` also carries engine
+        // orchestration (`AIModule`, `ModuleRegistry`, `SessionCoordinator`,
+        // `ModelStore`, `MLXResidency`, ...) that the thin-client SDK has no
+        // business re-exporting to consumer apps. `YoozEngineWire` stays
+        // pure DTOs with zero dependencies so both `EngineCore` (engine
+        // side) and `YoozEngineClient` (SDK side) can depend on it without
+        // pulling anything else in.
+        .library(name: "YoozEngineWire", targets: ["YoozEngineWire"]),
+
         // Engine modules exposed for in-process linking by standalone App Store
         // apps (epic #192). Same source dirs the xcodegen module-framework targets
         // (STTModule, LLMModule, …) ingest via project.yml — the app targets
@@ -97,14 +109,23 @@ let package = Package(
         ),
     ],
     targets: [
+        // Single wire-type home (#225). Zero dependencies — see the
+        // `YoozEngineWire` product doc comment above for why this is its
+        // own target rather than folded into `EngineCore`.
+        .target(
+            name: "YoozEngineWire",
+            path: "Sources/YoozEngineWire"
+        ),
         .target(
             name: "YoozEngineClient",
+            dependencies: ["YoozEngineWire"],
             path: "Sources/YoozEngineClient"
         ),
 
         // MARK: - Engine modules (in-process, epic #192)
         .target(
             name: "EngineCore",
+            dependencies: ["YoozEngineWire"],
             path: "Sources/EngineCore"
         ),
         .target(
@@ -213,6 +234,15 @@ let package = Package(
                 "VADModule",
             ],
             path: "Sources/YoozEngineInProcess"
+        ),
+        // Decode-compat fixture tests (#225): proves the post-refactor
+        // `YoozEngineWire` types still decode the committed
+        // `Tests/Fixtures/wire-v0.7.5/*.json` captured from the pre-refactor
+        // server/SDK encoders.
+        .testTarget(
+            name: "YoozEngineWireTests",
+            dependencies: ["YoozEngineWire"],
+            path: "Tests/YoozEngineWireTests"
         ),
         // Pure-logic EngineCore unit tests. Mirrors the xcodegen
         // `EngineCoreTests` bundle (project.yml) so this suite also runs under

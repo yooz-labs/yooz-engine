@@ -75,6 +75,24 @@ packages:
     path: .
 
 targets:
+  # Single wire-type home (#225): every request/response DTO the server, the
+  # SDK, and the in-process transport share. Zero dependencies, mirroring
+  # the SPM target (`Sources/YoozEngineWire`, `Package.swift`). `EngineCore`
+  # depends on it and re-exports it (`Sources/EngineCore/WireReexport.swift`)
+  # so every other framework target below keeps resolving wire types via its
+  # existing `import EngineCore`.
+  YoozEngineWire:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/YoozEngineWire
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.wire
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+
   EngineCore:
     type: framework
     platform: macOS
@@ -86,6 +104,8 @@ targets:
         DEFINES_MODULE: "YES"
         SKIP_INSTALL: "YES"
         GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: YoozEngineWire
 
   GrammarModule:
     type: framework
@@ -100,6 +120,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
@@ -116,6 +137,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
 
   LLMModule:
     type: framework
@@ -131,6 +153,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
       - package: mlx-swift
         product: MLX
       - package: mlx-swift
@@ -165,6 +188,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
       # MLX inference for the native-context backend (Phase 7). Mirrors
       # LLMModule: the HF tokenizer/downloader macros expand into
       # swift-transformers + swift-huggingface types, so both are linked.
@@ -198,6 +222,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
       - package: mlx-swift
         product: MLX
       - package: mlx-swift
@@ -241,6 +266,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
 
   YoozEngine:
     type: application
@@ -293,6 +319,7 @@ targets:
           ENABLE_HARDENED_RUNTIME: true
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
       - target: AppleSTTModule
       - target: GrammarModule
       - target: InfiniteModule
@@ -353,6 +380,7 @@ targets:
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "VARIANT_WHISPER"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
       - target: AppleSTTModule
       - target: GrammarModule
       - target: LLMModule
@@ -403,6 +431,7 @@ targets:
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "VARIANT_LITE"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
       - target: AppleSTTModule
       - target: GrammarModule
       - target: LLMModule
@@ -439,6 +468,7 @@ targets:
       # Qwen3ASRPipeline, PreviewModelFetcherAdapter, etc.) which live
       # outside the YoozEngine app target's source list.
       - target: EngineCore
+      - target: YoozEngineWire
       - target: GrammarModule
       - target: InfiniteModule
       - target: VADModule
@@ -474,6 +504,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: EngineCore
+      - target: YoozEngineWire
 
   GrammarModuleTests:
     type: bundle.unit-test
@@ -486,6 +517,7 @@ targets:
     dependencies:
       - target: GrammarModule
       - target: EngineCore
+      - target: YoozEngineWire
 
   LLMModuleTests:
     type: bundle.unit-test
@@ -498,6 +530,7 @@ targets:
     dependencies:
       - target: LLMModule
       - target: EngineCore
+      - target: YoozEngineWire
 
   InfiniteModuleTests:
     type: bundle.unit-test
@@ -510,6 +543,7 @@ targets:
     dependencies:
       - target: InfiniteModule
       - target: EngineCore
+      - target: YoozEngineWire
 
   STTModuleTests:
     type: bundle.unit-test
@@ -522,6 +556,7 @@ targets:
     dependencies:
       - target: STTModule
       - target: EngineCore
+      - target: YoozEngineWire
 
   AppleSTTModuleTests:
     type: bundle.unit-test
@@ -534,6 +569,7 @@ targets:
     dependencies:
       - target: AppleSTTModule
       - target: EngineCore
+      - target: YoozEngineWire
 
   VADModuleTests:
     type: bundle.unit-test
@@ -546,6 +582,7 @@ targets:
     dependencies:
       - target: VADModule
       - target: EngineCore
+      - target: YoozEngineWire
 
   # A8 / #32 — end-to-end integration harness.
   # Drives a freshly-built Yooz Engine.app subprocess through the

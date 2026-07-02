@@ -48,27 +48,5 @@ public struct VADClient: Sendable {
     }
 }
 
-struct VADRequest: Codable {
-    let samples: [Float]
-    let reset: Bool?
-}
-
-public struct VADResponse: Codable, Sendable {
-    public let segments: [SpeechSegment]
-
-    public init(segments: [SpeechSegment]) {
-        self.segments = segments
-    }
-}
-
-public struct SpeechSegment: Codable, Sendable {
-    public let startMs: Int
-    public let endMs: Int
-    public let probability: Float
-
-    public init(startMs: Int, endMs: Int, probability: Float) {
-        self.startMs = startMs
-        self.endMs = endMs
-        self.probability = probability
-    }
-}
+// `VADRequest`, `VADResponse`, `SpeechSegment` moved to `YoozEngineWire`
+// (#225) — visible here via `YoozEngineClient`'s `WireReexport.swift`.

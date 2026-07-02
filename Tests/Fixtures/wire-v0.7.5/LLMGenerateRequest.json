@@ -1,0 +1,5 @@
+{
+  "model" : "yooz-light-v2",
+  "prompt" : "hello world",
+  "systemPrompt" : "be terse"
+}

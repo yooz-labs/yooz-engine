@@ -210,7 +210,7 @@ final class AsyncLoadEndpointsTests: XCTestCase {
             let (http, data) = try await post("/v1/stt/load", body: body)
             XCTAssertEqual(http.statusCode, 202,
                            "Default /v1/stt/load must return HTTP 202 (fire-and-forget)")
-            let response = try JSONDecoder().decode(STTStatusResponse.self, from: data)
+            let response = try JSONDecoder().decode(STTStatus.self, from: data)
             XCTAssertFalse(response.loaded,
                            "Initial 202 response must not claim loaded=true")
             XCTAssertEqual(response.state, .loading,

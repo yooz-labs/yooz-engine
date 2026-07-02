@@ -22,6 +22,15 @@ import STTModule
 #if canImport(VADModule)
 import VADModule
 #endif
+// Explicit import needed only to spell the qualified
+// `YoozEngineWire.LLMModelInfo` / `YoozEngineWire.TranscriptionResult` below
+// — `LLMModule` has its own internal `LLMModelInfo` domain type and
+// `STTModule` has its own internal `TranscriptionResult` domain type, so the
+// bare names are ambiguous once those modules are imported alongside the
+// wire types (`EngineCore`'s re-export). Unconditional (not gated behind
+// `#if canImport(...)`) because `YoozEngineWire` has no build-variant
+// exclusions, unlike `LLMModule`/`STTModule`.
+import YoozEngineWire
 
 private let cadenceLogger = os.Logger(subsystem: "live.yooz.engine", category: "stt-cadence")
 private let loadEndpointLogger = os.Logger(
@@ -1262,13 +1271,13 @@ final class APIServer: ObservableObject {
                 activeSTTRepoDirName: Self.activeSTTRepoDirName()
             )
             let models = rows.map {
-                ModelInfo(
+                ManagedModelInfo(
                     id: $0.id, module: $0.module, displayName: $0.displayName,
                     sizeBytes: $0.sizeBytes, cached: $0.cached, loaded: $0.loaded,
                     isActive: $0.isActive, deletable: $0.deletable
                 )
             }
-            return try jsonResponse(ModelsResponse(models: models))
+            return try jsonResponse(ManagedModelsResponse(models: models))
         }
 
         // Delete one model's reclaimable on-disk copies. Unloads it from memory
@@ -1296,7 +1305,7 @@ final class APIServer: ObservableObject {
                         modelsDirSubdir: descriptor?.modelsDirSubdir
                     )
                     await TouchUpEngine.shared.unload(modelType)
-                    return try jsonResponse(DeleteModelResponse(id: id, reclaimedBytes: reclaimed))
+                    return try jsonResponse(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
                 } catch {
                     logger.error("DELETE /v1/models/\(id) failed: \(error.localizedDescription)")
                     return errorResponse(
@@ -1319,7 +1328,7 @@ final class APIServer: ObservableObject {
                     let reclaimed = try await store.deleteModel(
                         hfRepoDirName: id, modelsDirSubdir: nil
                     )
-                    return try jsonResponse(DeleteModelResponse(id: id, reclaimedBytes: reclaimed))
+                    return try jsonResponse(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
                 } catch {
                     logger.error("DELETE /v1/models/\(id) failed: \(error.localizedDescription)")
                     return errorResponse(
@@ -1345,7 +1354,7 @@ final class APIServer: ObservableObject {
                 let report = try await store.cleanupAll(
                     descriptors: LLMModelCatalog.cacheDescriptors()
                 )
-                return try jsonResponse(ModelCleanupResponse(
+                return try jsonResponse(ModelCleanupResult(
                     totalReclaimedBytes: report.totalReclaimedBytes,
                     perRepo: report.perRepo
                 ))
@@ -1364,9 +1373,9 @@ final class APIServer: ObservableObject {
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")
             }
-            let body: LLMGenerateServerRequest
+            let body: LegacyLLMGenerateRequest
             do {
-                body = try await request.decode(as: LLMGenerateServerRequest.self, context: context)
+                body = try await request.decode(as: LegacyLLMGenerateRequest.self, context: context)
             } catch {
                 return errorResponse(
                     status: .badRequest,
@@ -1399,7 +1408,7 @@ final class APIServer: ObservableObject {
                     workloadClass: body.workloadClass ?? .background
                 )
                 let timeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
-                return try jsonResponse(LLMGenerateServerResponse(
+                return try jsonResponse(LLMGenerateResponse(
                     text: result,
                     model: modelType.rawValue,
                     tokensGenerated: nil,
@@ -1496,7 +1505,7 @@ final class APIServer: ObservableObject {
                 loadStateValue = loaded ? .ready : .idle
                 lastError = nil
             }
-            let payload = LLMStatusResponse(
+            let payload = LLMStatus(
                 loaded: loaded,
                 modelId: active.rawValue,
                 progress: progress,
@@ -1510,10 +1519,10 @@ final class APIServer: ObservableObject {
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")
             }
-            let body: LLMModelSelectionRequest
+            let body: LLMModelSelection
             do {
                 body = try await request.decode(
-                    as: LLMModelSelectionRequest.self,
+                    as: LLMModelSelection.self,
                     context: context
                 )
             } catch {
@@ -1541,10 +1550,10 @@ final class APIServer: ObservableObject {
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")
             }
-            let body: LLMModelSelectionRequest
+            let body: LLMModelSelection
             do {
                 body = try await request.decode(
-                    as: LLMModelSelectionRequest.self,
+                    as: LLMModelSelection.self,
                     context: context
                 )
             } catch {
@@ -1603,10 +1612,10 @@ final class APIServer: ObservableObject {
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")
             }
-            let body: LLMModelSelectionRequest
+            let body: LLMModelSelection
             do {
                 body = try await request.decode(
-                    as: LLMModelSelectionRequest.self,
+                    as: LLMModelSelection.self,
                     context: context
                 )
             } catch {
@@ -1856,9 +1865,9 @@ final class APIServer: ObservableObject {
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")
             }
-            let body: TouchUpServerRequest
+            let body: TouchUpRequest
             do {
-                body = try await request.decode(as: TouchUpServerRequest.self, context: context)
+                body = try await request.decode(as: TouchUpRequest.self, context: context)
             } catch {
                 return errorResponse(
                     status: .badRequest,
@@ -1870,7 +1879,7 @@ final class APIServer: ObservableObject {
             if body.mode == .off {
                 // Off mode: regex-only processing (no LLM)
                 let result = await TouchUpEngine.shared.processRegexOnly(text: body.text)
-                return try jsonResponse(TouchUpServerResponse(
+                return try jsonResponse(TouchUpResponse(
                     result: result.text,
                     mode: .off,
                     processingTimeMs: Int(result.latencyMs),
@@ -1886,7 +1895,7 @@ final class APIServer: ObservableObject {
             // `activeModel == .yoozLight`).
             let result = await TouchUpEngine.shared.processWithActiveModel(
                 text: body.text,
-                mode: body.mode.asDomain,
+                mode: body.mode,
                 workloadClass: body.workloadClass ?? .background
             )
 
@@ -1895,7 +1904,7 @@ final class APIServer: ObservableObject {
                 warnings = [reason]
             }
 
-            return try jsonResponse(TouchUpServerResponse(
+            return try jsonResponse(TouchUpResponse(
                 result: result.text,
                 mode: body.mode,
                 processingTimeMs: Int(result.latencyMs),
@@ -1981,9 +1990,9 @@ final class APIServer: ObservableObject {
             guard await ModuleRegistry.shared.isBundled("grammar") else {
                 return moduleNotBundled("grammar")
             }
-            let body: GrammarCheckServerRequest
+            let body: GrammarCheckRequest
             do {
-                body = try await request.decode(as: GrammarCheckServerRequest.self, context: context)
+                body = try await request.decode(as: GrammarCheckRequest.self, context: context)
             } catch {
                 return errorResponse(
                     status: .badRequest,
@@ -2006,7 +2015,7 @@ final class APIServer: ObservableObject {
                 categories: body.categories,
                 usePOS: usePOS
             )
-            return try jsonResponse(GrammarCheckServerResponse(
+            return try jsonResponse(GrammarCheckResponse(
                 result: result.result,
                 correctionsApplied: result.correctionsApplied,
                 ruleCount: GrammarEngine.shared.ruleCount
@@ -2018,19 +2027,18 @@ final class APIServer: ObservableObject {
         // The route itself is always registered so that in slim variants
         // (e.g. whisper, which embeds its own local VAD) clients get a
         // uniform HTTP 501 `module_not_bundled` response from A4 / #28
-        // rather than Hummingbird's default 404. The type-level references
-        // to `VADEngine` / `VADDetectServerRequest` are still compile-time
-        // gated — the latter lives in the app target, but `VADEngine` only
+        // rather than Hummingbird's default 404. `VADRequest`/`VADResponse`
+        // live in `YoozEngineWire` (always linked), but `VADEngine` only
         // exists when `VADModule` is linked, so the handler body needs the
-        // `#if canImport(VADModule)` gate around the VAD-type call sites.
+        // `#if canImport(VADModule)` gate around the engine call sites.
         router.post("/v1/vad/detect") { [self] request, context in
             guard await ModuleRegistry.shared.isBundled("vad") else {
                 return moduleNotBundled("vad")
             }
             #if canImport(VADModule)
-            let body: VADDetectServerRequest
+            let body: VADRequest
             do {
-                body = try await request.decode(as: VADDetectServerRequest.self, context: context)
+                body = try await request.decode(as: VADRequest.self, context: context)
             } catch {
                 return errorResponse(
                     status: .badRequest,
@@ -2062,9 +2070,9 @@ final class APIServer: ObservableObject {
                     resetState: shouldReset
                 )
                 let responseSegments = segments.map { seg in
-                    VADSegment(startMs: seg.startMs, endMs: seg.endMs, probability: seg.probability)
+                    SpeechSegment(startMs: seg.startMs, endMs: seg.endMs, probability: seg.probability)
                 }
-                return try jsonResponse(VADDetectServerResponse(segments: responseSegments))
+                return try jsonResponse(VADResponse(segments: responseSegments))
             } catch {
                 return errorResponse(
                     status: .internalServerError,
@@ -2125,10 +2133,10 @@ final class APIServer: ObservableObject {
 
         router.post("/v1/stt/engine") { [self] request, context in
             #if canImport(STTModule)
-            let body: STTSetBackendRequest
+            let body: LegacySTTSetBackendRequest
             do {
                 body = try await request.decode(
-                    as: STTSetBackendRequest.self, context: context
+                    as: LegacySTTSetBackendRequest.self, context: context
                 )
             } catch {
                 return errorResponse(
@@ -2203,10 +2211,10 @@ final class APIServer: ObservableObject {
             )
             return try jsonResponse(info)
             #elseif canImport(AppleSTTModule)
-            let body: STTSetBackendRequest
+            let body: LegacySTTSetBackendRequest
             do {
                 body = try await request.decode(
-                    as: STTSetBackendRequest.self, context: context
+                    as: LegacySTTSetBackendRequest.self, context: context
                 )
             } catch {
                 return errorResponse(
@@ -2326,7 +2334,7 @@ final class APIServer: ObservableObject {
                 // "previous load failed."
                 let stateValue = await MainActor.run { engine.loadState }
                 let errorValue = await MainActor.run { engine.lastLoadError }
-                let payload = STTStatusResponse(
+                let payload = STTStatus(
                     loaded: running,
                     language: running ? engine.currentLanguage.rawValue : nil,
                     streaming: engine.isStreaming,
@@ -2347,7 +2355,7 @@ final class APIServer: ObservableObject {
                 let loaded = await engine.isLoaded
                 let lang = await engine.currentLanguage
                 let streaming = await engine.isStreaming
-                let payload = STTStatusResponse(
+                let payload = STTStatus(
                     loaded: loaded,
                     language: loaded ? lang.rawValue : nil,
                     streaming: streaming,
@@ -2407,7 +2415,7 @@ final class APIServer: ObservableObject {
 
             if wait {
                 // Back-compat path: await the load and return the
-                // legacy 200 + STTStatusResponse(loaded: true).
+                // legacy 200 + STTStatus(loaded: true).
                 // loaded == true so progress must be nil per the
                 // /v1/stt/status contract (engine#145) — otherwise
                 // consumers that read the load response directly
@@ -2422,7 +2430,7 @@ final class APIServer: ObservableObject {
                 } catch {
                     return mapSTTLoadError(error)
                 }
-                return try jsonResponse(STTStatusResponse(
+                return try jsonResponse(STTStatus(
                     loaded: true,
                     language: language.rawValue,
                     streaming: false,
@@ -2437,7 +2445,7 @@ final class APIServer: ObservableObject {
             // `/v1/stt/status` to observe the .ready / .failed
             // transition.
             return try jsonResponse(
-                STTStatusResponse(
+                STTStatus(
                     loaded: false,
                     language: language.rawValue,
                     streaming: false,
@@ -2492,7 +2500,7 @@ final class APIServer: ObservableObject {
                         code: "model_load_failed"
                     )
                 }
-                let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
+                let mode = AudioMode(rawValue: body.mode) ?? .normal
                 let wantsAligned = body.aligned ?? false
                 if wantsAligned {
                     // qwen3 doesn't emit token-level timestamps —
@@ -2518,7 +2526,7 @@ final class APIServer: ObservableObject {
                                 code: "stt_aligned_failed"
                             )
                         }
-                        return try jsonResponse(BatchSTTResponse(
+                        return try jsonResponse(YoozEngineWire.TranscriptionResult(
                             text: result.text,
                             finalized: result.finalized,
                             draft: result.draft,
@@ -2531,7 +2539,7 @@ final class APIServer: ObservableObject {
                     // surfaces them. We still derive the full text from the
                     // token stream so the top-level `text` field stays
                     // consistent with the alignment.
-                    let aligned: TranscriptionResult
+                    let aligned: STTModule.TranscriptionResult
                     do {
                         aligned = try await engine.batchTranscribeAligned(
                             samples: body.samples,
@@ -2553,14 +2561,14 @@ final class APIServer: ObservableObject {
                         )
                     }
                     let wireTokens = aligned.tokens.map { tok in
-                        AlignedTokenWire(
+                        AlignedToken(
                             text: tok.text,
                             start: tok.start,
                             end: tok.end
                         )
                     }
                     let fullText = aligned.text
-                    return try jsonResponse(BatchSTTResponse(
+                    return try jsonResponse(YoozEngineWire.TranscriptionResult(
                         text: fullText,
                         finalized: fullText,
                         draft: "",
@@ -2595,7 +2603,7 @@ final class APIServer: ObservableObject {
                             code: "stt_batch_failed"
                         )
                     }
-                    return try jsonResponse(BatchSTTResponse(
+                    return try jsonResponse(YoozEngineWire.TranscriptionResult(
                         text: result.text,
                         finalized: result.finalized,
                         draft: result.draft,
@@ -2603,7 +2611,7 @@ final class APIServer: ObservableObject {
                     ))
                 }
                 let result = await engine.batchTranscribe(samples: body.samples, mode: mode)
-                return try jsonResponse(BatchSTTResponse(
+                return try jsonResponse(YoozEngineWire.TranscriptionResult(
                     text: result.text,
                     finalized: result.finalized,
                     draft: result.draft,
@@ -2617,7 +2625,7 @@ final class APIServer: ObservableObject {
                 guard await ModuleRegistry.shared.isBundled("apple_stt") else {
                     return moduleNotBundled("apple_stt")
                 }
-                let languageCode = body.language ?? "en"
+                let languageCode = body.language
                 guard let language = AppleSTTLanguage.from(rawCode: languageCode) else {
                     return errorResponse(
                         status: .badRequest,
@@ -2640,13 +2648,13 @@ final class APIServer: ObservableObject {
                     if wantsAligned {
                         let aligned = try await engine.batchTranscribeAligned(samples: body.samples)
                         let wireTokens = aligned.tokens.map { tok in
-                            AlignedTokenWire(
+                            AlignedToken(
                                 text: tok.text,
                                 start: tok.start,
                                 end: tok.end
                             )
                         }
-                        return try jsonResponse(BatchSTTResponse(
+                        return try jsonResponse(YoozEngineWire.TranscriptionResult(
                             text: aligned.transcription,
                             finalized: aligned.transcription,
                             draft: "",
@@ -2655,7 +2663,7 @@ final class APIServer: ObservableObject {
                         ))
                     }
                     let text = try await engine.batchTranscribe(samples: body.samples)
-                    return try jsonResponse(BatchSTTResponse(
+                    return try jsonResponse(YoozEngineWire.TranscriptionResult(
                         text: text,
                         finalized: text,
                         draft: "",
@@ -3592,13 +3600,13 @@ extension APIServer {
     nonisolated static func infoEntry(
         for modelType: LLMModelType,
         loaded: Bool
-    ) -> LLMModelInfoServer {
+    ) -> YoozEngineWire.LLMModelInfo {
         let hint: Int
         switch modelType {
         case .yoozLight: hint = 200
         case .yoozQuality: hint = 490
         }
-        return LLMModelInfoServer(
+        return YoozEngineWire.LLMModelInfo(
             id: modelType.rawValue,
             displayName: modelType.displayName,
             sizeBytes: modelType.estimatedSize,
@@ -3609,10 +3617,10 @@ extension APIServer {
 
     /// Build the full `GET /v1/llm/models` body. Async because the load
     /// state + preferred-model flag live inside the TouchUpEngine actor.
-    nonisolated static func buildLLMModelsResponse() async -> LLMModelsServerResponse {
+    nonisolated static func buildLLMModelsResponse() async -> LLMModelsResponse {
         let info = await TouchUpEngine.shared.getModelInfo()
         let current = await TouchUpEngine.shared.preferredModel.rawValue
-        return LLMModelsServerResponse(
+        return LLMModelsResponse(
             current: current,
             available: [
                 infoEntry(for: .yoozLight, loaded: info.light.isLoaded),

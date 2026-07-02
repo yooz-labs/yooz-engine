@@ -3,9 +3,14 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 //
-// Pin the wire contract for the model-management endpoints: the SDK types must
-// decode the exact JSON the engine (`APITypes.ModelInfo`/`ModelsResponse`,
-// `DeleteModelResponse`, `ModelCleanupResponse`) encodes.
+// Pin the wire contract for the model-management endpoints: decodes the
+// exact JSON `APIServer` emits for `GET /v1/models`, `DELETE /v1/models/:id`,
+// and `POST /v1/models/cleanup` through the shared `YoozEngineWire` types
+// (#225; server and SDK previously carried separately-named duplicates —
+// `ModelInfo`/`ModelsResponse`/`DeleteModelResponse`/`ModelCleanupResponse`
+// server-side vs. `ManagedModelInfo`/`ManagedModelsResponse`/
+// `DeleteModelResult`/`ModelCleanupResult` SDK-side; the SDK names are now
+// canonical).
 
 import XCTest
 @testable import YoozEngineClient

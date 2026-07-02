@@ -1,12 +1,27 @@
+// LLMWireTypes.swift
+// YoozEngineWire
+//
+// Copyright 2026 Yooz Labs. All rights reserved.
+
 import Foundation
 
-public struct LLMGenerateRequest: Codable, Sendable {
+/// Request body for `POST /v1/llm/generate`.
+///
+/// Canonical keys only (`systemPrompt` camelCase). The legacy snake_case
+/// `system_prompt` spelling some pre-SDK callers still post is a
+/// loopback-server-only decode concern, handled by the
+/// `LegacyLLMGenerateRequest` shim in `YoozEngine/Server/APITypes.swift` —
+/// the same pattern as `LegacySTTSetBackendRequest` — so this shared type
+/// stays free of transport-specific compat baggage.
+public struct LLMGenerateRequest: Codable, Sendable, Equatable {
     public let prompt: String
     public let model: String?
     public let systemPrompt: String?
     /// Optional GPU-admission override (engine#228). Nil (the default)
     /// lets the engine classify this call as `.background` — see
-    /// `GPUWorkloadClass`.
+    /// `GPUWorkloadClass`. Deliberately strict on decode: an unknown value
+    /// rejects the request rather than silently downgrading (see the
+    /// `GPUWorkloadClass` doc).
     public let workloadClass: GPUWorkloadClass?
 
     public init(
@@ -22,7 +37,7 @@ public struct LLMGenerateRequest: Codable, Sendable {
     }
 }
 
-public struct LLMGenerateResponse: Codable, Sendable {
+public struct LLMGenerateResponse: Codable, Sendable, Equatable {
     public let text: String
     public let model: String
     public let tokensGenerated: Int?
@@ -100,16 +115,12 @@ public struct LLMModelSelection: Codable, Sendable, Equatable {
     }
 }
 
-/// Response body for `GET /v1/llm/status`. Shape parity with
-/// `STTStatus` so consumer apps can template a single progress-banner
-/// view-model over both endpoints. `progress` is non-nil only while
-/// `MLXLLMBackend.load()` is streaming the HuggingFace snapshot; once
-/// the load completes (or the engine is idle), the server omits the
-/// fraction and the banner can hide.
+/// Response body for `GET /v1/llm/status`. Shape parity with `STTStatus` so
+/// consumer apps can template a single progress-banner view-model over both
+/// endpoints.
 public struct LLMStatus: Codable, Sendable, Equatable {
     public let loaded: Bool
-    /// Wire id of the preferred LLM model
-    /// (`LLMModelType.rawValue`, e.g. `"yooz-light-v2"`).
+    /// Wire id of the preferred LLM model (e.g. `"yooz-light-v2"`).
     public let modelId: String?
     /// Fraction-completed [0.0, 1.0] for an in-progress HF model
     /// download. `nil` when no download is in flight.
@@ -135,28 +146,4 @@ public struct LLMStatus: Codable, Sendable, Equatable {
         self.state = state
         self.lastError = lastError
     }
-}
-
-/// Lifecycle state surfaced by `/v1/stt/status` and `/v1/llm/status`
-/// once the load endpoints went fire-and-forget in engine#125.
-///
-/// Wire-compatible duplicate of `EngineCore.LoadState` (server side):
-/// `YoozEngineClient` is a separate SwiftPM target that can't import
-/// `EngineCore` (which lives in the Xcode-only side of the build),
-/// so the contract is held by matching `rawValue`s. Keep these in
-/// sync with `EngineCore/LoadState.swift`.
-///
-/// Decode-safe on older clients: pre-#125 servers omit the field
-/// entirely, so consumers see `state == nil` and infer state from
-/// `loaded` + `progress`.
-public enum LoadState: String, Codable, Sendable, Equatable {
-    /// No model is loaded and no load is in flight.
-    case idle
-    /// A load is in flight; poll for completion via `state == .ready`.
-    case loading
-    /// The active model is loaded and serving.
-    case ready
-    /// The last load attempt failed. The accompanying `lastError`
-    /// field carries the human-readable message.
-    case failed
 }

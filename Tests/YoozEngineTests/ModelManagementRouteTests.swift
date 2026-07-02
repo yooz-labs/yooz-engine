@@ -63,7 +63,7 @@ final class ModelManagementRouteTests: XCTestCase {
         try await withServer { _ in
             let (http, body) = try await send("GET", "/v1/models")
             XCTAssertEqual(http.statusCode, 200)
-            let decoded = try JSONDecoder().decode(ModelsResponse.self, from: body)
+            let decoded = try JSONDecoder().decode(ManagedModelsResponse.self, from: body)
             for model in decoded.models {
                 if !model.cached { XCTAssertEqual(model.sizeBytes, 0, "\(model.id)") }
                 if model.isActive { XCTAssertFalse(model.deletable, "\(model.id)") }
@@ -122,7 +122,7 @@ final class ModelManagementRouteTests: XCTestCase {
         try await withServer { _ in
             let (http, body) = try await send("POST", "/v1/models/cleanup")
             XCTAssertEqual(http.statusCode, 200)
-            let decoded = try JSONDecoder().decode(ModelCleanupResponse.self, from: body)
+            let decoded = try JSONDecoder().decode(ModelCleanupResult.self, from: body)
             // Empty hub -> nothing to reclaim.
             XCTAssertEqual(decoded.totalReclaimedBytes, 0)
             XCTAssertTrue(decoded.perRepo.isEmpty)

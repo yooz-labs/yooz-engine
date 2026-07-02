@@ -70,7 +70,7 @@ final class STTStatusRouteTests: XCTestCase {
         try await withServer { _ in
             let (http, body) = try await get("/v1/stt/status")
             XCTAssertEqual(http.statusCode, 200)
-            let status = try JSONDecoder().decode(STTStatusResponse.self, from: body)
+            let status = try JSONDecoder().decode(STTStatus.self, from: body)
             XCTAssertFalse(status.loaded,
                            "Cold engine: MLX STT singleton has not been started")
             XCTAssertFalse(status.streaming,
@@ -99,7 +99,7 @@ final class STTStatusRouteTests: XCTestCase {
         YoozSTTEngine.shared.stop()
         try await withServer { _ in
             let (_, body) = try await get("/v1/stt/status")
-            let status = try JSONDecoder().decode(STTStatusResponse.self, from: body)
+            let status = try JSONDecoder().decode(STTStatus.self, from: body)
             XCTAssertFalse(status.loaded,
                            "stop() must leave the engine unloaded")
             XCTAssertNil(status.progress,
@@ -119,7 +119,7 @@ final class STTStatusRouteTests: XCTestCase {
         try await withServer { _ in
             let (http, body) = try await get("/v1/stt/status")
             XCTAssertEqual(http.statusCode, 200)
-            let status = try JSONDecoder().decode(STTStatusResponse.self, from: body)
+            let status = try JSONDecoder().decode(STTStatus.self, from: body)
             XCTAssertNil(status.progress,
                          "Apple STT has no HF download to report")
         }
