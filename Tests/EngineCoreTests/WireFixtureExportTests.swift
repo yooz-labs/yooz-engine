@@ -9,12 +9,16 @@ import XCTest
 /// Captures v0.7.5-era wire JSON for the `EngineCore`-owned DTOs the #225
 /// wire-type consolidation moves into `YoozEngineWire`.
 ///
-/// Not a normal assertion test: gated behind `EXPORT_WIRE_FIXTURES=1` and
-/// run once, by hand, against the pre-refactor tree to freeze
-/// `Tests/Fixtures/wire-v0.7.5/*.json`. Every other test target's
-/// decode-compat suite reads the committed output; this generator does not
+/// Not a normal assertion test: gated behind `EXPORT_WIRE_FIXTURES=1`.
+/// First run by hand against the pre-refactor tree (commit `a6614bc`) to
+/// freeze `Tests/Fixtures/wire-v0.7.5/*.json`; `SessionBeginResponse` was
+/// added post-move (the pre-refactor type was a server-private struct with
+/// no reachable encoder) with the field layout verified against the
+/// `a6614bc` definition. `Tests/YoozEngineWireTests/WireCompatFixtureTests`
+/// reads the committed output and round-trips it; this generator does not
 /// run in CI. Kept in the repo (rather than deleted after one run) so a
-/// future DTO family migration can regenerate fixtures the same way.
+/// future DTO family migration can regenerate fixtures the same way — any
+/// byte diff under regeneration is itself a wire-compat red flag.
 final class WireFixtureExportTests: XCTestCase {
     func testExportEngineCoreOwnedFixtures() throws {
         try XCTSkipUnless(
@@ -45,6 +49,16 @@ final class WireFixtureExportTests: XCTestCase {
             ]
         )
         try write(modulesResponse, "ModulesResponse", to: dir)
+
+        // `POST /v1/session/begin` body — produced from
+        // `SessionCoordinator.begin()`'s result by both transports.
+        try write(
+            SessionBeginResponse(
+                sessionId: "8f14e45f-ceea-467e-bd44-59c7f5c3c8f9",
+                ts: "2026-07-02T09:00:00Z"
+            ),
+            "SessionBeginResponse", to: dir
+        )
     }
 
     private func fixturesDirectory() throws -> URL {

@@ -9,13 +9,18 @@ import XCTest
 /// Captures v0.7.5-era wire JSON for the SDK-owned DTOs the #225 wire-type
 /// consolidation moves into `YoozEngineWire`.
 ///
-/// Not a normal assertion test: gated behind `EXPORT_WIRE_FIXTURES=1` and run
-/// once, by hand, against the pre-refactor tree to freeze
-/// `Tests/Fixtures/wire-v0.7.5/*.json`. Every other test target's
-/// decode-compat suite reads the committed output; this generator does not
-/// run in CI. Companion to `EngineCoreTests/WireFixtureExportTests.swift`
-/// (which captures the `EngineCore`-owned DTOs). Kept in the repo so a future
-/// DTO family migration can regenerate fixtures the same way.
+/// Not a normal assertion test: gated behind `EXPORT_WIRE_FIXTURES=1`.
+/// First run by hand against the pre-refactor tree (commit `a6614bc`) to
+/// freeze `Tests/Fixtures/wire-v0.7.5/*.json`; the request-side fixtures
+/// (`BatchSTTRequest`, `STTLoadRequest`, `VADRequest`) and the
+/// `TouchUpResponseWarnings` variant were added post-move (the pre-refactor
+/// encoders were SDK-internal or nonexistent) with field layouts verified
+/// against the `a6614bc` definitions.
+/// `Tests/YoozEngineWireTests/WireCompatFixtureTests` reads the committed
+/// output and round-trips it; this generator does not run in CI. Companion
+/// to `EngineCoreTests/WireFixtureExportTests.swift`. Kept in the repo so a
+/// future DTO family migration can regenerate fixtures the same way — any
+/// byte diff under regeneration is itself a wire-compat red flag.
 final class WireFixtureExportTests: XCTestCase {
     func testExportSDKOwnedFixtures() throws {
         try XCTSkipUnless(
@@ -105,18 +110,6 @@ final class WireFixtureExportTests: XCTestCase {
             STTStatus(loaded: true, language: "en", streaming: false, progress: nil, state: .ready, lastError: nil),
             "STTStatus", to: dir
         )
-        try write(
-            HealthStatus(
-                status: "ok",
-                version: "0.7.5",
-                modules: ModuleStatus(
-                    stt: true, llm: true, touchup: true, grammar: true,
-                    vad: true, tts: false, infinite: nil
-                )
-            ),
-            "HealthStatus", to: dir
-        )
-
         // MARK: STT/LLM/TouchUp/Grammar/VAD bodies
 
         try write(
@@ -149,6 +142,16 @@ final class WireFixtureExportTests: XCTestCase {
                 modelUsed: "yooz-light-v2", warnings: nil
             ),
             "TouchUpResponse", to: dir
+        )
+        // Populated-warnings variant: the nil-warnings fixture above cannot
+        // catch a silent key rename of an optional field the encoder omits.
+        try write(
+            TouchUpResponse(
+                result: "Hello, world.", mode: .full, processingTimeMs: 310,
+                modelUsed: "yooz-light-v2",
+                warnings: ["yooz-quality-v2 not loaded; fell back to yooz-light-v2"]
+            ),
+            "TouchUpResponseWarnings", to: dir
         )
 
         try write(
@@ -183,6 +186,20 @@ final class WireFixtureExportTests: XCTestCase {
                 STTLanguageInfo(code: "en", name: "English", implemented: true, family: "latin"),
             ]),
             "STTLanguagesResponse", to: dir
+        )
+
+        // Request-side bodies the pre-refactor SDK encoded via internal
+        // structs (`BatchSTTRequest`, `STTLoadRequest`, `VADRequest`); the
+        // canonical wire types encode the identical key set (verified
+        // against the a6614bc definitions).
+        try write(
+            BatchSTTRequest(samples: [0.1, -0.2], language: "en", mode: "normal"),
+            "BatchSTTRequest", to: dir
+        )
+        try write(STTLoadRequest(language: "en"), "STTLoadRequest", to: dir)
+        try write(
+            VADRequest(samples: [0.1, -0.2, 0.3], reset: true),
+            "VADRequest", to: dir
         )
     }
 

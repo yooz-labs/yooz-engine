@@ -187,8 +187,10 @@ mirrors this via `project.yml`'s `YoozEngineWire` framework target, linked
 everywhere `EngineCore` is.
 
 A handful of module-owned domain types happen to share a name with a wire
-type but are NOT the same shape (e.g. `STTModule.TranscriptionResult` uses
-`start` + `duration`, the wire `TranscriptionResult` uses `start` + `end`;
+type but are NOT the same shape (e.g. `STTModule.AlignedToken` uses
+`start` + `duration` while the wire `AlignedToken` uses `start` + `end`,
+and `STTModule.TranscriptionResult` is a token container with computed
+text, unlike the wire `TranscriptionResult`'s flat text fields;
 `LLMModule`'s internal `LLMModelInfo` has fields `type`/`isLoaded`/`isCached`,
 unrelated to the wire `LLMModelInfo`). Call sites that import both the
 domain module and a wire re-export qualify explicitly
@@ -211,7 +213,10 @@ Adding a new shared DTO: define it once in `Sources/YoozEngineWire/`, add a
 `YoozEngine/Server/APITypes.swift` (the wire-transport concern; the target
 itself must stay Hummingbird-free), and add a decode-compat fixture test
 under `Tests/YoozEngineWireTests/` if the DTO is replacing an existing
-shape.
+shape. One xcodegen gotcha: a new `project.yml` target that depends on
+`EngineCore` (or any module framework) must also declare
+`- target: YoozEngineWire` — the `@_exported import` satisfies the
+compiler but not the linker, so omitting it fails at link time.
 
 ## Module model picker pattern
 

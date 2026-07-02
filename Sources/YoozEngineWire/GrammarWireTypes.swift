@@ -5,7 +5,7 @@
 
 import Foundation
 
-public struct GrammarCheckRequest: Codable, Sendable {
+public struct GrammarCheckRequest: Codable, Sendable, Equatable {
     public let text: String
     public let categories: [String]?
     /// Use NLTagger POS tagging for more accurate correction.
@@ -19,7 +19,7 @@ public struct GrammarCheckRequest: Codable, Sendable {
     }
 }
 
-public struct GrammarCheckResponse: Codable, Sendable {
+public struct GrammarCheckResponse: Codable, Sendable, Equatable {
     public let result: String
     public let correctionsApplied: Int
     /// Total rule count used for this check (nil if server does not report it).

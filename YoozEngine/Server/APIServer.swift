@@ -1373,9 +1373,9 @@ final class APIServer: ObservableObject {
             guard await ModuleRegistry.shared.isBundled("llm") else {
                 return moduleNotBundled("llm")
             }
-            let body: LLMGenerateRequest
+            let body: LegacyLLMGenerateRequest
             do {
-                body = try await request.decode(as: LLMGenerateRequest.self, context: context)
+                body = try await request.decode(as: LegacyLLMGenerateRequest.self, context: context)
             } catch {
                 return errorResponse(
                     status: .badRequest,
@@ -2027,11 +2027,10 @@ final class APIServer: ObservableObject {
         // The route itself is always registered so that in slim variants
         // (e.g. whisper, which embeds its own local VAD) clients get a
         // uniform HTTP 501 `module_not_bundled` response from A4 / #28
-        // rather than Hummingbird's default 404. The type-level references
-        // to `VADEngine` / `VADRequest` are still compile-time
-        // gated — the latter lives in the app target, but `VADEngine` only
+        // rather than Hummingbird's default 404. `VADRequest`/`VADResponse`
+        // live in `YoozEngineWire` (always linked), but `VADEngine` only
         // exists when `VADModule` is linked, so the handler body needs the
-        // `#if canImport(VADModule)` gate around the VAD-type call sites.
+        // `#if canImport(VADModule)` gate around the engine call sites.
         router.post("/v1/vad/detect") { [self] request, context in
             guard await ModuleRegistry.shared.isBundled("vad") else {
                 return moduleNotBundled("vad")
@@ -2501,7 +2500,7 @@ final class APIServer: ObservableObject {
                         code: "model_load_failed"
                     )
                 }
-                let mode = AudioMode(rawValue: body.mode ?? "normal") ?? .normal
+                let mode = AudioMode(rawValue: body.mode) ?? .normal
                 let wantsAligned = body.aligned ?? false
                 if wantsAligned {
                     // qwen3 doesn't emit token-level timestamps —
@@ -2626,7 +2625,7 @@ final class APIServer: ObservableObject {
                 guard await ModuleRegistry.shared.isBundled("apple_stt") else {
                     return moduleNotBundled("apple_stt")
                 }
-                let languageCode = body.language ?? "en"
+                let languageCode = body.language
                 guard let language = AppleSTTLanguage.from(rawCode: languageCode) else {
                     return errorResponse(
                         status: .badRequest,

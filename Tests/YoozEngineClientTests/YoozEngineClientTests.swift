@@ -389,8 +389,8 @@ final class YoozEngineClientTests: XCTestCase {
 
     // MARK: - LLMStatus (engine #124)
 
-    /// Locked decode for the canonical `/v1/llm/status` wire shape so the
-    /// SDK can't silently drift from the server's `LLMStatusResponse`.
+    /// Locked decode for the canonical `/v1/llm/status` wire shape
+    /// (`LLMStatus`, single definition in `YoozEngineWire` since #225).
     /// Whisper's download-progress banner reads `progress` directly.
     func testLLMStatusDecoding() throws {
         let json = """

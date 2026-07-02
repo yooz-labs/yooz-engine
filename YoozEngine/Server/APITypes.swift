@@ -112,6 +112,40 @@ struct LegacySTTSetBackendRequest: Codable {
     let engine: String?
 }
 
+/// `POST /v1/llm/generate` decode-only concern: some pre-SDK callers post
+/// the snake_case `system_prompt` spelling. The canonical shared
+/// `LLMGenerateRequest` (`YoozEngineWire`) carries only the camelCase key —
+/// this shim is what the route handler actually decodes the raw body into,
+/// accepting both spellings. Same pattern (and same rationale) as
+/// `LegacySTTSetBackendRequest` above: legacy tolerance stays a
+/// loopback-server concern, keeping the shared DTO free of
+/// transport-specific compat baggage. `workloadClass` (engine#228) is
+/// camelCase only — new with #228, so no second spelling is grandfathered
+/// in; an unknown value fails the typed decode → 400 `invalid_request` (a
+/// declared scheduling class is explicit caller intent; a silent downgrade
+/// would hide a client-side typo or version skew).
+struct LegacyLLMGenerateRequest: Decodable {
+    let prompt: String
+    let model: String?
+    let systemPrompt: String?
+    let workloadClass: MLXWorkloadClass?
+
+    private enum CodingKeys: String, CodingKey {
+        case prompt, model, systemPrompt, system_prompt, workloadClass
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.prompt = try container.decode(String.self, forKey: .prompt)
+        self.model = try container.decodeIfPresent(String.self, forKey: .model)
+        self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+            ?? container.decodeIfPresent(String.self, forKey: .system_prompt)
+        self.workloadClass = try container.decodeIfPresent(
+            MLXWorkloadClass.self, forKey: .workloadClass
+        )
+    }
+}
+
 // MARK: - WebSocket STT Messages
 //
 // Not moved to `YoozEngineWire` (#225): these are the `/v1/stt/stream`
@@ -210,7 +244,8 @@ struct WSSTTWarning: Encodable {
 //
 // Not moved to `YoozEngineWire` (#225): Infinite is loopback-only by design
 // (its only consumer is the super-yooz host; `YoozEngineInProcess` doesn't
-// even depend on `InfiniteModule`, per `RouteManifest.RouteParityAllowlist`)
+// even depend on `InfiniteModule`, per `RouteParityAllowlist` in
+// `Sources/EngineCore/RouteManifest.swift`)
 // and isn't one of the families the issue names. `InfiniteModelInfo` etc.
 // already live once, in `InfiniteModule` — this is only the Hummingbird
 // conformance, same pattern as the TouchUp picker below.

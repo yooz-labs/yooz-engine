@@ -13,10 +13,10 @@ import YoozEngineClient
 // aliases were deleted.
 //
 // What's left below are genuine, permanent collisions, not #225 artifacts:
-// `STTModule` has its own internal `AlignedToken` (`ParakeetConfiguration.swift`)
-// and `TranscriptionResult` (`ParakeetModel.swift`) domain types — the
-// batch-transcription backend's native result shape (e.g. `start` +
-// `duration` rather than the wire's `start` + `end`) — and `LLMModule` has
+// `STTModule` has its own internal `AlignedToken` (`ParakeetConfiguration.swift`;
+// `start` + `duration`, where the wire `AlignedToken` is `start` + `end`)
+// and `TranscriptionResult` (`ParakeetModel.swift`; a token container with
+// computed text, unlike the wire type's flat text fields) — and `LLMModule` has
 // its own internal `LLMModelInfo` (`TouchUp/TouchUpEngine.swift`, fields
 // `type` / `isLoaded` / `isCached`) — all deliberately distinct from the
 // `YoozEngineWire` wire types of the same name. The usual fix —

@@ -340,27 +340,20 @@ public final class InProcessTransport: EngineTransport {
 
     private func handleBatch(_ body: Data) async throws -> Data {
         let request = try JSONDecoder().decode(BatchSTTRequest.self, from: body)
-        // `language`/`mode` are optional on the canonical `BatchSTTRequest`
-        // (the loopback server tolerates an absent value on some call paths),
-        // but every SDK caller supplies both — guard explicitly so a missing
-        // key still fails fast here exactly as it did when this handler
-        // decoded a mirror struct with non-optional fields (#225).
-        guard let rawLanguage = request.language else {
-            throw YoozEngineError.serverError(
-                statusCode: 400, code: "invalid_request",
-                message: "Missing 'language' field"
-            )
-        }
-        guard let language = STTModule.STTLanguage.fromCode(rawLanguage) else {
+        // A missing `language`/`mode` key decodes as `"en"`/`"normal"` — the
+        // defaults live on the canonical `BatchSTTRequest` itself, so this
+        // handler and the loopback route agree by construction (#225 review).
+        // An unknown language string is still a hard 400; an unknown mode
+        // string coerces to `.normal` for parity with the loopback server,
+        // which also coerces rather than 400s.
+        guard let language = STTModule.STTLanguage.fromCode(request.language) else {
             throw YoozEngineError.serverError(
                 statusCode: 400,
                 code: "invalid_language",
-                message: "Unknown STT language '\(rawLanguage)'"
+                message: "Unknown STT language '\(request.language)'"
             )
         }
-        // Unknown mode falls back to `.normal` for parity with the loopback
-        // server (APIServer `/v1/stt/batch`), which also coerces rather than 400s.
-        let mode = request.mode.flatMap(STTModule.AudioMode.init(rawValue:)) ?? .normal
+        let mode = STTModule.AudioMode(rawValue: request.mode) ?? .normal
         try await YoozSTTEngine.shared.start(language: language)
 
         // `batchTranscribe` is non-throwing and returns `ParakeetResult.empty`
@@ -376,7 +369,7 @@ public final class InProcessTransport: EngineTransport {
             throw YoozEngineError.serverError(
                 statusCode: 503,
                 code: "stt_not_loaded",
-                message: "STT model failed to load for language '\(rawLanguage)'"
+                message: "STT model failed to load for language '\(request.language)'"
             )
         }
 
@@ -392,7 +385,7 @@ public final class InProcessTransport: EngineTransport {
                 text: result.text,
                 finalized: result.text,
                 draft: "",
-                language: rawLanguage,
+                language: request.language,
                 tokens: tokens
             )
             return try JSONEncoder().encode(response)
@@ -406,7 +399,7 @@ public final class InProcessTransport: EngineTransport {
             text: result.text,
             finalized: result.finalized,
             draft: result.draft,
-            language: rawLanguage,
+            language: request.language,
             tokens: nil
         )
         return try JSONEncoder().encode(response)
@@ -430,30 +423,27 @@ public final class InProcessTransport: EngineTransport {
     /// this endpoint is a pre-warm, not a prerequisite, for transcription.
     private func handleSTTLoad(_ body: Data, wait: Bool) async throws -> Data {
         let request = try JSONDecoder().decode(STTLoadRequest.self, from: body)
-        // `language` is optional on the canonical `STTLoadRequest` (the
-        // loopback server falls back to the current backend's default when
-        // absent), but every SDK caller supplies one — guard explicitly so a
-        // missing key still fails fast here exactly as it did when this
-        // handler decoded a mirror struct with a non-optional field (#225).
-        guard let rawLanguage = request.language else {
-            throw YoozEngineError.serverError(
-                statusCode: 400, code: "invalid_request",
-                message: "Missing 'language' field"
-            )
-        }
-        guard let language = STTModule.STTLanguage.fromCode(rawLanguage) else {
+        // A missing `language` key decodes as `"en"` — the default lives on
+        // the canonical `STTLoadRequest` itself, so this handler and the
+        // loopback route agree by construction (#225 review). An unknown
+        // language string is still a hard 400.
+        guard let language = STTModule.STTLanguage.fromCode(request.language) else {
             throw YoozEngineError.serverError(
                 statusCode: 400,
                 code: "invalid_language",
-                message: "Unknown STT language '\(rawLanguage)'"
+                message: "Unknown STT language '\(request.language)'"
             )
         }
+        // Honored by the MLX branch below; parity with the loopback route's
+        // `runSTTLoad(language:allowFetch:)`. Apple STT ignores the flag —
+        // its model is supplied by the OS.
+        let allowFetch = request.allowFetch ?? true
         switch YoozSTTEngine.shared.currentBackend {
         case .appleSTT:
-            guard let appleLang = AppleSTTLanguage.from(rawCode: rawLanguage) else {
+            guard let appleLang = AppleSTTLanguage.from(rawCode: request.language) else {
                 throw YoozEngineError.serverError(
                     statusCode: 400, code: "invalid_language",
-                    message: "Language '\(rawLanguage)' is not supported by Apple STT"
+                    message: "Language '\(request.language)' is not supported by Apple STT"
                 )
             }
             // Apple STT has no HF download/materialize phase; load synchronously.
@@ -463,7 +453,9 @@ public final class InProcessTransport: EngineTransport {
             throw YoozEngineError.unsupportedOperation(operation: "load qwen3 preview")
         case .parakeet, .fastConformer:
             let task = await YoozSTTEngine.shared.enqueueLoad(language: language) {
-                try await YoozSTTEngine.shared.start(language: language)
+                try await YoozSTTEngine.shared.start(
+                    language: language, allowFetch: allowFetch
+                )
             }
             if wait {
                 try await awaitLoadTask(

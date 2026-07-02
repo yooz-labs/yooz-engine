@@ -85,7 +85,7 @@ public struct STTBackendsResponse: Codable, Sendable, Equatable {
 /// field pre-#99 clients post is a server-only decode concern — see
 /// `LegacySTTSetBackendRequest` in `YoozEngine/Server/APITypes.swift` — not
 /// part of this canonical shared shape.
-public struct STTSetBackendRequest: Codable, Sendable {
+public struct STTSetBackendRequest: Codable, Sendable, Equatable {
     public let id: String
     public let preload: Bool?
 
@@ -156,39 +156,70 @@ public struct STTLanguagesResponse: Codable, Sendable, Equatable {
 
 // MARK: - Load / batch requests
 
-/// Request body for `POST /v1/stt/load`. `language`/`allowFetch` are
-/// optional on this canonical shape because the server tolerates an absent
-/// `language` (falls back to the current backend's default) — SDK callers
-/// always supply one.
+/// Request body for `POST /v1/stt/load`.
+///
+/// `language` is non-optional with a decode-side default: a body that omits
+/// the key decodes as `"en"`. That bakes the "missing language means
+/// English" rule — which the loopback server has always applied — into the
+/// type itself, so every transport (loopback, in-process, future XPC)
+/// behaves identically by construction instead of each handler re-deciding
+/// what absence means (#225 review). SDK callers always supply a language;
+/// the default only fires for hand-rolled callers.
 public struct STTLoadRequest: Codable, Sendable, Equatable {
-    public let language: String?
+    public let language: String
     /// When true (or unset), the engine fetches the model from Hugging Face
     /// if no local snapshot is staged. When false, the load fails with
     /// `model_not_cached` rather than touching the network.
     public let allowFetch: Bool?
 
-    public init(language: String? = nil, allowFetch: Bool? = nil) {
+    public init(language: String = "en", allowFetch: Bool? = nil) {
         self.language = language
         self.allowFetch = allowFetch
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case language, allowFetch
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.language = try container.decodeIfPresent(String.self, forKey: .language) ?? "en"
+        self.allowFetch = try container.decodeIfPresent(Bool.self, forKey: .allowFetch)
+    }
 }
 
-/// Request body for `POST /v1/stt/batch`. `language`/`mode` are optional on
-/// this canonical shape for the same reason as `STTLoadRequest`; SDK callers
-/// always supply both.
+/// Request body for `POST /v1/stt/batch`.
+///
+/// `language`/`mode` are non-optional with decode-side defaults (`"en"` /
+/// `"normal"`) — same transport-parity-by-construction rationale as
+/// `STTLoadRequest`. `aligned` stays a true optional: absence means "no
+/// alignment", and it is omitted on encode so pre-#34 servers see
+/// byte-identical traffic.
 public struct BatchSTTRequest: Codable, Sendable, Equatable {
     public let samples: [Float]
-    public let language: String?
-    public let mode: String?
+    public let language: String
+    public let mode: String
     /// Opt-in flag for per-token alignment in the response. Omitted on the
     /// wire when `nil` so old clients/servers stay byte-identical.
     public let aligned: Bool?
 
-    public init(samples: [Float], language: String? = nil, mode: String? = nil, aligned: Bool? = nil) {
+    public init(samples: [Float], language: String = "en", mode: String = "normal", aligned: Bool? = nil) {
         self.samples = samples
         self.language = language
         self.mode = mode
         self.aligned = aligned
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case samples, language, mode, aligned
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.samples = try container.decode([Float].self, forKey: .samples)
+        self.language = try container.decodeIfPresent(String.self, forKey: .language) ?? "en"
+        self.mode = try container.decodeIfPresent(String.self, forKey: .mode) ?? "normal"
+        self.aligned = try container.decodeIfPresent(Bool.self, forKey: .aligned)
     }
 }
 
