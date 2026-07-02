@@ -50,73 +50,34 @@ public struct RouteManifestEntry: Sendable, Equatable {
     public var key: String { "\(method.rawValue) \(path)" }
 }
 
-/// The tactical route manifest (#223): every route `APIServer` registers on
-/// the loopback Hummingbird server. `Tests/YoozEngineInProcessTests/RouteParityTests.swift`
-/// walks this list and fails if a non-allowlisted entry is not reachable
-/// through `InProcessTransport` — so a new `APIServer` route with no
-/// in-process handler and no `RouteParityAllowlist` entry breaks the build
-/// instead of silently drifting (the `/v1/session/*` gap that motivated this
-/// issue).
+/// The route manifest (#223): every route `APIServer` registers on the
+/// loopback Hummingbird server.
+/// `Tests/YoozEngineInProcessTests/RouteParityTests.swift` walks this list
+/// and fails if a non-allowlisted entry is not reachable through
+/// `InProcessTransport` — so a new `APIServer` route with no in-process
+/// handler and no `RouteParityAllowlist` entry breaks the build instead of
+/// silently drifting (the `/v1/session/*` gap that motivated this issue).
 ///
-/// KEEP IN SYNC BY HAND with `APIServer`'s `router.get/post/delete/ws(...)`
-/// calls when adding, removing, or renaming a route. There is no automated
-/// check today that this list matches `APIServer`'s registrations (the
-/// `APIServer` half of the parity check needs the app-hosted Xcode test
-/// target; blocked on #105 / #202 — see the comment above `buildRouter()` in
-/// `APIServer.swift`). This SPM-side manifest is the source of truth for the
-/// in-process half, which SPM tests do enforce automatically.
+/// Since #225 Phase B this is a PROJECTION of the `EndpointSpecs` catalog —
+/// the single declaration of every REST route — plus the one WebSocket
+/// route, which is not a REST-dispatchable endpoint (no
+/// `EndpointTable`-shaped handler; its in-process equivalent is
+/// `InProcessTransport.openSTTStream(language:mode:)`). Add or rename a
+/// route in `EndpointSpecs`, not here; the manifest, the endpoint table,
+/// and the parity test all follow automatically.
 public enum RouteManifest {
-    public static let all: [RouteManifestEntry] = [
-        .init(.get, "/v1/health"),
-        .init(.get, "/v1/modules"),
-        .init(.get, "/v1/models"),
-        .init(.delete, "/v1/models/:id"),
-        .init(.post, "/v1/models/cleanup"),
-
-        .init(.post, "/v1/session/begin"),
-        .init(.post, "/v1/session/end"),
-
-        .init(.post, "/v1/llm/generate"),
-        .init(.get, "/v1/llm/models"),
-        .init(.get, "/v1/llm/status"),
-        .init(.post, "/v1/llm/model"),
-        .init(.post, "/v1/llm/preload"),
-        .init(.post, "/v1/llm/unload"),
-
-        .init(.get, "/v1/infinite/models"),
-        .init(.post, "/v1/infinite/model"),
-        .init(.get, "/v1/infinite/status"),
-        .init(.get, "/v1/infinite/sessions"),
-        .init(.post, "/v1/infinite/sessions"),
-        .init(.get, "/v1/infinite/sessions/:sessionID"),
-        .init(.post, "/v1/infinite/sessions/:sessionID/append"),
-        .init(.post, "/v1/infinite/sessions/:sessionID/generate"),
-        .init(.post, "/v1/infinite/sessions/:sessionID/checkpoint"),
-        .init(.delete, "/v1/infinite/sessions/:sessionID"),
-
-        .init(.post, "/v1/touchup"),
-        .init(.get, "/v1/touchup/models"),
-        .init(.post, "/v1/touchup/model"),
-
-        .init(.post, "/v1/grammar/check"),
-
-        .init(.post, "/v1/vad/detect"),
-
-        .init(.get, "/v1/stt/engine"),
-        .init(.post, "/v1/stt/engine"),
-        .init(.get, "/v1/stt/languages"),
-        .init(.get, "/v1/stt/status"),
-        .init(.post, "/v1/stt/load"),
-        .init(.post, "/v1/stt/batch"),
-        // The in-process transport has no socket, so there is no literal WS
-        // upgrade to dispatch. `openSTTStream` is the equivalent call for
-        // every backend except qwen3-preview (see `RouteParityAllowlist`
-        // doc comment below for why that gap is not its own manifest entry).
-        .init(
-            .websocket, "/v1/stt/stream",
-            inProcessEquivalent: "InProcessTransport.openSTTStream(language:mode:)"
-        ),
-    ]
+    public static let all: [RouteManifestEntry] =
+        EndpointSpecs.all.map { RouteManifestEntry($0.method, $0.path) } + [
+            // The in-process transport has no socket, so there is no literal
+            // WS upgrade to dispatch. `openSTTStream` is the equivalent call
+            // for every backend except qwen3-preview (see
+            // `RouteParityAllowlist` doc comment below for why that gap is
+            // not its own manifest entry).
+            RouteManifestEntry(
+                .websocket, "/v1/stt/stream",
+                inProcessEquivalent: "InProcessTransport.openSTTStream(language:mode:)"
+            ),
+        ]
 }
 
 /// One `loopbackOnly` declaration: a manifest entry `InProcessTransport`
