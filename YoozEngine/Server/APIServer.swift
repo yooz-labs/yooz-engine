@@ -3362,33 +3362,53 @@ final class APIServer: ObservableObject {
         // model-selection changes, load-state transitions, download
         // progress, residency changes — across every module. One-directional
         // (server → client); the handler never reads `inbound` for content,
-        // only to detect the client closing the socket, so the loop below
-        // can cancel the send task and let the closure return (Hummingbird
-        // tears down the connection once the closure returns).
+        // only to detect the client closing the socket.
+        //
+        // Structured as a `withTaskGroup` race: whichever side ends FIRST —
+        // the send loop (failed `outbound.write`, e.g. broken pipe) or the
+        // inbound drain (client closed the socket) — cancels the other, and
+        // the closure returns so Hummingbird tears the connection down.
+        // Cancelling the send child is also what releases the
+        // `EngineEventBus` subscription (the bus stream's `onTermination`
+        // fires on cancellation). The earlier shape — send loop on a bare
+        // `Task` with a `defer { cancel() }` AFTER the inbound drain —
+        // leaked the subscription whenever the write path died while the
+        // read path stayed open (half-open TCP: sleep/wake, VPN drop): the
+        // broken-out send loop stopped consuming, nothing fired
+        // `onTermination`, and the subscriber's bus buffer sat registered
+        // until the socket fully died (PR #239 review finding).
         let eventsLogger = Logging.Logger(label: "live.yooz.engine.events.stream")
         wsRouter.ws("/v1/events") { inbound, outbound, _ in
-            let encoder = JSONEncoder()
             let stream = await EngineEventBus.shared.subscribe()
-            let sendTask = Task {
-                for await event in stream {
-                    do {
-                        let data = try encoder.encode(event)
-                        guard let text = String(data: data, encoding: .utf8) else { continue }
-                        try await outbound.write(.text(text))
-                    } catch {
-                        break
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    let encoder = JSONEncoder()
+                    for await event in stream {
+                        do {
+                            let data = try encoder.encode(event)
+                            guard let text = String(data: data, encoding: .utf8) else { continue }
+                            try await outbound.write(.text(text))
+                        } catch {
+                            eventsLogger.debug("events stream: send failed, closing: \(error)")
+                            break
+                        }
                     }
                 }
-            }
-            defer { sendTask.cancel() }
-            do {
-                for try await _ in inbound.messages(maxSize: 1024) {
-                    // No client-sent content is expected; draining `inbound`
-                    // is only how this closure observes the client closing
-                    // the connection.
+                group.addTask {
+                    do {
+                        for try await _ in inbound.messages(maxSize: 1024) {
+                            // No client-sent content is expected; draining
+                            // `inbound` is only how this handler observes
+                            // the client closing the connection.
+                        }
+                    } catch {
+                        eventsLogger.debug("events stream: inbound closed with error: \(error)")
+                    }
                 }
-            } catch {
-                eventsLogger.debug("events stream: inbound closed with error: \(error)")
+                // First child to finish wins; cancel the other so the
+                // closure returns promptly on either exit path.
+                await group.next()
+                group.cancelAll()
             }
         }
 

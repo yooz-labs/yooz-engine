@@ -23,9 +23,23 @@ import Foundation
 public actor EngineEventBus {
     public static let shared = EngineEventBus()
 
+    /// Per-subscriber buffer ceiling. When a subscriber stops consuming
+    /// (wedged WS writer, suspended app) its buffer keeps only the newest
+    /// this-many events — old ones drop rather than growing memory without
+    /// bound. Dropping is safe for this channel: events describe CURRENT
+    /// state (the newest `loadStateChanged`/`downloadProgress` per model
+    /// supersedes older ones), and a consumer that suspects it lost frames
+    /// re-baselines with `GET /v1/state`. 256 comfortably covers the
+    /// densest real burst (throttled download-progress ticks).
+    static let subscriberBufferLimit = 256
+
     private var subscribers: [UUID: AsyncStream<EngineEvent>.Continuation] = [:]
 
-    public init() {}
+    /// Internal on purpose (PR #239 review): production code publishes and
+    /// subscribes through `.shared` — a rival bus would have zero real
+    /// publishers wired to it — and tests construct isolated instances via
+    /// `@testable import EngineCore`.
+    init() {}
 
     /// Subscribe to the live event feed. The stream ends when the consuming
     /// `Task` is cancelled or its iteration is otherwise torn down —
@@ -33,7 +47,9 @@ public actor EngineEventBus {
     /// the bus either way, so there is no separate `unsubscribe` call.
     public func subscribe() -> AsyncStream<EngineEvent> {
         let id = UUID()
-        let (stream, continuation) = AsyncStream<EngineEvent>.makeStream()
+        let (stream, continuation) = AsyncStream<EngineEvent>.makeStream(
+            bufferingPolicy: .bufferingNewest(Self.subscriberBufferLimit)
+        )
         subscribers[id] = continuation
         continuation.onTermination = { @Sendable [weak self] _ in
             guard let self else { return }
@@ -43,10 +59,11 @@ public actor EngineEventBus {
     }
 
     /// Publish one event to every current subscriber. Never blocks on a
-    /// slow consumer: `AsyncStream.Continuation.yield` buffers (unbounded
-    /// by default), so a stalled WebSocket write cannot back-pressure the
-    /// publisher — typically a model-load `Task` that must not stall on a
-    /// UI's event-loop hiccup.
+    /// slow consumer: `yield` buffers per subscriber (bounded — see
+    /// `subscriberBufferLimit`), so a stalled WebSocket write can neither
+    /// back-pressure the publisher (typically a model-load `Task` that
+    /// must not stall on a UI's event-loop hiccup) nor grow engine memory
+    /// without bound.
     public func publish(_ event: EngineEvent) {
         for continuation in subscribers.values {
             continuation.yield(event)
