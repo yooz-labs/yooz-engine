@@ -90,6 +90,27 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
         return session
     }
 
+    /// `/v1/events` (engine#226) is NOT yet implemented over XPC.
+    ///
+    /// `YoozEngineXPCProtocol` / `YoozEngineXPCStreamClientProtocol` only
+    /// export the STT-streaming callback surface today (`openSTTStream` /
+    /// `streamDidProduce` / `streamDidFinish`) — bridging a generic,
+    /// long-lived, multi-subscriber event push over that would mean adding
+    /// new exported interface methods to both protocols, the same surface
+    /// the sibling XPC-service-packaging epic (#227) is actively building
+    /// out (`XPCServiceHandler`, `Contents/XPCServices/` packaging). Doing
+    /// it here first would collide with that work rather than build on it,
+    /// so this stays an honest `unsupportedOperation` until #227 lands and
+    /// the bridge can be added deliberately, likely alongside real XPC
+    /// packaging tests. `RouteManifest`'s `/v1/events` entry only needs
+    /// loopback + in-process parity (`RouteParityTests`) — XPC has no
+    /// equivalent gate yet since no `.xpc` bundle ships (see
+    /// `docs/engine-app-packaging.md`).
+    @available(macOS 14.0, iOS 17.0, *)
+    public func openEvents() async throws -> AsyncStream<EngineEvent> {
+        throw YoozEngineError.unsupportedOperation(operation: "openEvents (XPC)")
+    }
+
     private func openStream(streamID: String, language: String, mode: String) async throws {
         let state = SendState<Void>()
         return try await withTaskCancellationHandler {

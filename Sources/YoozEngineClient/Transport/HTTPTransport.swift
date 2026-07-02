@@ -212,6 +212,61 @@ public final class HTTPTransport: EngineTransport {
         return WebSocketSTTStreamSession(task: wsTask, session: session)
     }
 
+    /// `/v1/events` (engine#226): open a WebSocket and decode each frame as
+    /// an `EngineEvent`. Unlike `openSTTStream` there is no config/ready
+    /// handshake — the server starts pushing events immediately on connect.
+    /// The read loop runs on its own `Task`; a socket close/error or the
+    /// consumer cancelling its iteration both end the stream (via
+    /// `AsyncStream`'s `onTermination`), which tears down the socket.
+    @available(macOS 14.0, iOS 17.0, *)
+    public func openEvents() async throws -> AsyncStream<EngineEvent> {
+        let wsURL = baseURL.appendingPathComponent("v1/events")
+        guard var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false) else {
+            throw YoozEngineError.invalidResponse
+        }
+        components.scheme = "ws"
+        guard let url = components.url else {
+            throw YoozEngineError.invalidResponse
+        }
+
+        let session = URLSession(configuration: .default)
+        let task = session.webSocketTask(with: url)
+        task.resume()
+
+        let (stream, continuation) = AsyncStream<EngineEvent>.makeStream()
+        let readTask = Task {
+            let decoder = JSONDecoder()
+            while !Task.isCancelled {
+                let message: URLSessionWebSocketTask.Message
+                do {
+                    message = try await task.receive()
+                } catch {
+                    break
+                }
+                let data: Data?
+                switch message {
+                case .string(let text):
+                    data = text.data(using: .utf8)
+                case .data(let raw):
+                    data = raw
+                @unknown default:
+                    data = nil
+                }
+                guard let data, let event = try? decoder.decode(EngineEvent.self, from: data) else {
+                    continue
+                }
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+        continuation.onTermination = { _ in
+            readTask.cancel()
+            task.cancel(with: .normalClosure, reason: nil)
+            session.invalidateAndCancel()
+        }
+        return stream
+    }
+
     /// Engine error envelope: every non-2xx response carries `{error, code}`.
     private struct ServerErrorBody: Decodable {
         let error: String
