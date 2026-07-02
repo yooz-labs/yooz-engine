@@ -1395,7 +1395,8 @@ final class APIServer: ObservableObject {
                 let result = try await TouchUpEngine.shared.generate(
                     prompt: body.prompt,
                     systemPrompt: body.systemPrompt ?? "",
-                    modelType: modelType
+                    modelType: modelType,
+                    workloadClass: (body.workloadClass ?? .background).asDomain
                 )
                 let timeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
                 return try jsonResponse(LLMGenerateServerResponse(
@@ -1876,7 +1877,8 @@ final class APIServer: ObservableObject {
             // `activeModel == .yoozLight`).
             let result = await TouchUpEngine.shared.processWithActiveModel(
                 text: body.text,
-                mode: body.mode.asDomain
+                mode: body.mode.asDomain,
+                workloadClass: (body.workloadClass ?? .background).asDomain
             )
 
             var warnings: [String]? = nil
@@ -2721,6 +2723,20 @@ final class APIServer: ObservableObject {
             await MainActor.run { [weak self] in
                 self?.sttStreamCancel = { abort.flag = true }
             }
+
+            // GPU admission (engine#228): a live streaming STT session is
+            // latency-sensitive ("interactive") regardless of which backend
+            // serves it — even Apple STT, which is not an MLX consumer
+            // itself, still signals interactive load so a concurrently
+            // running MLX TouchUp/LLM ("background") submission queues or
+            // yields instead of contending for the GPU (the whisper#263
+            // evidence: Apple `.fastResults` GPU work starved the MLX
+            // touch-up). The paired `defer` guarantees the signal clears on
+            // every exit path of this closure (clean close, abort, error
+            // return) exactly once per connection, regardless of which
+            // backend branch below is taken.
+            await MLXAdmissionGate.shared.beginInteractive()
+            defer { Task { await MLXAdmissionGate.shared.endInteractive() } }
 
             #if canImport(AppleSTTModule)
             // Apple STT streaming — Option A (batch-on-close, engine#123):

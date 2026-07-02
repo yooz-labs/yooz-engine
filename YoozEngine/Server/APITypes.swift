@@ -430,10 +430,31 @@ enum ServerTouchUpMode: String, Codable, Sendable {
     #endif
 }
 
+/// Wire enum for the optional GPU-admission workload-class override on
+/// `POST /v1/touchup` and `POST /v1/llm/generate` (engine#228). Optional and
+/// additive: omitting the field preserves today's behavior — both routes
+/// default to `.background`, matching the issue's classification of
+/// touch-up/raw generation as throughput work that queues/yields behind an
+/// active interactive workload (a live streaming STT session). A caller
+/// with a genuinely latency-sensitive one-off generation can override to
+/// `.interactive` so `MLXAdmissionGate` admits it immediately.
+enum ServerWorkloadClass: String, Codable, Sendable {
+    case interactive
+    case background
+
+    var asDomain: MLXWorkloadClass {
+        switch self {
+        case .interactive: return .interactive
+        case .background: return .background
+        }
+    }
+}
+
 struct LLMGenerateServerRequest: Decodable {
     let prompt: String
     let model: String?
     let systemPrompt: String?
+    let workloadClass: ServerWorkloadClass?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: LLMGenerateRequestKey.self)
@@ -441,6 +462,11 @@ struct LLMGenerateServerRequest: Decodable {
         self.model = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("model"))
         self.systemPrompt = try container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("systemPrompt"))
             ?? container.decodeIfPresent(String.self, forKey: LLMGenerateRequestKey("system_prompt"))
+        self.workloadClass = try container.decodeIfPresent(
+            ServerWorkloadClass.self, forKey: LLMGenerateRequestKey("workloadClass")
+        ) ?? container.decodeIfPresent(
+            ServerWorkloadClass.self, forKey: LLMGenerateRequestKey("workload_class")
+        )
     }
 }
 
@@ -494,6 +520,9 @@ struct TouchUpServerRequest: Decodable {
     let text: String
     let mode: ServerTouchUpMode
     let language: String?
+    /// Optional GPU-admission override (engine#228). Nil defaults to
+    /// `.background` at the route handler — see `ServerWorkloadClass`.
+    let workloadClass: ServerWorkloadClass?
 }
 
 struct TouchUpServerResponse: ResponseCodable {
