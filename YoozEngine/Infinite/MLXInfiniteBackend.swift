@@ -127,12 +127,18 @@ public actor MLXInfiniteBackend {
         let params = GenerateParameters(
             maxTokens: maxTokens, temperature: Float(temperature), topP: 0.95
         )
-        // GPU admission (engine#228): Infinite append/generate is background
+        // GPU admission (engine#228): Infinite generation is background
         // throughput work per the issue's classification — no per-request
         // override on this path (unlike TouchUp/raw generate, Infinite has
         // no interactive use case), so it unconditionally checks the gate
-        // before doing GPU work and again between chunks.
-        try await MLXAdmissionGate.shared.checkpoint()
+        // before doing GPU work and again between chunks. (`append` is pure
+        // session bookkeeping — no GPU work, so no gate there.)
+        // `admissionWorkStart` shares one aging budget across all this
+        // generation's checkpoints — see `MLXAdmissionGate.checkpoint`.
+        let admissionWorkStart = ContinuousClock.now
+        try await MLXAdmissionGate.shared.checkpoint(
+            workStartedAt: admissionWorkStart
+        )
         let collected = try await container.perform { (ctx: ModelContext) -> (String, GenerateCompletionInfo?) in
             let cache = ctx.model.newCache(parameters: params)
             let stream = try MLXLMCommon.generate(
@@ -144,12 +150,12 @@ public actor MLXInfiniteBackend {
             var text = ""
             var info: GenerateCompletionInfo?
             for await generation in stream {
-                // Chunk-level yielding (engine#228): re-check the gate
-                // between token batches so an in-flight Infinite generation
-                // pauses if an interactive workload becomes active
-                // mid-generation. Fast no-op path when no interactive
-                // workload is active (the common case).
-                try await MLXAdmissionGate.shared.checkpoint()
+                // Chunk-level yielding (engine#228) — see the identical
+                // pattern in `MLXLLMBackend.generate` and the granularity
+                // rationale on `MLXAdmissionGate.checkpoint`.
+                try await MLXAdmissionGate.shared.checkpoint(
+                    workStartedAt: admissionWorkStart
+                )
                 switch generation {
                 case let .chunk(chunk):
                     text += chunk

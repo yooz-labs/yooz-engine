@@ -39,10 +39,14 @@ public enum MLXWorkloadClass: String, Codable, Sendable {
 ///
 /// Policy v1 (engine#228): while at least one `interactive` workload is
 /// active, a `background` submission calling `checkpoint()` queues (polls)
-/// until either the interactive load clears, or the submission has been
-/// waiting for `agingInterval` — at which point it is force-admitted
-/// regardless of interactive load. That is the starvation guard: interactive
-/// activity can delay background work but can never block it forever.
+/// until either the interactive load clears, or the aging deadline passes —
+/// at which point it is force-admitted regardless of interactive load. That
+/// is the starvation guard: interactive activity can delay background work
+/// but can never block it forever. The deadline is anchored to the
+/// *enclosing unit of work* (see `checkpoint(workStartedAt:)`), so a
+/// multi-chunk generation shares one aging budget across all its
+/// checkpoints and defers at most `agingInterval` total under sustained
+/// interactive load.
 ///
 /// `interactive` submissions never call `checkpoint()`. They signal via
 /// `beginInteractive()` / `endInteractive()` and always run immediately —
@@ -89,7 +93,11 @@ public actor MLXAdmissionGate {
         /// interactive load actually clearing — see `agingInterval`.
         public let backgroundForcedByAging: Int
 
-        public init(
+        /// Internal on purpose: a `QueueState` is a read-only observability
+        /// snapshot that should only originate from
+        /// `MLXAdmissionGate.queueState` — external callers cannot fabricate
+        /// one (e.g. with negative counters) that never came from a gate.
+        init(
             interactiveActive: Int,
             backgroundWaiting: Int,
             backgroundAdmittedImmediately: Int,
@@ -130,12 +138,20 @@ public actor MLXAdmissionGate {
     ///   - agingInterval: starvation-guard ceiling. Defaults to
     ///     `EngineConfig.gpuAdmissionAgingSeconds` (production: 2s, matching
     ///     the #263 target of bounding background latency to within 2x of
-    ///     idle under an active interactive session).
+    ///     idle under an active interactive session). Note: `.shared` reads
+    ///     the env-var-backed default once, at its lazy first access —
+    ///     mutating `YOOZ_GPU_ADMISSION_AGING_SEC` after that is ignored for
+    ///     the process lifetime. Bench harnesses that need a different value
+    ///     must set the env var before anything touches `.shared`.
     ///   - pollInterval: queued-wait poll granularity. Defaults to 20ms.
     public init(
         agingInterval: Duration = .seconds(EngineConfig.gpuAdmissionAgingSeconds),
         pollInterval: Duration = .milliseconds(20)
     ) {
+        precondition(
+            agingInterval > .zero && pollInterval > .zero,
+            "MLXAdmissionGate intervals must be positive: a non-positive agingInterval silently defeats the starvation guard; a non-positive pollInterval busy-spins the actor"
+        )
         self.agingInterval = agingInterval
         self.pollInterval = pollInterval
     }
@@ -179,11 +195,24 @@ public actor MLXAdmissionGate {
     ///
     /// Returns immediately when no interactive workload is active.
     /// Otherwise queues (polling `pollInterval`) until interactive load
-    /// clears or `agingInterval` elapses since this call started waiting,
-    /// whichever comes first — the starvation guard. Cooperatively
-    /// cancellable: propagates `CancellationError` if the calling Task is
-    /// cancelled while queued.
-    public func checkpoint() async throws {
+    /// clears or the aging deadline passes, whichever comes first — the
+    /// starvation guard. Cooperatively cancellable: propagates
+    /// `CancellationError` if the calling Task is cancelled while queued.
+    ///
+    /// - Parameter workStartedAt: when the enclosing unit of background work
+    ///   (e.g. one whole LLM generation) began. The aging deadline is
+    ///   `workStartedAt + agingInterval`, so all the checkpoints of one
+    ///   generation share a single aging budget: under *sustained*
+    ///   interactive load the generation defers at most `agingInterval`
+    ///   total, not `agingInterval` per chunk (which for a multi-chunk
+    ///   generation would multiply into the unbounded-latency regression
+    ///   the #263 acceptance criterion forbids). Once the shared budget is
+    ///   spent, subsequent checkpoints of that generation force-admit
+    ///   immediately. Pass `nil` (the default) for a standalone checkpoint
+    ///   whose budget starts now.
+    public func checkpoint(
+        workStartedAt: ContinuousClock.Instant? = nil
+    ) async throws {
         guard interactiveActive > 0 else {
             backgroundAdmittedImmediately += 1
             return
@@ -197,7 +226,8 @@ public actor MLXAdmissionGate {
             signposter.endInterval("background_wait", waitState)
         }
 
-        let deadline = ContinuousClock.now.advanced(by: agingInterval)
+        let deadline = (workStartedAt ?? ContinuousClock.now)
+            .advanced(by: agingInterval)
         var agedOut = false
         while interactiveActive > 0 {
             if ContinuousClock.now >= deadline {

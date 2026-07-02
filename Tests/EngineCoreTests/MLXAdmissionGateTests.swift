@@ -136,6 +136,73 @@ final class MLXAdmissionGateTests: XCTestCase {
         XCTAssertEqual(state.backgroundWaiting, 0)
     }
 
+    func testSharedAgingBudgetForceAdmitsImmediatelyOnceSpent() async throws {
+        // Models the per-generation shared budget (checkpoint(workStartedAt:)):
+        // once a generation's aging budget is spent, every later checkpoint
+        // of that generation force-admits without re-paying the ceiling —
+        // total deferral per generation is bounded by one agingInterval,
+        // not agingInterval x chunkCount.
+        let gate = MLXAdmissionGate(
+            agingInterval: .milliseconds(30), pollInterval: .milliseconds(5)
+        )
+        await gate.beginInteractive()
+
+        // A work-start far enough in the past that the budget is spent.
+        let start = ContinuousClock.now.advanced(by: .milliseconds(-100))
+        let clock = ContinuousClock.now
+        try await gate.checkpoint(workStartedAt: start)
+        try await gate.checkpoint(workStartedAt: start)
+        try await gate.checkpoint(workStartedAt: start)
+        let elapsed = ContinuousClock.now - clock
+
+        let state = await gate.queueState
+        XCTAssertEqual(
+            state.backgroundForcedByAging, 3,
+            "spent-budget checkpoints must force-admit, not queue afresh"
+        )
+        XCTAssertLessThan(
+            elapsed, .milliseconds(30 * 3),
+            "spent-budget checkpoints must not each re-pay the aging ceiling"
+        )
+    }
+
+    func testBackgroundStaysQueuedUntilLastInteractiveSessionEnds() async throws {
+        // Overlapping interactive sessions (e.g. two concurrent streaming
+        // STT connections): a queued background checkpoint is admitted only
+        // when the LAST interactive session ends, not the first.
+        let gate = MLXAdmissionGate(agingInterval: .seconds(5), pollInterval: .milliseconds(5))
+        await gate.beginInteractive()
+        await gate.beginInteractive()
+
+        let checkpointTask = Task { try await gate.checkpoint() }
+        var observedQueued = false
+        for _ in 0..<200 {
+            let state = await gate.queueState
+            if state.backgroundWaiting == 1 {
+                observedQueued = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(observedQueued)
+
+        // First session ends — background must STAY queued.
+        await gate.endInteractive()
+        try await Task.sleep(for: .milliseconds(30))
+        var state = await gate.queueState
+        XCTAssertEqual(
+            state.backgroundWaiting, 1,
+            "background must stay queued while any interactive session remains"
+        )
+
+        // Last session ends — background admits.
+        await gate.endInteractive()
+        try await checkpointTask.value
+        state = await gate.queueState
+        XCTAssertEqual(state.backgroundAdmittedAfterWait, 1)
+        XCTAssertEqual(state.backgroundForcedByAging, 0)
+    }
+
     // MARK: - Cancellation
 
     func testCheckpointPropagatesCancellationWhileQueued() async throws {

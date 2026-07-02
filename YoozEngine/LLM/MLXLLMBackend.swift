@@ -302,6 +302,12 @@ actor MLXLLMBackend: LLMBackend {
         }
 
         var phase = "setup"
+        // Anchor for this generation's shared aging budget (engine#228):
+        // every gate checkpoint below passes this instant so the whole
+        // generation defers at most one `agingInterval` total under
+        // sustained interactive load, instead of paying the ceiling once
+        // per token batch.
+        let admissionWorkStart = ContinuousClock.now
         do {
             // GPU admission (engine#228): a background submission (TouchUp
             // generation, raw `/v1/llm/generate`) checks the gate before
@@ -311,7 +317,9 @@ actor MLXLLMBackend: LLMBackend {
             // Interactive calls skip the gate: they are never expected to
             // wait behind another submission.
             if workloadClass == .background {
-                try await MLXAdmissionGate.shared.checkpoint()
+                try await MLXAdmissionGate.shared.checkpoint(
+                    workStartedAt: admissionWorkStart
+                )
             }
 
             let estimatedTokens = max(100, (prompt.count / 3) + 50)
@@ -408,9 +416,13 @@ actor MLXLLMBackend: LLMBackend {
                     // generation pauses if an interactive workload becomes
                     // active mid-generation, rather than only queuing at
                     // submission time. Fast no-op path when no interactive
-                    // workload is active (the common case).
+                    // workload is active (the common case). `workStartedAt`
+                    // shares one aging budget across all this generation's
+                    // checkpoints — see `MLXAdmissionGate.checkpoint`.
                     if workloadClass == .background {
-                        try await MLXAdmissionGate.shared.checkpoint()
+                        try await MLXAdmissionGate.shared.checkpoint(
+                            workStartedAt: admissionWorkStart
+                        )
                     }
                     // ml-explore `Generation.chunk` carries the decoded String.
                     if case let .chunk(chunk) = generation {
@@ -487,6 +499,19 @@ actor MLXLLMBackend: LLMBackend {
 
             logger.debug("Generation complete, got \(result.text.count) chars")
             return postProcessResponse(result.text, originalInput: prompt)
+        } catch is CancellationError {
+            // Task cancellation (client disconnect, caller teardown) is not a
+            // model fault: rethrow it typed instead of wrapping it into
+            // `generationFailed`, so callers and error-rate triage can tell
+            // "the caller went away while queued at the admission gate /
+            // mid-generation" apart from a real MLX/tokenizer failure. The
+            // gate's `checkpoint()` is the newest cancellation source here
+            // (engine#228). Debug-level log on purpose — this is not a fault.
+            cachedPromptKVState = nil
+            cachedPromptTokenCount = 0
+            cachedSystemPrompt = nil
+            logger.debug("Generation cancelled during \(phase)")
+            throw CancellationError()
         } catch {
             cachedPromptKVState = nil
             cachedPromptTokenCount = 0

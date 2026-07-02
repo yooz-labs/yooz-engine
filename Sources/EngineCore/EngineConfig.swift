@@ -303,7 +303,15 @@ public enum EngineConfig {
     ///
     /// Override via `YOOZ_GPU_ADMISSION_AGING_SEC` for load-testing / bench
     /// harnesses that want to exercise the aging path faster than a real
-    /// multi-second wait.
+    /// multi-second wait. Set it *before* anything touches
+    /// `MLXAdmissionGate.shared` — the shared gate reads this once at its
+    /// lazy first access and later mutations are ignored.
+    ///
+    /// Values above `gpuAdmissionAgingCeilingSeconds` are clamped down: this
+    /// knob is the starvation guard, and an absurdly large value (a typo, a
+    /// load-test env leaking into a real launch) would silently defeat the
+    /// "no deadlock" guarantee. Non-numeric / non-positive values fall back
+    /// to the 2.0 default (mirrors `streamingPartialIntervalSec`).
     public static var gpuAdmissionAgingSeconds: Double {
         guard let rawPointer = getenv("YOOZ_GPU_ADMISSION_AGING_SEC") else {
             return 2.0
@@ -312,8 +320,14 @@ public enum EngineConfig {
         guard let parsed = Double(raw), parsed > 0 else {
             return 2.0
         }
-        return parsed
+        return min(parsed, gpuAdmissionAgingCeilingSeconds)
     }
+
+    /// Hard upper bound on `gpuAdmissionAgingSeconds`. 30s is far beyond any
+    /// sensible production value (default 2s) while still short enough that
+    /// a misconfigured override cannot turn the starvation guard into an
+    /// effective deadlock.
+    public static let gpuAdmissionAgingCeilingSeconds: Double = 30
 
     // MARK: - Telemetry
 
