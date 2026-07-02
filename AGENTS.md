@@ -165,6 +165,54 @@ There is no automated check that `APIServer` and `InProcessTransport` stay in sy
 
 Full design rationale + macOS feasibility research (sandboxing, entitlements, Metal/MLX-under-XPC): `docs/engine-app-packaging.md` in the private `yooz` ecosystem repo (sibling checkout, e.g. `../yooz/docs/engine-app-packaging.md`).
 
+## Single wire-type home
+
+Every request/response DTO the loopback server, the SDK, and the in-process
+transport share is declared exactly once, in `Sources/YoozEngineWire/`
+(engine#225). `YoozEngineWire` is a dependency-free SwiftPM target (Foundation
+only) so both `EngineCore` (engine side) and `YoozEngineClient` (SDK side)
+can depend on it without pulling anything else in — it is deliberately its
+own target rather than folded into `EngineCore`, which also carries engine
+orchestration (`AIModule`, `ModuleRegistry`, `SessionCoordinator`,
+`ModelStore`, `MLXResidency`, ...) that the thin-client SDK has no business
+re-exporting to consumer apps.
+
+Both `EngineCore` and `YoozEngineClient` `@_exported import YoozEngineWire`
+(`Sources/EngineCore/WireReexport.swift`,
+`Sources/YoozEngineClient/WireReexport.swift`), so every existing
+`import EngineCore` / `import YoozEngineClient` call site keeps resolving
+wire types (`ModulesResponse`, `TouchUpModelInfo`, `LLMStatus`, ...)
+unqualified — no source changes needed downstream. `YoozEngine.xcodeproj`
+mirrors this via `project.yml`'s `YoozEngineWire` framework target, linked
+everywhere `EngineCore` is.
+
+A handful of module-owned domain types happen to share a name with a wire
+type but are NOT the same shape (e.g. `STTModule.TranscriptionResult` uses
+`start` + `duration`, the wire `TranscriptionResult` uses `start` + `end`;
+`LLMModule`'s internal `LLMModelInfo` has fields `type`/`isLoaded`/`isCached`,
+unrelated to the wire `LLMModelInfo`). Call sites that import both the
+domain module and a wire re-export qualify explicitly
+(`YoozEngineWire.TranscriptionResult`, `STTModule.TranscriptionResult`) —
+`Sources/YoozEngineInProcess/SDKTypeAliases.swift` documents the in-process
+transport's cases; `YoozEngine/Server/APITypes.swift` documents the
+loopback server's.
+
+Not every DTO moved: `/v1/health`'s `EngineModules.detail` carries
+`ModuleDetailMap`, whose value type lives in the app target's
+`ModuleEagerLoader.swift` (eager-load diagnostics, not a plain DTO) — moving
+it was out of scope for #225. The `/v1/infinite/*` family and the
+`/v1/stt/stream` WebSocket frame types are also unmoved: Infinite is
+loopback-only by design (see "Packaging and transports" above) and wasn't
+named in #225's family list; the WS frames are a loopback-only wire
+protocol, not a REST body.
+
+Adding a new shared DTO: define it once in `Sources/YoozEngineWire/`, add a
+`ResponseEncodable`/`ResponseCodable` Hummingbird conformance extension in
+`YoozEngine/Server/APITypes.swift` (the wire-transport concern; the target
+itself must stay Hummingbird-free), and add a decode-compat fixture test
+under `Tests/YoozEngineWireTests/` if the DTO is replacing an existing
+shape.
+
 ## Module model picker pattern
 
 This is the **canonical wiring shape** every module that exposes a model picker (TouchUp today, STT engine + TTS voice next) MUST follow. Get it right once and the SDK + UI layers in every consumer app (whisper, notes, voice, crisp, remi) become a template instead of a redesign per module.
@@ -230,7 +278,7 @@ public func availableModels() async throws -> ModelsResponse
 public func setModel(id: String, preload: Bool = true) async throws -> ModelInfo
 ```
 
-Wire types (`ModelInfo`, `ModelsResponse`, `SetModelRequest`) live in `Sources/YoozEngineClient/Types/<Module>Types.swift` so consumer apps only depend on the SDK module.
+Wire types (`ModelInfo`, `ModelsResponse`, `SetModelRequest`) live once in `Sources/YoozEngineWire/` (#225 wire-type consolidation) — a dependency-free SPM target the server (`EngineCore` re-export), the SDK (`YoozEngineClient` re-export), and the in-process transport all resolve through their existing imports. Consumer apps still only depend on the SDK module; they never import `YoozEngineWire` directly.
 
 ### App
 
@@ -249,7 +297,7 @@ UI binds to `picker.options` and writes through `picker.select(id:)`; the store 
 2. Add `private(set) var activeModel: <Module>ModelSelection` to the module's actor.
 3. Implement `availableModels() -> [ModelInfo]` and `setActiveModel(_:preload:)` on the actor.
 4. Wire `GET /v1/<module>/models` and `POST /v1/<module>/model` in `APIServer`.
-5. Mirror `ModelInfo` / `ModelsResponse` / `SetModelRequest` in `Sources/YoozEngineClient/Types/<Module>Types.swift`.
+5. Define `ModelInfo` / `ModelsResponse` / `SetModelRequest` once, in `Sources/YoozEngineWire/<Module>WireTypes.swift` (not the SDK or the server — see "Single wire-type home" below).
 6. Add `availableModels()` + `setModel(id:preload:)` to `<Module>Client.swift`.
 7. Pin the wire id contract with a `<Module>SelectionTests` file (mirrors `STTLanguageHuggingFaceIDTests` shape).
 

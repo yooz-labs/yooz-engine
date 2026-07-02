@@ -124,7 +124,7 @@ final class TouchUpPickerTests: XCTestCase {
         XCTAssertEqual(active, .yoozLight)
     }
 
-    /// Wire shape for the picker `ModelInfo` is the canonical
+    /// Wire shape for the picker `ManagedModelInfo` is the canonical
     /// pattern (per AGENTS.md). This test pins the JSON keys so a
     /// future renumbering of fields breaks the build, not the
     /// downstream SDK decode in production.

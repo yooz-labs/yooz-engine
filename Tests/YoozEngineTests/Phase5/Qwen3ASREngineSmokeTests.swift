@@ -6,6 +6,10 @@ import XCTest
 import EngineCore
 @testable import STTModule
 @testable import YoozEngine
+// `STTModule.TranscriptionResult` (imported above) collides with the wire
+// `TranscriptionResult` this test decodes the HTTP response into — see
+// AGENTS.md "Single wire-type home".
+import YoozEngineWire
 
 /// Phase 5 — end-to-end smoke test for `/v1/stt/batch` with the
 /// qwen3 backend selected. Loads the canonical Qwen3-ASR checkpoint
@@ -185,7 +189,7 @@ final class Qwen3ASREngineSmokeTests: XCTestCase {
         )
         XCTAssertEqual((batchResp as? HTTPURLResponse)?.statusCode, 200)
         let decoded = try JSONDecoder().decode(
-            BatchSTTResponse.self, from: batchBody
+            YoozEngineWire.TranscriptionResult.self, from: batchBody
         )
         XCTAssertEqual(
             decoded.text, reference.transcriptionText,

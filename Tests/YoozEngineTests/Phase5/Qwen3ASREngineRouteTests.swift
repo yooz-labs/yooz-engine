@@ -118,7 +118,7 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
         await resetEngineState()
         try await withServer { server in
             let payload = try JSONEncoder().encode(
-                STTSetBackendRequest(
+                LegacySTTSetBackendRequest(
                     id: "qwen3_asr_preview",
                     preload: nil,
                     engine: nil
@@ -150,7 +150,7 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
         await resetEngineState()
         try await withServer { server in
             let payload = try JSONEncoder().encode(
-                STTSetBackendRequest(
+                LegacySTTSetBackendRequest(
                     id: "no-such-backend",
                     preload: nil,
                     engine: nil
@@ -179,7 +179,7 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
         await resetEngineState()
         try await withServer { server in
             let payload = try JSONEncoder().encode(
-                STTSetBackendRequest(id: nil, preload: nil, engine: "qwen3_asr_preview")
+                LegacySTTSetBackendRequest(id: nil, preload: nil, engine: "qwen3_asr_preview")
             )
             let (http, body) = try await post(
                 "/v1/stt/engine", body: payload, on: server
@@ -204,7 +204,7 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
         await resetEngineState()
         try await withServer { server in
             let payload = try JSONEncoder().encode(
-                STTSetBackendRequest(
+                LegacySTTSetBackendRequest(
                     id: "parakeet",
                     preload: nil,
                     engine: "apple_stt"
@@ -233,7 +233,7 @@ final class Qwen3ASREngineRouteTests: XCTestCase {
         await resetEngineState()
         try await withServer { server in
             let payload = try JSONEncoder().encode(
-                STTSetBackendRequest(
+                LegacySTTSetBackendRequest(
                     id: "qwen3_asr_preview",
                     preload: nil,
                     engine: "qwen3_asr_preview"
