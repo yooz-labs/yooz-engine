@@ -35,17 +35,56 @@ final class InProcessSTTStreamSession: STTStreamSession, @unchecked Sendable {
     private var appleBuffer: [Float] = []
     private var closeTriggered = false
 
+    /// Handle for the `beginInteractive()` signal fired from `init` (which
+    /// is synchronous and cannot `await`). The end side awaits this handle
+    /// before calling `endInteractive()`, which enforces begin-happens-
+    /// before-end: without it, a session closed immediately after
+    /// construction could have its (fire-and-forget) end task reach the
+    /// gate actor before the begin task — the end would no-op on the
+    /// underflow guard and the late begin would then leak a permanently
+    /// elevated interactive count, throttling every future background
+    /// generation in the process (engine#228 review finding).
+    private let interactiveBeginTask: Task<Void, Never>
+
+    /// Guards the `endInteractive()` release so the `close()` path and the
+    /// `deinit` backstop can never both fire it. Guarded by `lock`.
+    private var interactiveEndFired = false
+
     init(backend: Backend) {
         self.backend = backend
         // GPU admission (engine#228): an in-process streaming STT session is
         // just as latency-sensitive as the loopback WS path — signal
         // interactive load so a concurrently running background MLX
         // submission (TouchUp/LLM) queues or yields instead of contending
-        // for the GPU. `init` is synchronous; the signal is best-effort
-        // (a fire-and-forget Task) and is cleared exactly once, paired in
-        // `finalizeAndFinish()`, which `close()` guarantees runs at most
-        // once per session via `closeTriggered`.
-        Task { await MLXAdmissionGate.shared.beginInteractive() }
+        // for the GPU. Cleared exactly once via `releaseInteractiveSignal()`
+        // (from `finalizeAndFinish()`, or the `deinit` backstop when a
+        // consumer drops the session without ever calling `close()`).
+        interactiveBeginTask = Task { await MLXAdmissionGate.shared.beginInteractive() }
+    }
+
+    deinit {
+        // Backstop for consumers that drop the session without calling
+        // `close()`: an unbalanced `beginInteractive()` would otherwise
+        // throttle every future background generation for the process
+        // lifetime. No-op when `close()` ran (the usual path).
+        releaseInteractiveSignal()
+    }
+
+    /// Clear this session's interactive signal exactly once, after the
+    /// begin signal has provably landed (awaiting `interactiveBeginTask`
+    /// establishes begin-happens-before-end). Callable from `deinit`
+    /// (synchronous) because the actual gate calls hop to an unstructured
+    /// Task that captures the handles it needs, not `self`.
+    private func releaseInteractiveSignal() {
+        lock.lock()
+        let alreadyFired = interactiveEndFired
+        interactiveEndFired = true
+        lock.unlock()
+        guard !alreadyFired else { return }
+        Task { [interactiveBeginTask] in
+            await interactiveBeginTask.value
+            await MLXAdmissionGate.shared.endInteractive()
+        }
     }
 
     func sendAudio(_ samples: [Float]) async throws {
@@ -184,10 +223,9 @@ final class InProcessSTTStreamSession: STTStreamSession, @unchecked Sendable {
     }
 
     private func finalizeAndFinish() async {
-        // Pairs the `beginInteractive()` fired from `init`. `close()` only
-        // ever schedules one `finalizeAndFinish()` Task per session
-        // (guarded by `closeTriggered`), so this fires exactly once.
-        defer { Task { await MLXAdmissionGate.shared.endInteractive() } }
+        // Pairs the `beginInteractive()` fired from `init`; ordering and
+        // exactly-once are enforced inside `releaseInteractiveSignal()`.
+        defer { releaseInteractiveSignal() }
         do {
             let result: StreamingSTTResult
             switch backend {
