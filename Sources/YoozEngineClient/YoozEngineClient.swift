@@ -93,6 +93,11 @@ public final class YoozEngineClient: Sendable {
     /// Model-management service client (disk hygiene: inventory, delete, cleanup).
     public var models: ModelsClient { ModelsClient(engine: self) }
 
+    /// Cross-module state-snapshot client (`GET /v1/state`, engine#226).
+    /// Paired with `openEvents()` — see `EngineStateStore`, the canonical
+    /// picker-wiring built on both.
+    public var engineState: EngineStateClient { EngineStateClient(engine: self) }
+
     // MARK: - Transport delegation (used by the service clients)
 
     func get(_ path: String) async throws -> Data {
@@ -110,5 +115,11 @@ public final class YoozEngineClient: Sendable {
     @available(macOS 14.0, iOS 17.0, *)
     func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
         try await transport.openSTTStream(language: language, mode: mode)
+    }
+
+    /// Open the `/v1/events` live feed (engine#226). See `EngineTransport.openEvents()`.
+    @available(macOS 14.0, iOS 17.0, *)
+    public func openEvents() async throws -> AsyncStream<EngineEvent> {
+        try await transport.openEvents()
     }
 }
