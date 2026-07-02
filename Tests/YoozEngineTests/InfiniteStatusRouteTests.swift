@@ -141,8 +141,18 @@ final class InfiniteStatusRouteTests: XCTestCase {
             )
             XCTAssertEqual(appended.session.inputCharacters, 18)
 
-            let (beginHTTP, _) = try await post("/v1/session/begin")
+            let (beginHTTP, beginPayload) = try await post("/v1/session/begin")
             XCTAssertEqual(beginHTTP.statusCode, 200)
+            // Pin the loopback wire shape ({sessionId, ts}) so a field rename
+            // on the server side fails here the same way the in-process leg
+            // is pinned by `InProcessSessionTests` (engine issue #222).
+            struct BeginResponse: Decodable {
+                let sessionId: String
+                let ts: String
+            }
+            let begin = try JSONDecoder().decode(BeginResponse.self, from: beginPayload)
+            XCTAssertFalse(begin.sessionId.isEmpty)
+            XCTAssertFalse(begin.ts.isEmpty)
 
             let (getHTTP, getPayload) = try await get("/v1/infinite/sessions/\(created.id)")
             XCTAssertEqual(getHTTP.statusCode, 200)

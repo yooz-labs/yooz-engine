@@ -95,13 +95,6 @@ final class APIServer: ObservableObject {
     static let crashedNotification = Notification.Name("live.yooz.engine.server.crashed")
     static let crashErrorKey = "error"
 
-    /// Shared formatter for `/v1/session/begin` timestamps. `ISO8601DateFormatter`
-    /// is thread-safe and the default options produce a UTC `Z`-suffixed
-    /// `yyyy-MM-ddTHH:mm:ssZ` string. Cached statically so each `begin` call
-    /// reuses one formatter instance instead of allocating + configuring a fresh
-    /// one per request.
-    static let sessionTimestampFormatter = ISO8601DateFormatter()
-
     /// Module teardown watchdog: if module unloads don't complete in this
     /// interval we log, cancel the task, and force the state to `.stopped`
     /// so the user isn't stuck in `.stopping` forever.
@@ -1225,30 +1218,24 @@ final class APIServer: ObservableObject {
         // registry. Modules opt in by conforming; new modules ride this
         // boundary with zero new endpoints or client wiring.
         //
-        // Resets are cheap and weight-preserving by contract; they MUST NOT
-        // unload models. See `EngineCore/SessionResettable.swift`.
+        // The fan-out itself lives in `EngineCore.SessionCoordinator` (engine
+        // issue #222) so `InProcessTransport` — and the future XPC service —
+        // share this exact behavior instead of re-implementing it. This route
+        // only adapts the shared result to the Hummingbird wire shape.
         router.post("/v1/session/begin") { [self] _, _ in
-            let sessionId = UUID().uuidString
-            let ts = Self.sessionTimestampFormatter.string(from: Date())
-            let resettables = await ModuleRegistry.shared.allResettable()
-            for module in resettables {
-                await module.resetForNewSession()
-            }
+            let result = await SessionCoordinator.begin()
             logger.debug(
-                "Session begin: id=\(sessionId) fanout=\(resettables.count)"
+                "Session begin: id=\(result.sessionId) fanout=\(result.fanoutCount)"
             )
             return try jsonResponse(SessionBeginResponse(
-                sessionId: sessionId,
-                ts: ts
+                sessionId: result.sessionId,
+                ts: result.ts
             ))
         }
 
         router.post("/v1/session/end") { [self] _, _ in
-            let resettables = await ModuleRegistry.shared.allResettable()
-            for module in resettables {
-                await module.resetForNewSession()
-            }
-            logger.debug("Session end: fanout=\(resettables.count)")
+            let fanoutCount = await SessionCoordinator.end()
+            logger.debug("Session end: fanout=\(fanoutCount)")
             return Response(status: .noContent)
         }
 

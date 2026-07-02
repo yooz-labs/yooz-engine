@@ -232,6 +232,7 @@ let package = Package(
             name: "YoozEngineInProcessTests",
             dependencies: [
                 "YoozEngineInProcess",
+                "EngineCore",
                 .product(name: "MLX", package: "mlx-swift"),
             ],
             path: "Tests/YoozEngineInProcessTests"
