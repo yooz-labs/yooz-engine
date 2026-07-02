@@ -156,14 +156,51 @@ The engine modules are portable — epic #192 (closed 2026-06-23) made this conc
 | **In-process** (`InProcessTransport`, product `YoozEngineInProcess`) | Direct calls into the linked module actors, no socket | Shipping — Yooz Whisper links this today (see `yooz-whisper` `project.yml`, engine pinned by revision, currently 0.7.5) | App Store standalone apps |
 | **XPC** (`XPCTransport` + `XPCServiceHandler`) | `NSXPCConnection` to a sandboxed XPC service, code-signing pinned | Code-complete and unit-tested (epic #192 Phase 3, PRs #203/#205) but **no `.xpc` service target is packaged anywhere** — no app builds `Contents/XPCServices/` yet. Tracked by #227 | Not shipping yet |
 
-Two known gaps in `InProcessTransport` (both are transport-routing gaps, not module gaps — the underlying actors work fine over loopback):
+One known gap in `InProcessTransport` (a transport-routing gap, not a module gap — the underlying actors work fine over loopback):
 
-- `/v1/session/*` is not yet routed in-process, so the per-recording reset fan-out does not fire for in-process consumers (whisper) today. Tracked by #222.
-- `/v1/infinite/*` is intentionally unrouted in-process — Infinite's consumer is the loopback host (super-yooz), per the header comment in `InProcessTransport.swift`. `XPCServiceHandler` forwards to `InProcessTransport`, so this gap (and the session gap, until #222 lands) carries forward into XPC once #227 packages it.
+- `/v1/infinite/*` is intentionally unrouted in-process — Infinite's consumer is the loopback host (super-yooz), per the header comment in `InProcessTransport.swift`. `XPCServiceHandler` forwards to `InProcessTransport`, so this gap carries forward into XPC once #227 packages it. (The former `/v1/session/*` gap closed in #232; sessions now dispatch through the shared endpoint table on both transports.)
 
-There is no automated check that `APIServer` and `InProcessTransport` stay in sync; route drift is caught by hand (#223 tracks adding a parity test with an explicit loopback-only allowlist).
+Route drift between `APIServer` and `InProcessTransport` is caught by two automated layers: `RouteParityTests` (#223/#233 — every manifest route must be in-process-reachable or explicitly allowlisted with a reason) and, for converted families, the typed endpoint table (see "Typed endpoint table" below), which makes drift structurally impossible by deriving both transports from one declaration.
 
 Full design rationale + macOS feasibility research (sandboxing, entitlements, Metal/MLX-under-XPC): `docs/engine-app-packaging.md` in the private `yooz` ecosystem repo (sibling checkout, e.g. `../yooz/docs/engine-app-packaging.md`).
+
+## Typed endpoint table
+
+Converted route families are declared exactly once (engine#225 Phase B) and
+both transports derive from that declaration:
+
+- **`EndpointSpecs`** (`Sources/EngineCore/EndpointSpecs.swift`) is the
+  single declaration of every REST route's `(method, path)`. `RouteManifest`
+  is a pure projection of it (plus the one WebSocket route), pinned by
+  `EndpointTableTests.testManifestIsAProjectionOfTheSpecCatalog`. Add or
+  rename a route in the catalog, nowhere else.
+- **Handlers** for converted families are single-homed `WireHandler`
+  closures living in the module that owns the actor, so every product that
+  links the module compiles the same body: `SessionEndpoints` (EngineCore),
+  `TouchUpEndpoints` + `ModelManagementEndpoints` (LLMModule; the one
+  STT-owned input is injected as a closure since LLMModule cannot depend on
+  STTModule). Handlers throw `WireError` — rendered as the standard
+  `{"error", "code"}` body on loopback and rethrown as
+  `YoozEngineError.serverError` in-process, so the two transports share one
+  error vocabulary by construction.
+- **Dispatch**: `APIServer.register(_:on:)` registers each table entry on
+  the Hummingbird router through one generic adapter;
+  `InProcessTransport.dispatchViaTable` consults the table before its legacy
+  switch. `RouteParityTests.testEndpointTableCoversExactlyTheConvertedSpecs`
+  pins that the table binding and `EndpointSpecs.converted` never drift.
+
+Converted so far: session (`/v1/session/*`), TouchUp picker
+(`/v1/touchup/model[s]`), model management (`/v1/models*`). The remaining
+families are hand-implemented per transport (`EndpointSpecs.legacy`);
+the conversion order and per-family blockers (e.g. `POST /v1/stt/engine`'s
+MainActor UI-state coupling) are tracked on engine#225.
+
+Converting a family: move its specs from `legacy` to `converted` in
+`EndpointSpecs`, write the shared handlers in the owning module as
+`[Endpoint]`, add them to BOTH transport bindings (`APIServer.buildRouter`'s
+`register(...)` call and `InProcessTransport.endpointTable`), and delete the
+hand-written route registrations + in-process switch cases. The parity and
+table tests enforce the rest.
 
 ## Single wire-type home
 

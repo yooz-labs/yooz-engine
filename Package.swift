@@ -263,6 +263,10 @@ let package = Package(
             dependencies: [
                 "YoozEngineInProcess",
                 "EngineCore",
+                // Direct dep (also transitive via YoozEngineInProcess) so the
+                // dispatch tests can `@testable import LLMModule` for the
+                // FoundationModels availability self-skip gate.
+                "LLMModule",
                 .product(name: "MLX", package: "mlx-swift"),
             ],
             path: "Tests/YoozEngineInProcessTests"

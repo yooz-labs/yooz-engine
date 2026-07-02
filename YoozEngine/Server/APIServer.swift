@@ -553,6 +553,99 @@ final class APIServer: ObservableObject {
     }
     #endif
 
+    /// Register every entry of a typed endpoint table (engine#225 Phase B)
+    /// on the Hummingbird router through one generic adapter: collect the
+    /// body, capture the spec's `:name` path parameters, invoke the shared
+    /// `WireHandler`, and map the `WireResponse` / `WireError` back onto the
+    /// HTTP surface. `WireError` renders as the standard
+    /// `{"error": message, "code": code}` body — byte-identical to what the
+    /// hand-written registrations these replace produced via
+    /// `errorResponse`.
+    private nonisolated func register(
+        _ table: EndpointTable,
+        on router: Router<YoozEngineRequestContext>
+    ) {
+        for endpoint in table.endpoints {
+            let spec = endpoint.spec
+            let handler = endpoint.handler
+            let adapter: @Sendable (
+                Request, YoozEngineRequestContext
+            ) async throws -> Response = { [self] request, context in
+                // Body collection and parameter extraction get their own
+                // catch: a failure here (oversized body past
+                // `maxUploadSize` — `NIOTooManyBytesError`, the engine#111
+                // bug class — or a router/parameter mismatch) must render
+                // as the structured 400 `invalid_request` body the
+                // pre-table routes produced via their decode catch, never
+                // as a bare framework error. Kept separate from the
+                // handler's own errors below so a handler-internal failure
+                // is not mislabeled as a bad request.
+                let buffer: ByteBuffer
+                do {
+                    buffer = try await request.body.collect(
+                        upTo: context.maxUploadSize
+                    )
+                } catch {
+                    return errorResponse(
+                        status: .badRequest,
+                        message: "Invalid request body: \(error.localizedDescription)",
+                        code: "invalid_request"
+                    )
+                }
+                var parameters: [String: String] = [:]
+                do {
+                    for name in spec.parameterNames {
+                        parameters[name] = try context.parameters.require(name)
+                    }
+                } catch {
+                    return errorResponse(
+                        status: .badRequest,
+                        message: "Invalid request: \(error.localizedDescription)",
+                        code: "invalid_request"
+                    )
+                }
+                do {
+                    let wire = try await handler(WireRequest(
+                        body: Data(buffer: buffer),
+                        pathParameters: parameters,
+                        query: request.uri.query
+                    ))
+                    // Only a 204 is status-only by contract
+                    // (`WireResponse.noContent`); every other wire response
+                    // carries a JSON body, so it always gets the
+                    // content-type header.
+                    guard wire.status != 204 else {
+                        return Response(status: .noContent)
+                    }
+                    return Response(
+                        status: .init(code: wire.status),
+                        headers: [.contentType: "application/json"],
+                        body: .init(byteBuffer: ByteBuffer(data: wire.body))
+                    )
+                } catch let error as WireError {
+                    return errorResponse(
+                        status: .init(code: error.status),
+                        message: error.message,
+                        code: error.code
+                    )
+                }
+            }
+            let path = RouterPath(spec.path)
+            switch spec.method {
+            case .get:
+                router.get(path, use: adapter)
+            case .post:
+                router.post(path, use: adapter)
+            case .delete:
+                router.delete(path, use: adapter)
+            case .websocket:
+                preconditionFailure(
+                    "WebSocket routes are not table-dispatchable: \(spec.key)"
+                )
+            }
+        }
+    }
+
     private nonisolated func jsonResponse<T: Encodable>(
         _ value: T,
         status: HTTPResponse.Status = .ok
@@ -1227,146 +1320,24 @@ final class APIServer: ObservableObject {
             )
         }
 
-        // Session boundary (engine issue #114).
-        //
-        // Begin fires at recording start (whisper's `AppDelegate.startRecording`,
-        // in parallel with audio capture). End fires after paste completes
-        // (`AppDelegate.stopRecording`). Both routes are idempotent and both
-        // unconditionally drop per-recording state — KV caches, streaming
-        // buffers, anything tied to "the previous recording" — by fanning out
-        // `resetForNewSession()` to every `SessionResettable` module in the
-        // registry. Modules opt in by conforming; new modules ride this
-        // boundary with zero new endpoints or client wiring.
-        //
-        // The fan-out itself lives in `EngineCore.SessionCoordinator` (engine
-        // issue #222) so `InProcessTransport` — and the future XPC service —
-        // share this exact behavior instead of re-implementing it. This route
-        // only adapts the shared result to the Hummingbird wire shape.
-        router.post("/v1/session/begin") { [self] _, _ in
-            let result = await SessionCoordinator.begin()
-            logger.debug(
-                "Session begin: id=\(result.sessionId) fanout=\(result.fanoutCount)"
-            )
-            return try jsonResponse(SessionBeginResponse(
-                sessionId: result.sessionId,
-                ts: result.ts
-            ))
-        }
-
-        router.post("/v1/session/end") { [self] _, _ in
-            let fanoutCount = await SessionCoordinator.end()
-            logger.debug("Session end: fanout=\(fanoutCount)")
-            return Response(status: .noContent)
-        }
-
-        // Models — disk-hygiene inventory (real on-disk sizes + delete targets).
-        // The friendly LLM catalog (with bundle awareness) plus a disk-first
-        // sweep of every other hub repo (Parakeet, legacy) so nothing consuming
-        // disk is hidden. See `ModelStore.inventory`.
-        router.get("/v1/models") { [self] _, _ -> Response in
-            let store = ModelStore()
-            let llmInputs = await Self.llmInventoryInputs()
-            let rows = await store.inventory(
-                llm: llmInputs,
-                activeSTTRepoDirName: Self.activeSTTRepoDirName()
-            )
-            let models = rows.map {
-                ManagedModelInfo(
-                    id: $0.id, module: $0.module, displayName: $0.displayName,
-                    sizeBytes: $0.sizeBytes, cached: $0.cached, loaded: $0.loaded,
-                    isActive: $0.isActive, deletable: $0.deletable
-                )
-            }
-            return try jsonResponse(ManagedModelsResponse(models: models))
-        }
-
-        // Delete one model's reclaimable on-disk copies. Unloads it from memory
-        // first; refuses to delete the active model.
-        router.delete("/v1/models/:id") { [self] _, context -> Response in
-            let id = try context.parameters.require("id")
-            let store = ModelStore()
-
-            if let modelType = LLMModelType(rawValue: id) {
-                let active = await TouchUpEngine.shared.activeModel
-                if active.rawValue == id {
-                    return errorResponse(
-                        status: .conflict,
-                        message: "Cannot delete the active model '\(id)'",
-                        code: "model_active"
+        // Converted route families (engine#225 Phase B): session,
+        // TouchUp picker, and model management dispatch through the typed
+        // endpoint table — the same handler closures `InProcessTransport`
+        // binds (`SessionEndpoints`, `TouchUpEndpoints`,
+        // `ModelManagementEndpoints`), registered on the Hummingbird router
+        // by the generic adapter in `register(_:on:)`. Route identity comes
+        // from `EndpointSpecs`; the hand-written registrations these replace
+        // are gone, so a converted route cannot drift between transports.
+        register(
+            EndpointTable.trusted(
+                SessionEndpoints.endpoints()
+                    + TouchUpEndpoints.pickerEndpoints()
+                    + ModelManagementEndpoints.endpoints(
+                        activeSTTRepoDirName: { Self.activeSTTRepoDirName() }
                     )
-                }
-                let descriptor = LLMModelCatalog.cacheDescriptors().first { $0.id == id }
-                do {
-                    // Remove the disk copies first; only free resident weights once
-                    // that succeeds, so a delete failure leaves the model fully
-                    // usable (loaded + on disk) rather than unloaded-but-present.
-                    let reclaimed = try await store.deleteModel(
-                        hfRepoDirName: descriptor?.hfRepoDirName,
-                        modelsDirSubdir: descriptor?.modelsDirSubdir
-                    )
-                    await TouchUpEngine.shared.unload(modelType)
-                    return try jsonResponse(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
-                } catch {
-                    logger.error("DELETE /v1/models/\(id) failed: \(error.localizedDescription)")
-                    return errorResponse(
-                        status: .internalServerError,
-                        message: "Failed to delete '\(id)': \(error.localizedDescription)",
-                        code: "delete_failed"
-                    )
-                }
-            }
-
-            if id.hasPrefix("models--") {
-                if id == Self.activeSTTRepoDirName() {
-                    return errorResponse(
-                        status: .conflict,
-                        message: "Cannot delete the active model '\(id)'",
-                        code: "model_active"
-                    )
-                }
-                do {
-                    let reclaimed = try await store.deleteModel(
-                        hfRepoDirName: id, modelsDirSubdir: nil
-                    )
-                    return try jsonResponse(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
-                } catch {
-                    logger.error("DELETE /v1/models/\(id) failed: \(error.localizedDescription)")
-                    return errorResponse(
-                        status: .internalServerError,
-                        message: "Failed to delete '\(id)': \(error.localizedDescription)",
-                        code: "delete_failed"
-                    )
-                }
-            }
-
-            return errorResponse(
-                status: .notFound,
-                message: "Unknown model '\(id)'",
-                code: "unknown_model"
-            )
-        }
-
-        // One-shot disk-hygiene migration: collapse superseded snapshots + drop
-        // duplicates a higher-priority copy supersedes. Idempotent.
-        router.post("/v1/models/cleanup") { [self] _, _ -> Response in
-            let store = ModelStore()
-            do {
-                let report = try await store.cleanupAll(
-                    descriptors: LLMModelCatalog.cacheDescriptors()
-                )
-                return try jsonResponse(ModelCleanupResult(
-                    totalReclaimedBytes: report.totalReclaimedBytes,
-                    perRepo: report.perRepo
-                ))
-            } catch {
-                logger.error("POST /v1/models/cleanup failed: \(error.localizedDescription)")
-                return errorResponse(
-                    status: .internalServerError,
-                    message: "Cleanup failed: \(error.localizedDescription)",
-                    code: "cleanup_failed"
-                )
-            }
-        }
+            ),
+            on: router
+        )
 
         // LLM: Generate
         router.post("/v1/llm/generate") { [self] request, context in
@@ -1913,77 +1884,9 @@ final class APIServer: ObservableObject {
             ))
         }
 
-        // TouchUp: List available models for the picker UI.
-        // See AGENTS.md "Module model picker pattern" — this is the
-        // canonical shape every module's picker endpoint should
-        // follow (id / displayName / description / tier / sizeBytes
-        // / isAvailable / isCached / isLoaded / isActive).
-        router.get("/v1/touchup/models") { _, _ in
-            let models = await TouchUpEngine.shared.availableModels()
-            let activeId = await TouchUpEngine.shared.activeModel.rawValue
-            return TouchUpModelsResponse(models: models, activeId: activeId)
-        }
-
-        // TouchUp: Set active model. `preload` defaults to true so a
-        // one-shot picker change is enough to warm the model before
-        // the next `/v1/touchup` call. Returns the new active row so
-        // clients don't need a follow-up GET.
-        router.post("/v1/touchup/model") { [self] request, context in
-            let body: TouchUpSetModelRequest
-            do {
-                body = try await request.decode(
-                    as: TouchUpSetModelRequest.self, context: context
-                )
-            } catch {
-                return errorResponse(
-                    status: .badRequest,
-                    message: "Invalid request body: \(error.localizedDescription)",
-                    code: "invalid_request"
-                )
-            }
-
-            guard let selection = TouchUpModelSelection(rawValue: body.id) else {
-                let known = TouchUpModelSelection.allCases.map(\.rawValue).joined(separator: ", ")
-                return errorResponse(
-                    status: .badRequest,
-                    message: "Unknown TouchUp model id '\(body.id)'. Known: \(known).",
-                    code: "invalid_model"
-                )
-            }
-
-            do {
-                let active = try await TouchUpEngine.shared.setActiveModel(
-                    selection,
-                    preload: body.preload ?? true
-                )
-                return try jsonResponse(active)
-            } catch let error as LLMError {
-                // `notAvailable` is the FoundationModels-on-pre-26
-                // case — surface as 501 so the picker UI can render
-                // "not supported on this Mac" cleanly. Any other
-                // load failure (network, OOM) is 500.
-                switch error {
-                case .notAvailable(let detail):
-                    return errorResponse(
-                        status: .notImplemented,
-                        message: detail,
-                        code: "model_unavailable"
-                    )
-                default:
-                    return errorResponse(
-                        status: .internalServerError,
-                        message: error.localizedDescription,
-                        code: "model_set_failed"
-                    )
-                }
-            } catch {
-                return errorResponse(
-                    status: .internalServerError,
-                    message: error.localizedDescription,
-                    code: "model_set_failed"
-                )
-            }
-        }
+        // TouchUp picker routes (`GET /v1/touchup/models`,
+        // `POST /v1/touchup/model`) are table-registered above
+        // (`TouchUpEndpoints`, engine#225 Phase B).
 
         // Grammar: Check text
         router.post("/v1/grammar/check") { [self] request, context in
@@ -3578,21 +3481,6 @@ extension APIServer {
     }
 
     #if canImport(LLMModule)
-    /// LLM rows for the model-management inventory: the cache descriptors paired
-    /// with live display/loaded/active state from the TouchUp picker.
-    nonisolated static func llmInventoryInputs() async -> [ModelStore.LLMInventoryInput] {
-        let picker = await TouchUpEngine.shared.availableModels()
-        return LLMModelCatalog.cacheDescriptors().map { descriptor in
-            let row = picker.first { $0.id == descriptor.id }
-            return ModelStore.LLMInventoryInput(
-                descriptor: descriptor,
-                displayName: row?.displayName ?? descriptor.id,
-                loaded: row?.loadState == .loaded,
-                isActive: row?.isActive ?? false
-            )
-        }
-    }
-
     /// Build a single-model entry for the `/v1/llm/*` responses.
     /// `latencyHintMs` is a best-effort per-model baseline drawn from
     /// LLMModelType.description (e.g. "~200ms"). Keeps the JSON wire
