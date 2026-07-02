@@ -150,6 +150,12 @@ let cleaned = await client.touchUp.touchUp(text: "...", mode: .standard)
 let models = try await client.touchUp.availableModels()  // TouchUpModelsResponse
 try await client.touchUp.setModel(id: "yooz-quality-v2", preload: true)
 
+// Cross-module state snapshot + live events (engine#226) — see "Engine-owned
+// selection state" below for the full `EngineStateStore` recipe.
+let snapshot = try await client.engineState.snapshot()  // EngineStateSnapshot
+let events = try await client.openEvents()              // AsyncStream<EngineEvent>
+for await event in events { print(event.kind, event.module, event.modelId ?? "") }
+
 // Grammar
 let result = try await client.grammar.check(text: "...")
 
@@ -182,9 +188,103 @@ POST /v1/<module>/model    body { id: String, preload: Bool? } → ModelInfo
 - `loadState`: `.unavailable` < `.available` < `.cached` < `.loaded` (total ordering)
 - `isActive`: exactly one row has `isActive == true`
 
-Build a generic `ModelPickerStore<T>` once; reuse across TouchUp, STT engine, Infinite, and future TTS voices. See `yooz-whisper/YoozWhisper/UI/LLMModelPickerStore.swift` for the reference implementation.
+Full field/route pattern documented in `AGENTS.md` → "Module model picker pattern".
 
-Full pattern documented in `AGENTS.md` → "Module model picker pattern".
+### Engine-owned selection state (engine#226) — use this, not a hand-rolled store
+
+**Do not build your own persistence or polling for a model picker.** The
+engine is the source of truth for "which model is selected" and "is it
+loaded yet" — it remembers the selection across restarts and pushes every
+state transition. The previous recipe here ("build a `ModelPickerStore<T>`
+that polls and persists to `SettingsManager`") is what every consumer app
+had to reinvent, bugs included (see the engine#226 issue body: whisper's
+`LLMModelPickerStore` reconciliation latches, its three-level STT rollback
+ladder, `awaitModelReady` polling that timed out on multi-GB downloads).
+None of that is necessary anymore for a module that has adopted the
+engine-owned-selection contract (TouchUp today):
+
+```swift
+import YoozEngineClient
+
+@MainActor
+final class MyPickerViewModel: ObservableObject {
+    let state: EngineStateStore
+
+    init(client: YoozEngineClient) {
+        state = EngineStateStore(client: client)
+    }
+
+    func onAppear() async {
+        await state.start()   // GET /v1/state, then subscribe to /v1/events
+    }
+
+    func onDisappear() {
+        state.stop()          // cancel the /v1/events subscription
+    }
+}
+```
+
+```swift
+// SwiftUI
+struct TouchUpPickerView: View {
+    @ObservedObject var state: EngineStateStore
+
+    var body: some View {
+        if let touchUp = state.modules["touchup"] {
+            ForEach(touchUp.models, id: \.id) { row in
+                Button(row.displayName) {
+                    Task { try? await client.touchUp.setModel(id: row.id) }
+                }
+                .disabled(row.loadState == .unavailable)
+                if row.isActive { Image(systemName: "checkmark") }
+            }
+            if let progress = state.latestEvent(module: "touchup", kind: .downloadProgress)?.progress {
+                ProgressView(value: progress)
+            }
+        }
+    }
+}
+```
+
+That view has **zero local persistence** (no `SettingsManager` key — the
+engine remembers `touchup`'s active model across restarts via
+`ModelSelectionStore`) and **zero polling** (no `awaitModelReady` loop —
+`/v1/events` pushes `modelChanged` / `loadStateChanged` / `downloadProgress`
+/ `residencyChanged` as they happen). `POST /v1/<module>/model` itself
+returns immediately regardless of `preload` — it never blocks on a
+download; the caller learns the outcome from the event stream, not from
+the response.
+
+`EngineStateStore` is transport-agnostic — `client.openEvents()` resolves
+through whichever `EngineTransport` the client was built with. On loopback
+and in-process it just works. **XPC does not support `/v1/events` yet**
+(`XPCTransport.openEvents()` throws `unsupportedOperation`; tracked
+alongside the `.xpc` service packaging work, engine#227) — an app on the
+XPC transport should not build a picker on `EngineStateStore` until that
+lands.
+
+`GET /v1/state` and `/v1/events` are cross-module: `EngineStateStore.modules`
+is keyed by module name (`"touchup"` today), so the same store instance
+serves every module's picker in your app. `EngineModelSnapshotRow` only
+carries the seven canonical `ModelInfo` fields — a module with extension
+fields (e.g. STT's `supportsBatch` / `supportsStreaming` /
+`supportedLanguages`) still calls its own `GET /v1/<module>/models` for the
+rich rows; `EngineStateStore` is the right layer for "is a load in flight /
+what's the progress", not a replacement for a module-specific richer type.
+The existing `ModelPickerStore<T>` pattern (`yooz-whisper/YoozWhisper/UI/LLMModelPickerStore.swift`)
+remains valid for exactly that case — layer it so its refresh/progress
+signals come from `EngineStateStore.latestEvent(module:kind:)` instead of a
+poll loop, rather than reinventing persistence.
+
+Adoption status: TouchUp is the reference implementation of the full
+contract (persisted selection + non-blocking `setModel` + events). STT
+engine and Infinite have not adopted persisted selection / async
+`setModel` yet — their pickers still behave per the pre-#226 contract
+(process-lifetime selection only, and `POST /v1/stt/engine` /
+`POST /v1/infinite/model` may still block on a load). Whisper's
+reconciler deletion (dropping `LLMModelPickerStore`'s latches, the STT
+rollback ladder) is tracked as a whisper-side follow-up issue, gated on
+this section's contract actually shipping.
 
 ## Infinite long-context module
 

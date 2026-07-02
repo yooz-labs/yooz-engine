@@ -132,7 +132,9 @@ This table describes the loopback `APIServer` route surface (fixed port **19920*
 | POST | `/v1/llm/generate` | LLM text generation |
 | POST | `/v1/touchup` | Text cleanup pipeline |
 | GET | `/v1/touchup/models` | Picker: list TouchUp models with state |
-| POST | `/v1/touchup/model` | Picker: set active TouchUp model + preload |
+| POST | `/v1/touchup/model` | Picker: set active TouchUp model + preload — non-blocking (engine#226): returns immediately, never awaits a download |
+| GET | `/v1/state` | Cross-module snapshot: every module's picker catalog + active id, in one call (engine#226) |
+| WS | `/v1/events` | Live push feed of `modelChanged` / `loadStateChanged` / `downloadProgress` / `residencyChanged` events (engine#226) |
 | POST | `/v1/grammar/check` | Rule-based grammar correction |
 | POST | `/v1/vad/detect` | Voice activity detection (501 on Whisper / Lite variants, no VAD) |
 | GET | `/v1/infinite/models` | Picker: long-context models with RAM-tier gating |
@@ -160,6 +162,8 @@ One known gap in `InProcessTransport` (a transport-routing gap, not a module gap
 
 - `/v1/infinite/*` is intentionally unrouted in-process — Infinite's consumer is the loopback host (super-yooz), per the header comment in `InProcessTransport.swift`. `XPCServiceHandler` forwards to `InProcessTransport`, so this gap carries forward into XPC once #227 packages it. (The former `/v1/session/*` gap closed in #232; sessions now dispatch through the shared endpoint table on both transports.)
 
+One known gap on the XPC transport specifically: `XPCTransport.openEvents()` (engine#226, the `/v1/events` push channel — see "Module model picker pattern" → "Engine-owned model selection") throws `unsupportedOperation`. `YoozEngineXPCProtocol` / `YoozEngineXPCStreamClientProtocol` only export the STT-streaming callback surface today; bridging a generic, long-lived event push needs new exported interface methods on the same protocol surface #227 is actively packaging, so it is deferred there rather than added ahead of that work. `/v1/events` is reachable on loopback + in-process (no `RouteParityAllowlist` entry needed — see `RouteManifest`'s `inProcessEquivalent` doc), so today's gap is XPC-only.
+
 Route drift between `APIServer` and `InProcessTransport` is caught by two automated layers: `RouteParityTests` (#223/#233 — every manifest route must be in-process-reachable or explicitly allowlisted with a reason) and, for converted families, the typed endpoint table (see "Typed endpoint table" below), which makes drift structurally impossible by deriving both transports from one declaration.
 
 Full design rationale + macOS feasibility research (sandboxing, entitlements, Metal/MLX-under-XPC): `docs/engine-app-packaging.md` in the private `yooz` ecosystem repo (sibling checkout, e.g. `../yooz/docs/engine-app-packaging.md`).
@@ -171,7 +175,9 @@ both transports derive from that declaration:
 
 - **`EndpointSpecs`** (`Sources/EngineCore/EndpointSpecs.swift`) is the
   single declaration of every REST route's `(method, path)`. `RouteManifest`
-  is a pure projection of it (plus the one WebSocket route), pinned by
+  is a pure projection of it (plus the two WebSocket routes, `/v1/stt/stream`
+  and `/v1/events` — neither is REST-dispatchable so neither lives in
+  `EndpointSpecs`), pinned by
   `EndpointTableTests.testManifestIsAProjectionOfTheSpecCatalog`. Add or
   rename a route in the catalog, nowhere else.
 - **Handlers** for converted families are single-homed `WireHandler`
@@ -190,10 +196,11 @@ both transports derive from that declaration:
   pins that the table binding and `EndpointSpecs.converted` never drift.
 
 Converted so far: session (`/v1/session/*`), TouchUp picker
-(`/v1/touchup/model[s]`), model management (`/v1/models*`). The remaining
-families are hand-implemented per transport (`EndpointSpecs.legacy`);
-the conversion order and per-family blockers (e.g. `POST /v1/stt/engine`'s
-MainActor UI-state coupling) are tracked on engine#225.
+(`/v1/touchup/model[s]`), model management (`/v1/models*`), engine state
+(`GET /v1/state`, engine#226). The remaining families are hand-implemented
+per transport (`EndpointSpecs.legacy`); the conversion order and
+per-family blockers (e.g. `POST /v1/stt/engine`'s MainActor UI-state
+coupling) are tracked on engine#225.
 
 Converting a family: move its specs from `legacy` to `converted` in
 `EndpointSpecs`, write the shared handlers in the owning module as
@@ -324,14 +331,16 @@ Wire types (`ModelInfo`, `ModelsResponse`, `SetModelRequest`) live once in `Sour
 
 ### App
 
+**Canonical wiring (engine#226): `EngineStateStore`, not a hand-rolled `ModelPickerStore` + `SettingsManager` key.** For a module that has adopted the engine-owned-selection contract (persisted selection + non-blocking `setModel` + `/v1/events`; TouchUp today), the app-side store has zero local persistence and zero polling:
+
 ```swift
-@StateObject private var picker = ModelPickerStore<TouchUpModelInfo>(
-    fetch: { try await client.touchUp.availableModels().models },
-    setActive: { id in try await client.touchUp.setModel(id: id, preload: true) }
-)
+@StateObject private var state = EngineStateStore(client: client)
+// state.start() at mount (GET /v1/state, then subscribe to /v1/events);
+// state.stop() at teardown. state.modules["touchup"] drives the picker UI;
+// state.latestEvent(module:kind:) surfaces in-flight downloadProgress.
 ```
 
-UI binds to `picker.options` and writes through `picker.select(id:)`; the store handles refresh + persistence to `SettingsManager.<module>Model`. The same store works for every module.
+The prior recipe (`ModelPickerStore<T>` + `SettingsManager.<module>Model`) remains valid for a module that has NOT adopted the contract yet (STT engine, Infinite as of 2026-07) or that needs extension fields `EngineModelSnapshotRow`'s seven canonical fields don't carry — layer its refresh signal off `EngineStateStore.latestEvent(module:kind:)` rather than a poll loop when both apply. Full recipe + adoption status: `docs/CONSUMER_INTEGRATION.md` → "Engine-owned selection state".
 
 ### Adding a new picker
 
