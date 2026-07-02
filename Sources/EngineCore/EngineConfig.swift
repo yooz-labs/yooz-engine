@@ -290,6 +290,31 @@ public enum EngineConfig {
         return max(0.1, parsed)
     }
 
+    // MARK: - GPU admission control (engine#228)
+
+    /// Wall-clock ceiling (seconds) a queued background MLX submission waits
+    /// for an active interactive workload to clear before `MLXAdmissionGate`
+    /// force-admits it regardless of interactive load — the starvation
+    /// guard backing the "no deadlock" acceptance criterion on engine#228.
+    /// 2s matches the #263 bench target ("touch-up latency under an active
+    /// streaming session bounded... within 2x of idle latency"): a
+    /// background submission never queues longer than this for the GPU,
+    /// even under sustained interactive load.
+    ///
+    /// Override via `YOOZ_GPU_ADMISSION_AGING_SEC` for load-testing / bench
+    /// harnesses that want to exercise the aging path faster than a real
+    /// multi-second wait.
+    public static var gpuAdmissionAgingSeconds: Double {
+        guard let rawPointer = getenv("YOOZ_GPU_ADMISSION_AGING_SEC") else {
+            return 2.0
+        }
+        let raw = String(cString: rawPointer)
+        guard let parsed = Double(raw), parsed > 0 else {
+            return 2.0
+        }
+        return parsed
+    }
+
     // MARK: - Telemetry
 
     /// Whether the user has opted into local STT telemetry. Default
