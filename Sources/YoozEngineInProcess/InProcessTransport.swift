@@ -53,7 +53,7 @@ public final class InProcessTransport: EngineTransport {
     /// loopback router — declared once, in the module that owns each family
     /// (`SessionEndpoints` in EngineCore; `TouchUpEndpoints` /
     /// `ModelManagementEndpoints` in LLMModule).
-    static let endpointTable = EndpointTable(
+    static let endpointTable = try! EndpointTable(
         SessionEndpoints.endpoints()
             + TouchUpEndpoints.pickerEndpoints()
             + ModelManagementEndpoints.endpoints(

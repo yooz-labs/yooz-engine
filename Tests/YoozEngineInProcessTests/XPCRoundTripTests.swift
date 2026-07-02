@@ -68,7 +68,7 @@ final class XPCRoundTripTests: XCTestCase {
         try await client.connect()
 
         do {
-            try await client.touchUp.setModel("definitely-not-a-real-model")  // POST /v1/llm/model
+            try await client.touchUp.setModel("definitely-not-a-real-model")  // POST /v1/touchup/model
             XCTFail("expected a serverError for an unknown model id")
         } catch let error as YoozEngineError {
             guard case .serverError(let statusCode, let code, _) = error else {

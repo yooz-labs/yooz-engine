@@ -34,21 +34,29 @@ public struct EndpointSpec: Sendable, Hashable {
     /// Path pattern with Hummingbird-style `:name` parameter placeholders
     /// (e.g. `/v1/models/:id`).
     public let path: String
+    /// The `:name` parameter names appearing in `path`, in order.
+    /// Precomputed at construction so per-request matching never re-splits
+    /// the pattern.
+    public let parameterNames: [String]
 
+    /// - Precondition: `path` is absolute (leading `/`) and every `:` segment
+    ///   carries a non-empty parameter name. Both are programming errors in a
+    ///   static catalog, so they trap at construction — the same philosophy
+    ///   as `EndpointTable`'s duplicate check.
     public init(_ method: RouteMethod, _ path: String) {
+        precondition(path.hasPrefix("/"), "endpoint path must be absolute: \(path)")
+        let parameterSegments = path.split(separator: "/").filter { $0.hasPrefix(":") }
+        precondition(
+            parameterSegments.allSatisfy { $0.count > 1 },
+            "endpoint path has an empty :parameter segment: \(path)"
+        )
         self.method = method
         self.path = path
+        self.parameterNames = parameterSegments.map { String($0.dropFirst()) }
     }
 
     /// Stable identity string, same shape as `RouteManifestEntry.key`.
     public var key: String { "\(method.rawValue) \(path)" }
-
-    /// The `:name` parameter names appearing in `path`, in order.
-    public var parameterNames: [String] {
-        path.split(separator: "/")
-            .filter { $0.hasPrefix(":") }
-            .map { String($0.dropFirst()) }
-    }
 }
 
 /// Wire-level request as seen by a table handler: the raw body plus routing
@@ -128,11 +136,28 @@ public typealias WireHandler = @Sendable (WireRequest) async throws -> WireRespo
 public struct Endpoint: Sendable {
     public let spec: EndpointSpec
     public let handler: WireHandler
+    /// `spec.path` pre-split for the parameterized matcher, so the
+    /// per-request hot path only splits the incoming concrete path.
+    let patternSegments: [Substring]
 
     public init(_ spec: EndpointSpec, handler: @escaping WireHandler) {
         self.spec = spec
         self.handler = handler
+        self.patternSegments = spec.path.split(
+            separator: "/", omittingEmptySubsequences: true
+        )
     }
+}
+
+/// Thrown by `EndpointTable.init` when two endpoints declare the same
+/// `(method, path)` — two declarations of one route, exactly what the table
+/// exists to prevent. A typed error (rather than a `precondition`) so the
+/// invariant is testable (`EndpointTableTests`); production call sites bind
+/// their static tables with `try!`, which keeps the same
+/// crash-at-first-use semantics a precondition would have.
+public struct DuplicateEndpointError: Error, Sendable {
+    /// The duplicated `EndpointSpec.key`.
+    public let key: String
 }
 
 /// The dispatch table: validated collection of `Endpoint`s with
@@ -145,19 +170,16 @@ public struct EndpointTable: Sendable {
 
     public let endpoints: [Endpoint]
 
-    /// - Precondition: no two endpoints share a `(method, path)` spec. A
-    ///   duplicate is a programming error (two declarations of one route —
-    ///   exactly what the table exists to prevent), so it traps at
-    ///   construction rather than silently shadowing.
-    public init(_ endpoints: [Endpoint]) {
+    /// - Throws: `DuplicateEndpointError` when two endpoints share a
+    ///   `(method, path)` spec.
+    public init(_ endpoints: [Endpoint]) throws {
         var exact: [String: Endpoint] = [:]
         var parameterized: [Endpoint] = []
         var seen = Set<String>()
         for endpoint in endpoints {
-            precondition(
-                seen.insert(endpoint.spec.key).inserted,
-                "duplicate endpoint declaration: \(endpoint.spec.key)"
-            )
+            guard seen.insert(endpoint.spec.key).inserted else {
+                throw DuplicateEndpointError(key: endpoint.spec.key)
+            }
             if endpoint.spec.path.contains(":") {
                 parameterized.append(endpoint)
             } else {
@@ -171,9 +193,16 @@ public struct EndpointTable: Sendable {
 
     public var specs: [EndpointSpec] { endpoints.map(\.spec) }
 
-    /// Match a concrete request path (query already stripped) against the
-    /// table. Returns the endpoint plus captured, percent-decoded path
-    /// parameters.
+    /// Match a concrete request path against the table. Returns the
+    /// endpoint plus captured, percent-decoded path parameters.
+    ///
+    /// CONTRACT: `path` must have its query string already stripped — a
+    /// path containing `?...` never matches (pinned by
+    /// `EndpointTableTests.testPathWithQueryStringDoesNotMatch`). Both
+    /// callers honor this today (`InProcessTransport.route(_:)` strips;
+    /// Hummingbird routes on the path component), and the loud
+    /// no-match failure is deliberate so a future caller that forgets
+    /// cannot silently half-work.
     public func match(
         method: RouteMethod, path: String
     ) -> (endpoint: Endpoint, pathParameters: [String: String])? {
@@ -182,9 +211,7 @@ public struct EndpointTable: Sendable {
         }
         let pathSegments = path.split(separator: "/", omittingEmptySubsequences: true)
         for endpoint in parameterized where endpoint.spec.method == method {
-            let patternSegments = endpoint.spec.path.split(
-                separator: "/", omittingEmptySubsequences: true
-            )
+            let patternSegments = endpoint.patternSegments
             guard patternSegments.count == pathSegments.count else { continue }
             var captured: [String: String] = [:]
             var matched = true

@@ -571,12 +571,38 @@ final class APIServer: ObservableObject {
             let adapter: @Sendable (
                 Request, YoozEngineRequestContext
             ) async throws -> Response = { [self] request, context in
-                let buffer = try await request.body.collect(
-                    upTo: context.maxUploadSize
-                )
+                // Body collection and parameter extraction get their own
+                // catch: a failure here (oversized body past
+                // `maxUploadSize` — `NIOTooManyBytesError`, the engine#111
+                // bug class — or a router/parameter mismatch) must render
+                // as the structured 400 `invalid_request` body the
+                // pre-table routes produced via their decode catch, never
+                // as a bare framework error. Kept separate from the
+                // handler's own errors below so a handler-internal failure
+                // is not mislabeled as a bad request.
+                let buffer: ByteBuffer
+                do {
+                    buffer = try await request.body.collect(
+                        upTo: context.maxUploadSize
+                    )
+                } catch {
+                    return errorResponse(
+                        status: .badRequest,
+                        message: "Invalid request body: \(error.localizedDescription)",
+                        code: "invalid_request"
+                    )
+                }
                 var parameters: [String: String] = [:]
-                for name in spec.parameterNames {
-                    parameters[name] = try context.parameters.require(name)
+                do {
+                    for name in spec.parameterNames {
+                        parameters[name] = try context.parameters.require(name)
+                    }
+                } catch {
+                    return errorResponse(
+                        status: .badRequest,
+                        message: "Invalid request: \(error.localizedDescription)",
+                        code: "invalid_request"
+                    )
                 }
                 do {
                     let wire = try await handler(WireRequest(
@@ -584,8 +610,12 @@ final class APIServer: ObservableObject {
                         pathParameters: parameters,
                         query: request.uri.query
                     ))
-                    guard !wire.body.isEmpty else {
-                        return Response(status: .init(code: wire.status))
+                    // Only a 204 is status-only by contract
+                    // (`WireResponse.noContent`); every other wire response
+                    // carries a JSON body, so it always gets the
+                    // content-type header.
+                    guard wire.status != 204 else {
+                        return Response(status: .noContent)
                     }
                     return Response(
                         status: .init(code: wire.status),
@@ -1299,7 +1329,7 @@ final class APIServer: ObservableObject {
         // from `EndpointSpecs`; the hand-written registrations these replace
         // are gone, so a converted route cannot drift between transports.
         register(
-            EndpointTable(
+            try! EndpointTable(
                 SessionEndpoints.endpoints()
                     + TouchUpEndpoints.pickerEndpoints()
                     + ModelManagementEndpoints.endpoints(

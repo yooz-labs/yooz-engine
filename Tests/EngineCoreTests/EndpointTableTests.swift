@@ -32,28 +32,28 @@ final class EndpointTableTests: XCTestCase {
 
     // MARK: - Matching
 
-    func testExactMatch() {
-        let table = EndpointTable([Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler)])
+    func testExactMatch() throws {
+        let table = try EndpointTable([Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler)])
         let match = table.match(method: .get, path: "/v1/models")
         XCTAssertNotNil(match)
         XCTAssertEqual(match?.pathParameters, [:])
     }
 
-    func testMethodMismatchDoesNotMatch() {
-        let table = EndpointTable([Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler)])
+    func testMethodMismatchDoesNotMatch() throws {
+        let table = try EndpointTable([Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler)])
         XCTAssertNil(table.match(method: .post, path: "/v1/models"))
         XCTAssertNil(table.match(method: .delete, path: "/v1/models"))
     }
 
-    func testUnknownPathDoesNotMatch() {
-        let table = EndpointTable([Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler)])
+    func testUnknownPathDoesNotMatch() throws {
+        let table = try EndpointTable([Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler)])
         XCTAssertNil(table.match(method: .get, path: "/v1/models/extra"))
         XCTAssertNil(table.match(method: .get, path: "/v1"))
         XCTAssertNil(table.match(method: .get, path: "/v1/nope"))
     }
 
-    func testParameterizedMatchCapturesAndDecodes() {
-        let table = EndpointTable([
+    func testParameterizedMatchCapturesAndDecodes() throws {
+        let table = try EndpointTable([
             Endpoint(EndpointSpec(.delete, "/v1/models/:id"), handler: Self.okHandler),
         ])
         let match = table.match(method: .delete, path: "/v1/models/models--YoozLabs--X%2DY")
@@ -61,16 +61,16 @@ final class EndpointTableTests: XCTestCase {
         XCTAssertEqual(match?.pathParameters["id"], "models--YoozLabs--X-Y")
     }
 
-    func testParameterizedMatchRequiresSameSegmentCount() {
-        let table = EndpointTable([
+    func testParameterizedMatchRequiresSameSegmentCount() throws {
+        let table = try EndpointTable([
             Endpoint(EndpointSpec(.delete, "/v1/models/:id"), handler: Self.okHandler),
         ])
         XCTAssertNil(table.match(method: .delete, path: "/v1/models"))
         XCTAssertNil(table.match(method: .delete, path: "/v1/models/a/b"))
     }
 
-    func testStaticSegmentsMustMatchAroundParameters() {
-        let table = EndpointTable([
+    func testStaticSegmentsMustMatchAroundParameters() throws {
+        let table = try EndpointTable([
             Endpoint(
                 EndpointSpec(.post, "/v1/infinite/sessions/:sessionID/append"),
                 handler: Self.okHandler
@@ -78,6 +78,72 @@ final class EndpointTableTests: XCTestCase {
         ])
         XCTAssertNotNil(table.match(method: .post, path: "/v1/infinite/sessions/abc/append"))
         XCTAssertNil(table.match(method: .post, path: "/v1/infinite/sessions/abc/generate"))
+    }
+
+    func testPathWithQueryStringDoesNotMatch() throws {
+        // The match contract: callers strip the query first. A path still
+        // carrying `?...` must fail loudly (no match) rather than half-work.
+        let table = try EndpointTable([
+            Endpoint(EndpointSpec(.post, "/v1/session/begin"), handler: Self.okHandler),
+        ])
+        XCTAssertNil(table.match(method: .post, path: "/v1/session/begin?wait=true"))
+    }
+
+    func testTrailingAndDoubledSlashes() throws {
+        // Exact-path lookup is byte-exact (a trailing slash is a different
+        // key); the parameterized matcher splits with
+        // omittingEmptySubsequences, so doubled/trailing slashes collapse.
+        // Pinned so a change to either behavior is a conscious decision.
+        let table = try EndpointTable([
+            Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler),
+            Endpoint(EndpointSpec(.delete, "/v1/models/:id"), handler: Self.okHandler),
+        ])
+        XCTAssertNil(table.match(method: .get, path: "/v1/models/"))
+        XCTAssertNotNil(table.match(method: .delete, path: "/v1/models/x/"))
+        XCTAssertNotNil(table.match(method: .delete, path: "/v1//models/x"))
+    }
+
+    func testCaseSensitivePaths() throws {
+        let table = try EndpointTable([
+            Endpoint(EndpointSpec(.get, "/v1/models"), handler: Self.okHandler),
+        ])
+        XCTAssertNil(table.match(method: .get, path: "/v1/Models"))
+    }
+
+    func testTwoParameterSpecMatching() throws {
+        // No shipping route has two parameters yet; the branch must not
+        // ship unexercised.
+        let table = try EndpointTable([
+            Endpoint(EndpointSpec(.get, "/v1/a/:first/b/:second"), handler: Self.okHandler),
+        ])
+        let match = table.match(method: .get, path: "/v1/a/one/b/two%20x")
+        XCTAssertEqual(match?.pathParameters["first"], "one")
+        XCTAssertEqual(match?.pathParameters["second"], "two x")
+        XCTAssertNil(table.match(method: .get, path: "/v1/a/one/c/two"))
+    }
+
+    func testMalformedPercentEncodingFallsBackToRawCapture() throws {
+        // removingPercentEncoding returns nil on malformed sequences; the
+        // matcher falls back to the raw segment rather than dropping the
+        // request.
+        let table = try EndpointTable([
+            Endpoint(EndpointSpec(.delete, "/v1/models/:id"), handler: Self.okHandler),
+        ])
+        let match = table.match(method: .delete, path: "/v1/models/bad%ZZseq")
+        XCTAssertEqual(match?.pathParameters["id"], "bad%ZZseq")
+    }
+
+    func testDuplicateSpecThrowsDuplicateEndpointError() {
+        // The table's core invariant — one declaration per route — must be
+        // enforced AND testable; production call sites use `try!` so a
+        // duplicate still crashes at static-table construction.
+        let spec = EndpointSpec(.get, "/v1/dup")
+        XCTAssertThrowsError(try EndpointTable([
+            Endpoint(spec, handler: Self.okHandler),
+            Endpoint(spec, handler: Self.okHandler),
+        ])) { error in
+            XCTAssertEqual((error as? DuplicateEndpointError)?.key, "GET /v1/dup")
+        }
     }
 
     // MARK: - WireResponse / WireError

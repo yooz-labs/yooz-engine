@@ -45,7 +45,10 @@ public enum EndpointSpecs {
 
     // MARK: - Legacy (hand-implemented per transport; conversion tracked on #225)
 
-    public static let legacy: [EndpointSpec] = [
+    // Internal: `legacy` and `all` are read only inside EngineCore (the
+    // `RouteManifest` projection) and by `EngineCoreTests` via `@testable`;
+    // only `converted` is a cross-module contract (the transport bindings).
+    static let legacy: [EndpointSpec] = [
         EndpointSpec(.get, "/v1/health"),
         EndpointSpec(.get, "/v1/modules"),
 
@@ -82,5 +85,5 @@ public enum EndpointSpecs {
     ]
 
     /// The full REST surface, converted + legacy.
-    public static let all: [EndpointSpec] = converted + legacy
+    static let all: [EndpointSpec] = converted + legacy
 }

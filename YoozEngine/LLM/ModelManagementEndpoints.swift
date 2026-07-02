@@ -57,6 +57,12 @@ public enum ModelManagementEndpoints {
             // usable, not unloaded-but-present); refuses to delete the
             // active model (409).
             Endpoint(EndpointSpecs.modelsDelete) { request in
+                // Defensive only: unreachable through either transport —
+                // the table's matcher never dispatches this endpoint
+                // without capturing `:id`, and the loopback adapter
+                // extracts it via the router. Kept as a typed 400 (not a
+                // force-unwrap) so a hypothetical future caller that
+                // hand-builds a WireRequest fails loudly and safely.
                 guard let id = request.pathParameters["id"] else {
                     throw WireError(
                         status: 400, code: "invalid_request",
