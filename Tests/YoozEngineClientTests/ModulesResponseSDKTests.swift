@@ -3,21 +3,19 @@
 import XCTest
 @testable import YoozEngineClient
 
-/// SDK-side contract test for `/v1/modules`. Decodes a canonical
-/// engine-shape JSON body — the exact shape `APIServer.swift` emits
-/// via `EngineCore.ModulesResponse.build` — using the SDK's mirror
-/// type `YoozEngineClient.ModulesResponse`. If a field is renamed on
-/// one side and not the other (e.g. `buildVariant` → `variant`) this
-/// test fails immediately rather than at runtime in a consumer app.
+/// Contract test for `/v1/modules`. Decodes a canonical engine-shape JSON
+/// body — the exact shape `APIServer.swift` emits via
+/// `EngineCore.ModulesResponse.build` — through the SDK import path
+/// (`YoozEngineClient` re-exports `YoozEngineWire.ModulesResponse`, #225).
 ///
-/// Why a separate test from `EngineCoreTests.ModulesResponseTests`:
-/// that suite round-trips the server-side type through itself, which
-/// can't catch field drift between the two parallel struct
-/// definitions. yooz-whisper's About panel reads `engineVersion`,
-/// `buildVariant`, `modules[].name`, `modules[].loaded`, and
-/// `modules[].detail[*]` — this test exercises every one of those
-/// against the SDK type. See yooz-engine#133 for the wire-shape
-/// alignment that motivated this contract test.
+/// `EngineCore` and `YoozEngineClient` share a single `ModulesResponse`
+/// declaration since #225, so this and `EngineCoreTests.ModulesResponseTests`
+/// exercise the same type; kept as a separate suite because it pins the
+/// exact JSON shape yooz-whisper's About panel reads (`engineVersion`,
+/// `buildVariant`, `modules[].name`, `modules[].loaded`,
+/// `modules[].detail[*]`) rather than round-tripping through the type's own
+/// encoder. See yooz-engine#133 for the wire-shape alignment that motivated
+/// this contract test.
 final class ModulesResponseSDKTests: XCTestCase {
 
     /// Canonical wire body. Field order matches what the server emits

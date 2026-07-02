@@ -166,39 +166,10 @@ public struct STTClient: Sendable {
 }
 
 // MARK: - Request/Response Types (Client SDK)
-
-struct BatchSTTRequest: Codable {
-    let samples: [Float]
-    let language: String
-    let mode: String
-    /// Opt-in flag for per-token alignment in the response. Omitted on the
-    /// wire (`encodeIfPresent`) when `nil` so old clients and servers that
-    /// predate issue #34 remain byte-identical with today's traffic.
-    let aligned: Bool?
-
-    init(samples: [Float], language: String, mode: String, aligned: Bool? = nil) {
-        self.samples = samples
-        self.language = language
-        self.mode = mode
-        self.aligned = aligned
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case samples, language, mode, aligned
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(samples, forKey: .samples)
-        try container.encode(language, forKey: .language)
-        try container.encode(mode, forKey: .mode)
-        try container.encodeIfPresent(aligned, forKey: .aligned)
-    }
-}
-
-struct STTLoadRequest: Codable {
-    let language: String
-}
+//
+// `BatchSTTRequest`, `STTLoadRequest`, `STTLanguagesResponse`,
+// `STTLanguageInfo`, and `STTStatus` moved to `YoozEngineWire` (#225) —
+// visible here via `YoozEngineClient`'s `WireReexport.swift`.
 
 struct STTStreamConfig: Codable {
     let type: String
@@ -206,63 +177,9 @@ struct STTStreamConfig: Codable {
     let mode: String
 }
 
-public struct STTLanguagesResponse: Codable, Sendable {
-    public let languages: [STTLanguageInfo]
-
-    public init(languages: [STTLanguageInfo]) {
-        self.languages = languages
-    }
-}
-
 struct WSReadyResponse: Decodable {
     let type: String
     let message: String?
-}
-
-public struct STTLanguageInfo: Codable, Sendable {
-    public let code: String
-    public let name: String
-    public let implemented: Bool
-    public let family: String
-
-    public init(code: String, name: String, implemented: Bool, family: String) {
-        self.code = code
-        self.name = name
-        self.implemented = implemented
-        self.family = family
-    }
-}
-
-public struct STTStatus: Codable, Sendable {
-    public let loaded: Bool
-    public let language: String?
-    public let streaming: Bool
-    /// Fraction-completed [0.0, 1.0] for an in-progress HF model
-    /// download. `nil` when the server omits the field (older builds).
-    public let progress: Double?
-    /// Lifecycle state for the active STT backend (engine#125).
-    /// `nil` on pre-#125 server builds; consumers MAY infer state
-    /// from `loaded` + `progress` when nil.
-    public let state: LoadState?
-    /// Human-readable error from the last failed load. `nil` unless
-    /// `state == .failed`.
-    public let lastError: String?
-
-    public init(
-        loaded: Bool,
-        language: String?,
-        streaming: Bool,
-        progress: Double? = nil,
-        state: LoadState? = nil,
-        lastError: String? = nil
-    ) {
-        self.loaded = loaded
-        self.language = language
-        self.streaming = streaming
-        self.progress = progress
-        self.state = state
-        self.lastError = lastError
-    }
 }
 
 public enum AudioMode: String, Codable, Sendable {

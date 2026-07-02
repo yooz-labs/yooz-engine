@@ -154,6 +154,44 @@ public struct STTLanguagesResponse: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Load / batch requests
+
+/// Request body for `POST /v1/stt/load`. `language`/`allowFetch` are
+/// optional on this canonical shape because the server tolerates an absent
+/// `language` (falls back to the current backend's default) — SDK callers
+/// always supply one.
+public struct STTLoadRequest: Codable, Sendable, Equatable {
+    public let language: String?
+    /// When true (or unset), the engine fetches the model from Hugging Face
+    /// if no local snapshot is staged. When false, the load fails with
+    /// `model_not_cached` rather than touching the network.
+    public let allowFetch: Bool?
+
+    public init(language: String? = nil, allowFetch: Bool? = nil) {
+        self.language = language
+        self.allowFetch = allowFetch
+    }
+}
+
+/// Request body for `POST /v1/stt/batch`. `language`/`mode` are optional on
+/// this canonical shape for the same reason as `STTLoadRequest`; SDK callers
+/// always supply both.
+public struct BatchSTTRequest: Codable, Sendable, Equatable {
+    public let samples: [Float]
+    public let language: String?
+    public let mode: String?
+    /// Opt-in flag for per-token alignment in the response. Omitted on the
+    /// wire when `nil` so old clients/servers stay byte-identical.
+    public let aligned: Bool?
+
+    public init(samples: [Float], language: String? = nil, mode: String? = nil, aligned: Bool? = nil) {
+        self.samples = samples
+        self.language = language
+        self.mode = mode
+        self.aligned = aligned
+    }
+}
+
 // MARK: - Batch transcription
 
 /// A single token from an aligned transcription with start/end timestamps.

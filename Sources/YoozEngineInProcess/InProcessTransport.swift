@@ -232,10 +232,10 @@ public final class InProcessTransport: EngineTransport {
         let vadReady = await VADEngine.shared.isLoaded
         let sttReady = YoozSTTEngine.shared.isRunning
 
-        let status = SDKHealthStatus(
+        let status = HealthStatus(
             status: "ok",
             version: EngineConfig.version,
-            modules: SDKModuleStatus(
+            modules: ModuleStatus(
                 stt: sttReady,
                 llm: llmReady,
                 touchup: llmReady,
@@ -250,11 +250,11 @@ public final class InProcessTransport: EngineTransport {
 
     private func handleModules() async throws -> Data {
         let modules = await ModuleRegistry.shared.all()
-        var manifests: [SDKModuleManifest] = []
+        var manifests: [ModuleManifest] = []
         for module in modules {
             let health = await module.healthCheck()
             manifests.append(
-                SDKModuleManifest(
+                ModuleManifest(
                     name: type(of: module).name,
                     version: EngineConfig.version,
                     loaded: health.loaded,
@@ -265,7 +265,7 @@ public final class InProcessTransport: EngineTransport {
         }
         manifests.sort { $0.name < $1.name }
 
-        let response = SDKModulesResponse(
+        let response = ModulesResponse(
             engineVersion: EngineConfig.version,
             buildVariant: BuildVariant.current.rawValue,
             modules: manifests
@@ -309,7 +309,7 @@ public final class InProcessTransport: EngineTransport {
             categories: request.categories,
             usePOS: request.usePOS ?? true
         )
-        let response = SDKGrammarCheckResponse(
+        let response = GrammarCheckResponse(
             result: outcome.result,
             correctionsApplied: outcome.correctionsApplied,
             ruleCount: GrammarEngine.shared.ruleCount
@@ -326,9 +326,9 @@ public final class InProcessTransport: EngineTransport {
             samples: request.samples,
             resetState: request.reset ?? true
         )
-        let response = SDKVADResponse(
+        let response = VADResponse(
             segments: segments.map {
-                SDKSpeechSegment(
+                SpeechSegment(
                     startMs: $0.startMs,
                     endMs: $0.endMs,
                     probability: $0.probability
@@ -485,7 +485,7 @@ public final class InProcessTransport: EngineTransport {
             modelType: modelType,
             workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
         )
-        let response = SDKLLMGenerateResponse(
+        let response = LLMGenerateResponse(
             text: text,
             model: modelType.rawValue,
             tokensGenerated: nil,
@@ -497,13 +497,13 @@ public final class InProcessTransport: EngineTransport {
     // MARK: - Status
 
     private func handleSTTStatus() async throws -> Data {
-        let status: SDKSTTStatus
+        let status: STTStatus
         if YoozSTTEngine.shared.currentBackend == .appleSTT {
             let loaded = await AppleSTTEngine.shared.isLoaded
             let language = await AppleSTTEngine.shared.currentLanguage.rawValue
             let streaming = await AppleSTTEngine.shared.isStreaming
             // Apple STT has no fetcher/materialize lifecycle; map loaded → ready.
-            status = SDKSTTStatus(
+            status = STTStatus(
                 loaded: loaded, language: language, streaming: streaming,
                 progress: nil, state: loaded ? .ready : .idle, lastError: nil
             )
@@ -530,12 +530,12 @@ public final class InProcessTransport: EngineTransport {
             // "download done, materializing" -> nil (the STT analog of the LLM
             // `< 1` filter).
             let resolvedState: EngineCore.LoadState = loaded ? .ready : engineState
-            status = SDKSTTStatus(
+            status = STTStatus(
                 loaded: loaded,
                 language: engine.currentLanguage.rawValue,
                 streaming: engine.isStreaming,
                 progress: loaded ? nil : (rawProgress > 0 && rawProgress < 1 ? rawProgress : nil),
-                state: SDKLoadState(rawValue: resolvedState.rawValue),
+                state: LoadState(rawValue: resolvedState.rawValue),
                 lastError: loaded ? nil : engineError
             )
         }
@@ -590,9 +590,9 @@ public final class InProcessTransport: EngineTransport {
             engineState = loaded ? .ready : .idle
             lastError = nil
         }
-        let status = SDKLLMStatus(
+        let status = LLMStatus(
             loaded: loaded, modelId: active.rawValue, progress: progress,
-            state: SDKLoadState(rawValue: engineState.rawValue),
+            state: LoadState(rawValue: engineState.rawValue),
             lastError: lastError
         )
         return try JSONEncoder().encode(status)
@@ -602,14 +602,14 @@ public final class InProcessTransport: EngineTransport {
 
     private func handleSTTLanguages() async throws -> Data {
         let infos = YoozSTTEngine.shared.availableLanguages.map {
-            SDKSTTLanguageInfo(
+            STTLanguageInfo(
                 code: $0.rawValue,
                 name: $0.displayName,
                 implemented: $0.isImplemented,
                 family: $0.modelFamily.rawValue
             )
         }
-        return try JSONEncoder().encode(SDKSTTLanguagesResponse(languages: infos))
+        return try JSONEncoder().encode(STTLanguagesResponse(languages: infos))
     }
 
     private func handleSTTEngine() async throws -> Data {
@@ -619,7 +619,7 @@ public final class InProcessTransport: EngineTransport {
             sttBackendInfo($0, active: active, activeLoaded: activeLoaded)
         }
         return try JSONEncoder().encode(
-            SDKSTTBackendsResponse(backends: backends, activeId: active.rawValue)
+            STTBackendsResponse(backends: backends, activeId: active.rawValue)
         )
     }
 
@@ -641,13 +641,13 @@ public final class InProcessTransport: EngineTransport {
         _ backend: STTModule.STTBackendID,
         active: STTModule.STTBackendID,
         activeLoaded: Bool
-    ) -> SDKSTTBackendInfo {
+    ) -> STTBackendInfo {
         let isActive = backend == active
-        return SDKSTTBackendInfo(
+        return STTBackendInfo(
             id: backend.rawValue,
             displayName: backend.displayName,
             description: backend.pickerDescription,
-            tier: SDKModelTier(rawValue: backend.pickerTier.rawValue) ?? .unknown,
+            tier: ModelTier(rawValue: backend.pickerTier.rawValue) ?? .unknown,
             sizeBytes: backend.estimatedDownloadMB.map { Int64($0) * 1_000_000 },
             loadState: (isActive && activeLoaded) ? .loaded : .available,
             isActive: isActive,
@@ -674,7 +674,7 @@ public final class InProcessTransport: EngineTransport {
             )
         }
         return try JSONEncoder().encode(
-            SDKLLMModelsResponse(current: active.rawValue, available: available)
+            LLMModelsResponse(current: active.rawValue, available: available)
         )
     }
 
@@ -726,10 +726,8 @@ public final class InProcessTransport: EngineTransport {
         let request = try JSONDecoder().decode(TouchUpBody.self, from: body)
         // The requested mode is explicit caller intent (off/light/standard/full),
         // not a forward-compat wire value — an unknown mode is a hard error, never
-        // a silent run at a different cleanup level. (Both enums share rawValues.)
-        guard let engineMode = LLMModule.TouchUpMode(rawValue: request.mode),
-              let sdkMode = SDKTouchUpMode(rawValue: request.mode)
-        else {
+        // a silent run at a different cleanup level.
+        guard let mode = TouchUpMode(rawValue: request.mode) else {
             throw YoozEngineError.serverError(
                 statusCode: 400, code: "invalid_mode",
                 message: "Unknown TouchUp mode '\(request.mode)'"
@@ -743,12 +741,12 @@ public final class InProcessTransport: EngineTransport {
         // lazy-loads on first use (mirrors the STT lazy-load).
         let result = await TouchUpEngine.shared.processWithActiveModel(
             text: request.text,
-            mode: engineMode,
+            mode: mode,
             workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
         )
-        let response = SDKTouchUpResponse(
+        let response = TouchUpResponse(
             result: result.text,
-            mode: sdkMode,
+            mode: mode,
             processingTimeMs: Int(result.latencyMs),
             modelUsed: result.modelUsed.rawValue,
             warnings: result.fallbackReason.map { [$0] }
@@ -759,10 +757,9 @@ public final class InProcessTransport: EngineTransport {
     private func handleTouchUpModels() async throws -> Data {
         let models = await TouchUpEngine.shared.availableModels()
         let active = await TouchUpEngine.shared.activeModel
-        let mapped = models.map(touchUpModelInfo)
-        let activeId = mapped.first(where: \.isActive)?.id ?? active.rawValue
+        let activeId = models.first(where: \.isActive)?.id ?? active.rawValue
         return try JSONEncoder().encode(
-            SDKTouchUpModelsResponse(models: mapped, activeId: activeId)
+            TouchUpModelsResponse(models: models, activeId: activeId)
         )
     }
 
@@ -777,7 +774,7 @@ public final class InProcessTransport: EngineTransport {
         let info = try await TouchUpEngine.shared.setActiveModel(
             selection, preload: request.preload ?? true
         )
-        return try JSONEncoder().encode(touchUpModelInfo(info))
+        return try JSONEncoder().encode(info)
     }
 
     // MARK: - Model management (disk hygiene)
@@ -923,17 +920,6 @@ public final class InProcessTransport: EngineTransport {
         )
     }
 
-    private func touchUpModelInfo(_ info: LLMModule.TouchUpModelInfo) -> SDKTouchUpModelInfo {
-        SDKTouchUpModelInfo(
-            id: info.id,
-            displayName: info.displayName,
-            description: info.description,
-            tier: SDKModelTier(rawValue: info.tier.rawValue) ?? .unknown,
-            sizeBytes: info.sizeBytes,
-            loadState: SDKModelLoadState(rawValue: info.loadState.rawValue) ?? .unavailable,
-            isActive: info.isActive
-        )
-    }
 }
 
 // MARK: - Wire request mirrors

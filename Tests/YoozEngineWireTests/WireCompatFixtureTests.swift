@@ -280,6 +280,13 @@ final class WireCompatFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.ruleCount, 1560)
     }
 
+    func testVADRequest() throws {
+        let data = try fixture("VADRequest")
+        let decoded = try JSONDecoder().decode(VADRequest.self, from: data)
+        XCTAssertEqual(decoded.samples, [0.1, -0.2, 0.3])
+        XCTAssertEqual(decoded.reset, true)
+    }
+
     func testSpeechSegment() throws {
         try assertDecodes(
             SpeechSegment.self, fixture: "SpeechSegment",
@@ -308,6 +315,20 @@ final class WireCompatFixtureTests: XCTestCase {
                 text: "hello world", finalized: "hello world", draft: "",
                 language: "en", tokens: [AlignedToken(text: "hello", start: 0.0, end: 0.42)]
             )
+        )
+    }
+
+    func testSTTLoadRequest() throws {
+        try assertDecodes(
+            STTLoadRequest.self, fixture: "STTLoadRequest",
+            expected: STTLoadRequest(language: "en", allowFetch: nil)
+        )
+    }
+
+    func testBatchSTTRequest() throws {
+        try assertDecodes(
+            BatchSTTRequest.self, fixture: "BatchSTTRequest",
+            expected: BatchSTTRequest(samples: [0.1, -0.2], language: "en", mode: "normal", aligned: nil)
         )
     }
 
