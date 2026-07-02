@@ -40,6 +40,16 @@ public actor ModelSelectionStore {
     /// cannot `await` a file read).
     private var cache: [String: String]?
 
+    /// Most recent persist failure, or nil when the last write succeeded.
+    /// Persistence stays best-effort (see `setActiveId`), but the failure
+    /// must be OBSERVABLE beyond a Console log line (PR #239 review): a
+    /// persistent disk failure means the user's selection silently reverts
+    /// to the compiled-in default on every restart. Cleared by the next
+    /// successful persist. Surfacing this on `GET /v1/health` /
+    /// `/v1/modules` is deferred — it changes those wire shapes; tracked
+    /// as follow-up on epic #230.
+    public private(set) var lastPersistError: String?
+
     public init(fileURL: URL = EngineConfig.modelSelectionFileURL) {
         self.fileURL = fileURL
     }
@@ -81,7 +91,9 @@ public actor ModelSelectionStore {
             )
             let data = try JSONEncoder().encode(cache)
             try data.write(to: fileURL, options: .atomic)
+            lastPersistError = nil
         } catch {
+            lastPersistError = error.localizedDescription
             let path = self.fileURL.path
             logger.error(
                 "ModelSelectionStore: persist to \(path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"

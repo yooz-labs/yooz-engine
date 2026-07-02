@@ -43,9 +43,21 @@ public actor TouchUpEngine {
     /// production store.
     private let selectionStore: ModelSelectionStore
 
-    /// Guards `restorePersistedSelectionIfNeeded()` so it runs at most
-    /// once per instance.
-    private var hasRestoredPersistedSelection = false
+    /// Memoized one-shot restore (see `restorePersistedSelectionIfNeeded()`).
+    /// A `Task` handle, not a `Bool` flag: with a flag set before the store
+    /// read's suspension point, a second concurrent first-touch would pass
+    /// the guard mid-restore and observe the compiled-in default — exactly
+    /// the window the restore exists to close (PR #239 review). Every
+    /// caller instead awaits this single shared task, so no reader can
+    /// return before the restore has fully settled.
+    private var restoreTask: Task<Void, Never>?
+
+    /// Most recent background-preload dispatch from `setActiveModelAsync`
+    /// (PR #239 review). A new switch cancels the previous handle so a
+    /// superseded tier's progress watcher stops promptly and its
+    /// late-completing load skips eviction/eventing (the task checks
+    /// `Task.isCancelled` after its load settles).
+    private var backgroundPreloadTask: Task<Void, Never>?
 
     /// The light model backend (Yooz-Light, Qwen2.5-0.5B)
     private var lightModel: MLXLLMBackend?
@@ -340,24 +352,39 @@ public actor TouchUpEngine {
     /// the lightweight `lightModel` wrapper in place (next use lazy-reloads it).
     /// So "evicted" means `isLightModelLoaded == false`, not `lightModel == nil`.
     private func evictModelsExcept(_ keep: TouchUpModelSelection) async {
-        var evicted: [String] = []
+        var evicted: [TouchUpModelSelection] = []
         if keep != .yoozLight {
             await unload(.yoozLight)
-            evicted.append(TouchUpModelSelection.yoozLight.rawValue)
+            evicted.append(.yoozLight)
         }
         if keep != .yoozQuality {
             await unload(.yoozQuality)
-            evicted.append(TouchUpModelSelection.yoozQuality.rawValue)
+            evicted.append(.yoozQuality)
         }
         if keep != .foundationModels, let fm = foundationModelsBackend {
             await fm.unload()
             foundationModelsBackend = nil
-            evicted.append(TouchUpModelSelection.foundationModels.rawValue)
+            evicted.append(.foundationModels)
         }
-        let evictedList = evicted.joined(separator: ", ")
+        let evictedList = evicted.map(\.rawValue).joined(separator: ", ")
         logger.info(
             "TouchUp single-resident: kept \(keep.rawValue, privacy: .public), evicted [\(evictedList, privacy: .public)]"
         )
+
+        // Publish each evicted tier's post-eviction lifecycle state
+        // (engine#226; PR #239 review). Without these, a subscriber that
+        // learned tier A was `.loaded` before an A→B switch keeps rendering
+        // it `.loaded` forever — `residencyChanged` alone names no
+        // per-model state, so `EngineStateStore` can't correct the row.
+        // Re-derive from `availableModels()` rather than assuming `.cached`:
+        // an evicted MLX tier that was never downloaded reports
+        // `.available`, and FoundationModels reports per its OS-availability
+        // convention.
+        let rows = await availableModels()
+        for selection in evicted {
+            guard let row = rows.first(where: { $0.id == selection.rawValue }) else { continue }
+            await publishLoadStateChanged(selection, state: row.loadState)
+        }
     }
 
     /// Record the user-preferred LLM. Does not load weights — call
@@ -972,14 +999,22 @@ public actor TouchUpEngine {
     // MARK: - Persisted selection + events (engine#226)
 
     /// Restore the persisted active-model selection on first touch of this
-    /// instance. Idempotent — a no-op after the first call. Deliberately
-    /// NOT run from `init` (an actor's synchronous `init` cannot `await`
-    /// the store's file read); instead invoked from the `activeModel`
-    /// getter itself, so EVERY read restores — direct property access,
+    /// instance. Idempotent — runs at most once. Deliberately NOT run from
+    /// `init` (an actor's synchronous `init` cannot `await` the store's
+    /// file read); instead invoked from the `activeModel` getter itself,
+    /// so EVERY read restores — direct property access,
     /// `availableModels()`, `setActiveModel(Async)`, and
     /// `processWithActiveModel` alike — with no way for a caller to
     /// observe the compiled-in `.yoozLight` default when a persisted
     /// selection exists.
+    ///
+    /// Memoized as a shared `Task` (not a Bool once-flag): a flag set
+    /// before the store read's suspension point let a second concurrent
+    /// first-touch pass the guard mid-restore and read the unrestored
+    /// default (PR #239 review). With the task handle, every concurrent
+    /// caller awaits the SAME restore and none returns before it settles.
+    /// Mutation paths (`setActiveModel(Async)`) also await this before
+    /// writing, so a slow restore can never clobber a fresher selection.
     ///
     /// Restoring only updates `_activeModel` — it never preloads weights.
     /// The existing lazy-load contract (`process()` loads the light model
@@ -987,8 +1022,16 @@ public actor TouchUpEngine {
     /// active on first use) is unchanged; this just makes sure THAT lazy
     /// load targets the right tier after a restart.
     private func restorePersistedSelectionIfNeeded() async {
-        guard !hasRestoredPersistedSelection else { return }
-        hasRestoredPersistedSelection = true
+        if let existing = restoreTask {
+            await existing.value
+            return
+        }
+        let task = Task { await self.performPersistedSelectionRestore() }
+        restoreTask = task
+        await task.value
+    }
+
+    private func performPersistedSelectionRestore() async {
         guard let storedId = await selectionStore.activeId(for: Self.selectionStoreModule),
               let selection = TouchUpModelSelection(rawValue: storedId)
         else { return }
@@ -1049,7 +1092,12 @@ public actor TouchUpEngine {
 
         guard preload else { return row }
 
-        Task { await self.preloadActiveSelectionInBackground(selection) }
+        // Supersede any previous background preload (PR #239 review): a
+        // rapid A→B picker double-switch cancels A's dispatch so its
+        // progress watcher stops promptly and its late completion skips
+        // eviction/eventing (checked via `Task.isCancelled` inside).
+        backgroundPreloadTask?.cancel()
+        backgroundPreloadTask = Task { await self.preloadActiveSelectionInBackground(selection) }
         return row
     }
 
@@ -1078,15 +1126,37 @@ public actor TouchUpEngine {
                 return
             }
         case .yoozLight, .yoozQuality:
-            guard let modelType = LLMModelType(rawValue: selection.rawValue) else { return }
+            guard let modelType = LLMModelType(rawValue: selection.rawValue) else {
+                // Structurally unreachable today (the two MLX selections'
+                // raw values match LLMModelType's 1:1), but the enums are
+                // deliberately separate and expected to be able to drift
+                // (see TouchUpModelSelection's doc). If they ever do, a
+                // silent return here would strand the picker in "loading"
+                // forever with no diagnostic — fail loudly on both channels
+                // instead (PR #239 review).
+                logger.error(
+                    "TouchUp background preload: no LLMModelType for selection \(selection.rawValue, privacy: .public)"
+                )
+                await publishLoadStateChanged(
+                    selection, state: .available,
+                    message: "internal: no LLM backend maps to '\(selection.rawValue)'"
+                )
+                return
+            }
             let task = enqueueLoad(modelType)
             let progressWatcher = Task { await self.watchDownloadProgress(modelType, selection: selection) }
+            defer { progressWatcher.cancel() }
             do {
-                try await task.value
-                progressWatcher.cancel()
+                // Bounded (PR #239 review): `Task.value` on the unstructured
+                // load handle ignores the awaiting task's cancellation, so
+                // without a deadline a wedged download would pin this task +
+                // its progress watcher forever. Same deadline the blocking
+                // `setActiveModel` path applies.
+                try await awaitLoadTask(
+                    task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+                )
                 await publishLoadStateChanged(selection, state: .loaded)
             } catch {
-                progressWatcher.cancel()
                 // A cooperative cancellation (e.g. a rapid picker
                 // double-switch cancelling this tier's in-flight load via
                 // `unload`) is not a user-facing failure — omit `message`
@@ -1097,12 +1167,14 @@ public actor TouchUpEngine {
             }
         }
 
-        // Only reached on a successful load. Guarded on `activeModel ==
-        // selection` so a rapid picker double-switch (tier B selected
-        // while tier A's background load is still finishing) does not
-        // have A's late completion evict the tier the user has since
-        // switched to.
-        guard await activeModel == selection else { return }
+        // Only reached on a successful load, and only while this dispatch
+        // is still the CURRENT one on both axes: `activeModel == selection`
+        // (a rapid A→B double-switch must not have A's late completion
+        // evict the tier the user has since switched to) and
+        // `!Task.isCancelled` (a superseded dispatch was cancelled by
+        // `setActiveModelAsync` and must not run eviction even if its load
+        // happened to finish).
+        guard await activeModel == selection, !Task.isCancelled else { return }
         await evictModelsExcept(selection)
         await EngineEventBus.shared.publish(EngineEvent(
             kind: .residencyChanged, module: Self.selectionStoreModule, modelId: selection.rawValue
