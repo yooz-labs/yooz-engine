@@ -31,6 +31,11 @@ import YoozEngineClient
 ///   - **Streaming qwen3 preview** — loopback/dev only (unstable; engine#154).
 ///   - **Infinite** (`/v1/infinite/*`) — its consumer is the loopback host.
 ///
+/// `RouteParityAllowlist.loopbackOnly` (EngineCore, `RouteManifest.swift`) is
+/// the reviewable, tested source of truth for this list — this comment is a
+/// human-readable summary of it, not a second authority; update the allowlist
+/// first and let this comment follow (#223).
+///
 /// Each handler decodes the same wire body the SDK sub-client encoded and emits
 /// the same wire shape the sub-client decodes, so the SDK is byte-for-byte
 /// agnostic to which transport served it.
