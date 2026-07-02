@@ -1,12 +1,17 @@
 # Consumer Integration Guide
 
-How to integrate Yooz Engine v0.6.0+ into a Swift/SwiftUI app.
+How to integrate Yooz Engine (0.7.5 as of 2026-07) into a Swift/SwiftUI app.
 
-## TL;DR
+The `YoozEngineClient` SDK surface is identical across three transports (loopback HTTP/WS, in-process, XPC) — see "Transport selection" below to pick the right one for your packaging. The rest of this document, unless a section says otherwise, describes the **loopback transport** (`HTTPTransport`), which remains the right choice for local dev and for the super-yooz host. **App Store standalone apps should use the in-process transport today** (see "Transport selection"); it is what Yooz Whisper ships.
+
+## TL;DR (loopback transport)
 
 ```swift
-// Package.swift / project.yml
-.package(url: "https://github.com/yooz-labs/yooz-engine", from: "0.6.0")
+// Package.swift / project.yml — pin by REVISION, not version. The engine
+// declares mlx-swift-lm by revision, and SwiftPM forbids a version-pinned
+// package from depending on a revision-pinned one, so `from:` pins fail to
+// resolve. yooz-whisper's project.yml documents the same rule.
+.package(url: "https://github.com/yooz-labs/yooz-engine", revision: "<engine-commit-sha>")
 
 // Anywhere in your app
 import YoozEngineClient
@@ -15,7 +20,39 @@ try await client.connect()
 let result = await client.touchUp.touchUp(text: "um yeah", mode: .standard)
 ```
 
-That's the happy path. The SDK auto-discovers a bundled helper under `<host>.app/Contents/Helpers/` (preferred), or falls back to a LaunchServices lookup for a standalone Yooz Engine.app (legacy). It launches the helper headless (`--headless` argv flag plus `YOOZ_ENGINE_HEADLESS=1` env var, see "Helper-mode signal" below) so your host app's menu-bar UI stays clean.
+That's the happy path for the loopback transport. The SDK auto-discovers a bundled helper under `<host>.app/Contents/Helpers/` (preferred), or falls back to a LaunchServices lookup for a standalone Yooz Engine.app (legacy). It launches the helper headless (`--headless` argv flag plus `YOOZ_ENGINE_HEADLESS=1` env var, see "Helper-mode signal" below) so your host app's menu-bar UI stays clean.
+
+## Transport selection
+
+Pick a transport based on how your app ships, not on which modules you need (module selection is the separate "Variant selection" below):
+
+| Transport | Use when | Status as of 2026-07 |
+|---|---|---|
+| **In-process** (`YoozEngineInProcess` SPM product, `InProcessTransport`) | You're an App Store standalone app. No socket, no separate process — the engine actors run in your sandbox. **Recommended today.** Yooz Whisper ships this (pinned by revision in its `project.yml`, engine 0.7.5 at time of writing). | Shipping. Gaps: `/v1/session/*` (per-recording reset) is not yet routed in-process (tracked engine#222); `/v1/infinite/*` is intentionally unsupported in-process — Infinite's consumer is the loopback host. |
+| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Not shippable yet.** `XPCTransport` and `XPCServiceHandler` are code-complete and unit-tested (epic #192 Phase 3), but no app packages a `.xpc` service target — tracked engine#227. Don't build on this transport until that lands. |
+| **Loopback** (`HTTPTransport`, this document's default) | You're the super-yooz host, or doing local dev/testing. Not valid for an App Store standalone — the unsandboxed helper `.app` under `Contents/Helpers/` fails App Store review (ITMS-90296). | Shipping, default. |
+
+In-process integration looks like this instead of the TL;DR above:
+
+```swift
+// Package.swift / project.yml — pin by REVISION (same rule as the TL;DR:
+// the engine's mlx-swift-lm revision pin makes `from:` pins unresolvable).
+// Pick a revision at or past the v0.7.x line — YoozEngineInProcess first
+// shipped in 0.7.0 (epic #192). yooz-whisper's project.yml is the working
+// reference for this exact setup.
+.package(url: "https://github.com/yooz-labs/yooz-engine", revision: "<engine-commit-sha>")
+// Link the YoozEngineInProcess product (pulls in EngineCore + the module
+// products your variant needs) instead of just YoozEngineClient.
+
+import YoozEngineClient
+import YoozEngineInProcess
+
+let client = YoozEngineClient(transport: InProcessTransport())
+try await client.connect()
+let result = await client.touchUp.touchUp(text: "um yeah", mode: .standard)
+```
+
+Full design rationale + macOS feasibility research (sandboxing, entitlements, Metal/MLX-under-XPC): `docs/engine-app-packaging.md` in the private `yooz` ecosystem repo (sibling checkout).
 
 ## Variant selection
 
@@ -29,7 +66,9 @@ The engine ships in three variants. Pick based on what services your app needs:
 
 **The standalone `Yooz Engine.app` (full variant, menu-bar UI) is dev-only and not shipped publicly.** The future is super-yooz hosting all of this; for now consumer apps embed their own variant.
 
-## Building the helper bundle
+## Building the helper bundle (loopback transport)
+
+Applies to the loopback transport only — super-yooz host and local dev. App Store standalones use the in-process transport (see "Transport selection") and skip this section entirely; there is no helper `.app` to build or embed.
 
 From the engine repo:
 
@@ -49,7 +88,7 @@ Both scripts:
 - Pass `-skipMacroValidation` (required from CLI for `MLXHuggingFaceMacros`)
 - Land output in `dist/`
 
-## Embedding into your host app
+## Embedding into your host app (loopback transport)
 
 In your host app's `project.yml`, add a post-build phase that copies the helper into `Contents/Helpers/`:
 
@@ -66,7 +105,9 @@ postBuildScripts:
 
 See `scripts/build-whisper-helper.sh` (engine) and `scripts/embed-engine-helper.sh` + `scripts/build-with-engine.sh` (whisper) for a working reference.
 
-## Lifecycle
+## Lifecycle (loopback transport)
+
+`InProcessTransport.connect()` just registers + bootstraps the linked module actors — no polling, no launch, no port. The rest of this section is loopback-specific.
 
 The SDK's `connect()` does this:
 
@@ -77,7 +118,9 @@ The SDK's `connect()` does this:
 
 The SDK is `Sendable`; you can safely use one `YoozEngineClient` for the lifetime of your app. Each service client (`stt`, `llm`, `touchUp`, `grammar`, `vad`, `infinite`) is a thin wrapper, cheap to construct.
 
-## Available services (v0.6.0)
+## Available services
+
+Transport-agnostic except where noted. Two different kinds of restriction apply, don't conflate them: `vad` is a **variant** restriction (only the full `YoozEngine` variant links `VADModule`; the in-process transport does route `/v1/vad/detect` when the module is linked), while `infinite` and the raw `/v1/session/*` routes are **transport** restrictions (Infinite is loopback-only by design; session routes are unrouted in-process until engine#222). See "Transport selection" above and "Build Variants" in `AGENTS.md`.
 
 ```swift
 let client = YoozEngineClient()
@@ -147,7 +190,7 @@ Full pattern documented in `AGENTS.md` → "Module model picker pattern".
 
 Infinite follows the engine substrate rule: the engine owns the API surface, session lifecycle, RAM gating, picker catalogue, and cleanup policy; the Infinite project lends backend modules and benchmark evidence. Consumer apps should integrate through `YoozEngineClient.infinite` or `/v1/infinite/*`, not by calling Infinite repo code directly.
 
-Use the full `YoozEngine` variant for Infinite. Lite and Whisper variants do not bundle it and return the standard module-not-bundled `501`.
+Use the full `YoozEngine` variant for Infinite. Lite and Whisper variants do not bundle it and return the standard module-not-bundled `501`. Infinite is also loopback-only by transport, independent of variant: `InProcessTransport` and (once packaged) `XPCTransport` both report `unsupportedOperation` for `/v1/infinite/*`, because Infinite's designed consumer is the loopback host (super-yooz).
 
 | Capability | Contract |
 |---|---|
@@ -278,20 +321,23 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 
 ## Reference apps
 
-- **yooz-whisper** — the canonical reference. Embeds `YoozEngineWhisper`, drives the LLM + STT pickers, ships an Engine settings tab. See `yooz-whisper/AGENTS.md` after PR #170 lands.
-- **super-yooz** — host-app charter at `super-yooz/.context/charter.md`.
+- **yooz-whisper** — the canonical in-process reference. Links `YoozEngineInProcess` (`YoozEngineWhisper` module set: STT + AppleSTT + Grammar + LLM, no VAD/Infinite), pinned by revision in its `project.yml`, drives the LLM + STT pickers, ships an Engine settings tab. See `yooz-whisper/AGENTS.md`.
+- **super-yooz** — the canonical loopback reference (not yet implemented as of 2026-07; zero code against the engine substrate). Host-app charter at `super-yooz/.context/charter.md`.
 
 ## Common pitfalls
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Two engine icons in menu bar | Both your `EngineHelperController.launch()` and `YoozEngineClient.connect()` racing the launch | Just use `client.connect()` — the SDK handles bundled-helper detection + headless launch. Drop the manual `EngineHelperController.launch()` once you're not on legacy v0.5 SDK. |
-| Engine starts but shows "port in use" alert | A stale engine instance is holding 19920 | Set `YOOZ_ENGINE_AUTO_RECOVER=1` for dev (SDK will SIGKILL the holder). For ship, surface the error to the user. |
+| Two engine icons in menu bar (loopback only) | Both your `EngineHelperController.launch()` and `YoozEngineClient.connect()` racing the launch | Just use `client.connect()` — the SDK handles bundled-helper detection + headless launch. Drop the manual `EngineHelperController.launch()` once you're not on legacy v0.5 SDK. |
+| Engine starts but shows "port in use" alert (loopback only) | A stale engine instance is holding 19920 | Set `YOOZ_ENGINE_AUTO_RECOVER=1` for dev (SDK will SIGKILL the holder). For ship, surface the error to the user. |
 | MLXHuggingFaceMacros build failure from CLI | Macro requires explicit trust on first use | Pass `-skipMacroValidation` to xcodebuild. Xcode UI handles this prompt automatically; CI / scripts must pass the flag. |
-| `connect()` succeeds but service calls 501 | Active build variant doesn't bundle that module (e.g. Lite has no MLX STT) | Check `client.modules()` — `unavailable` modules return 501 by design. Render the limitation in your UI. |
-| Infinite `generate` returns 501 | The active model has no runnable Swift MLX backend (only retrieval today); session state is preserved | Switch to a Swift-runtime-supported model (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B or E4B), or branch on the stable `generation_unavailable` code. Create/append/checkpoint/delete keep working regardless. |
+| `connect()` succeeds but service calls 501 | Active build variant doesn't bundle that module (e.g. Lite has no MLX STT), OR (in-process only) the route isn't implemented by `InProcessTransport` yet | Check `client.modules()` — `unavailable` modules return 501 by design. For an in-process-only gap (not module-not-bundled), see the `/v1/session/*` and Infinite rows below. |
+| `/v1/session/begin` / `/v1/session/end` throw `unsupportedOperation` (in-process) | These routes aren't wired in `InProcessTransport` yet (engine#222) — unrouted paths throw, they do not silently no-op | Per-recording state reset (KV caches, streaming buffers) doesn't fire in-process today. Handle the error (or gate the call on transport, as whisper's `SessionClient` does) until #222 lands; loopback is unaffected. |
+| Infinite calls throw `unsupportedOperation` (in-process/XPC) | Infinite is loopback-only by design — its consumer is the loopback host (super-yooz), not the in-process/XPC path | Don't wire Infinite into an in-process/XPC-packaged standalone. If you need it, use the loopback transport. |
+| Infinite `generate` returns 501 (loopback) | The active model has no runnable Swift MLX backend (only retrieval today); session state is preserved | Switch to a Swift-runtime-supported model (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B or E4B), or branch on the stable `generation_unavailable` code. Create/append/checkpoint/delete keep working regardless. |
 | Infinite models are visible but disabled | Host RAM tier cannot run that row | Use `loadState == .unavailable`, `ramTier`, and `maxContextTokens` from `/v1/infinite/models` to explain the requirement. |
 | Infinite session creation starts failing after repeated tests | Sessions are engine-owned and capped at 16 | Delete sessions explicitly with `client.infinite.deleteSession(id:)`; `/v1/session/begin` does not clean them up. |
+| Building against `XPCTransport` produces no bundle to test | No `.xpc` service target exists yet in any variant's `project.yml` | Not a bug — packaging is tracked in engine#227 and not shippable yet. Use in-process instead. |
 
 ---
 
