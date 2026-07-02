@@ -3,6 +3,7 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 
+import EngineCore
 import Foundation
 import os.log
 
@@ -176,13 +177,19 @@ public enum TouchUpProcessor {
     ///   - lightModel: Fast model for proofreading (Yooz-Light)
     ///   - qualityModel: Quality model for validation (Yooz-Quality)
     ///   - proofreadPrompt: System prompt for proofreading (allows mode-specific selection)
+    ///   - workloadClass: GPU admission class (engine#228). Defaults to
+    ///     `.background` — TouchUp generation is throughput work per the
+    ///     issue's classification, so it queues/yields behind a
+    ///     concurrently-active interactive workload (a live streaming STT
+    ///     session) rather than contending for the GPU.
     /// - Returns: Processed result with final text and metadata
     static func process(
         text: String,
         replacements: [Replacement],
         lightModel: any LLMBackend,
         qualityModel: any LLMBackend,
-        proofreadPrompt: String = TouchUpPrompts.proofread
+        proofreadPrompt: String = TouchUpPrompts.proofread,
+        workloadClass: MLXWorkloadClass = .background
     ) async -> ProcessResult {
         let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -200,7 +207,8 @@ public enum TouchUpProcessor {
             do {
                 let response = try await lightModel.generate(
                     prompt: processedText,
-                    systemPrompt: proofreadPrompt
+                    systemPrompt: proofreadPrompt,
+                    workloadClass: workloadClass
                 )
 
                 let (resultText, success) = parseProofreadResponse(response, fallback: processedText)
@@ -236,7 +244,8 @@ public enum TouchUpProcessor {
             do {
                 let response = try await qualityModel.generate(
                     prompt: prompt,
-                    systemPrompt: TouchUpPrompts.validateAndProofread
+                    systemPrompt: TouchUpPrompts.validateAndProofread,
+                    workloadClass: workloadClass
                 )
 
                 let (resultText, keepDecisions, _) = parseValidateResponse(

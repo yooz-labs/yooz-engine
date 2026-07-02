@@ -287,7 +287,11 @@ actor MLXLLMBackend: LLMBackend {
         logger.debug("Prompt cache cleared")
     }
 
-    func generate(prompt: String, systemPrompt: String) async throws -> String {
+    func generate(
+        prompt: String,
+        systemPrompt: String,
+        workloadClass: MLXWorkloadClass = .background
+    ) async throws -> String {
         guard isLoaded else {
             throw LLMError.notLoaded
         }
@@ -299,6 +303,17 @@ actor MLXLLMBackend: LLMBackend {
 
         var phase = "setup"
         do {
+            // GPU admission (engine#228): a background submission (TouchUp
+            // generation, raw `/v1/llm/generate`) checks the gate before
+            // doing any GPU work, so it queues/yields to a concurrently
+            // active interactive workload (a live streaming STT session)
+            // instead of contending for the GPU — the whisper#263 evidence.
+            // Interactive calls skip the gate: they are never expected to
+            // wait behind another submission.
+            if workloadClass == .background {
+                try await MLXAdmissionGate.shared.checkpoint()
+            }
+
             let estimatedTokens = max(100, (prompt.count / 3) + 50)
 
             // Invalidate cache if system prompt changed
@@ -388,6 +403,15 @@ actor MLXLLMBackend: LLMBackend {
 
                 var text = ""
                 for await generation in stream {
+                    // Chunk-level yielding (engine#228): re-check the gate
+                    // between token batches so an in-flight background
+                    // generation pauses if an interactive workload becomes
+                    // active mid-generation, rather than only queuing at
+                    // submission time. Fast no-op path when no interactive
+                    // workload is active (the common case).
+                    if workloadClass == .background {
+                        try await MLXAdmissionGate.shared.checkpoint()
+                    }
                     // ml-explore `Generation.chunk` carries the decoded String.
                     if case let .chunk(chunk) = generation {
                         text += chunk
