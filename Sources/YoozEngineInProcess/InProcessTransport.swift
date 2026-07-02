@@ -88,6 +88,16 @@ public final class InProcessTransport: EngineTransport {
         }
     }
 
+    // Handler contract (#223): every POST handler dispatched below MUST
+    // validate its request (JSON-decode the body, or an equivalent cheap
+    // guard) BEFORE doing any disk/network/model work. RouteParityTests
+    // drives each route with a minimal invalid request and relies on that
+    // fail-fast gate to prove dispatch reachability without side effects.
+    // Handlers with no request body to gate on (`/v1/models/cleanup`,
+    // `/v1/session/*`) DO run their real work on every test sweep, so they
+    // must stay cheap and side-effect-safe in a bare test process — the test
+    // additionally redirects the HF cache env vars so cleanup can never
+    // touch the machine's real model cache.
     public func post(_ path: String, body: Data) async throws -> Data {
         try await connect()
         switch route(path) {

@@ -27,10 +27,13 @@ public struct RouteManifestEntry: Sendable, Equatable {
     /// Non-nil only for a route that is reachable in-process through a
     /// different call shape than `EngineTransport.get/post/delete` — today
     /// just the STT WebSocket stream, whose in-process equivalent is
-    /// `InProcessTransport.openSTTStream(language:mode:)`. Documents the
-    /// equivalence so the route-parity test can certify the route as covered
-    /// WITHOUT adding it to `RouteParityAllowlist` — it genuinely IS served
-    /// in-process, just not via a `route(method:path:)`-shaped call.
+    /// `InProcessTransport.openSTTStream(language:mode:)`. Documentation
+    /// only: the parity test never reads this string — its dispatch
+    /// mechanism is the hardcoded `.websocket` case in
+    /// `RouteParityTests.dispatch()`. The field exists so the manifest
+    /// itself records WHY the route needs no `RouteParityAllowlist` entry:
+    /// it genuinely IS served in-process, just not via a
+    /// `route(method:path:)`-shaped call.
     public let inProcessEquivalent: String?
 
     public init(_ method: RouteMethod, _ path: String, inProcessEquivalent: String? = nil) {
@@ -40,7 +43,10 @@ public struct RouteManifestEntry: Sendable, Equatable {
     }
 
     /// Stable identity for set membership / dictionary keys across the
-    /// manifest and the allowlist.
+    /// manifest and the allowlist. Intentionally derived from `method` +
+    /// `path` only — unlike the synthesized `==`, it ignores
+    /// `inProcessEquivalent` — so two entries for the same wire route always
+    /// collide on `key`, which is what the duplicate-detection test checks.
     public var key: String { "\(method.rawValue) \(path)" }
 }
 
@@ -145,19 +151,16 @@ public struct LoopbackOnlyRoute: Sendable {
 /// and called out here for visibility. The same applies to the `.qwen3ASRPreview`
 /// branch of `POST /v1/stt/load` ("load qwen3 preview").
 public enum RouteParityAllowlist {
+    /// Shared justification for every `/v1/infinite/*` entry — one string so
+    /// the rationale can never drift between entries on a partial edit.
+    private static let infiniteReason =
+        "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+
     public static let loopbackOnly: [LoopbackOnlyRoute] = [
-        // #222 (in flight, concurrent branch) adds /v1/session/{begin,end} to
-        // InProcessTransport. Remove exactly these two entries when that PR
-        // lands — whichever of #222 / #223 lands second rebases past the
-        // other, per the coordination note on both issues.
-        LoopbackOnlyRoute(
-            .init(.post, "/v1/session/begin"),
-            reason: "per-recording session reset not yet routed in-process (#222 in flight)"
-        ),
-        LoopbackOnlyRoute(
-            .init(.post, "/v1/session/end"),
-            reason: "per-recording session reset not yet routed in-process (#222 in flight)"
-        ),
+        // /v1/session/{begin,end} were allowlisted here while #222 was in
+        // flight; that PR landed (SessionCoordinator fan-out shared by both
+        // transports), so the routes are asserted as in-process-reachable by
+        // the parity test like any other.
 
         // Infinite is loopback-only by design: its only consumer is the
         // super-yooz host, which always talks loopback HTTP.
@@ -165,43 +168,43 @@ public enum RouteParityAllowlist {
         // (Package.swift ~200-203).
         LoopbackOnlyRoute(
             .init(.get, "/v1/infinite/models"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.post, "/v1/infinite/model"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.get, "/v1/infinite/status"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.get, "/v1/infinite/sessions"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.post, "/v1/infinite/sessions"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.get, "/v1/infinite/sessions/:sessionID"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.post, "/v1/infinite/sessions/:sessionID/append"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.post, "/v1/infinite/sessions/:sessionID/generate"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.post, "/v1/infinite/sessions/:sessionID/checkpoint"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
         LoopbackOnlyRoute(
             .init(.delete, "/v1/infinite/sessions/:sessionID"),
-            reason: "Infinite is loopback-only by design; consumer is the super-yooz host (Package.swift ~200-203)"
+            reason: infiniteReason
         ),
     ]
 }
