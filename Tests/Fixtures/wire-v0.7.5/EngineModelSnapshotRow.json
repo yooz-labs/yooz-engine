@@ -1,0 +1,9 @@
+{
+  "description" : "Fast, on-device cleanup",
+  "displayName" : "Yooz-Light",
+  "id" : "yooz-light-v2",
+  "isActive" : true,
+  "loadState" : "loaded",
+  "sizeBytes" : 276000000,
+  "tier" : "light"
+}

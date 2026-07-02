@@ -447,4 +447,73 @@ final class WireCompatFixtureTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - Engine state / events (engine#226)
+
+    func testEngineEvent() throws {
+        try assertWireStable(
+            EngineEvent.self, fixture: "EngineEvent",
+            expected: EngineEvent(
+                kind: .downloadProgress,
+                module: "touchup",
+                modelId: "yooz-quality-v2",
+                loadState: nil,
+                progress: 0.42,
+                message: nil,
+                ts: "2026-07-02T09:00:00Z"
+            )
+        )
+    }
+
+    /// Every event kind's raw wire value is a stable contract — a picker UI
+    /// subscribing to `/v1/events` switches on `kind`.
+    func testEngineEventKindRawValues() {
+        XCTAssertEqual(EngineEventKind.modelChanged.rawValue, "modelChanged")
+        XCTAssertEqual(EngineEventKind.loadStateChanged.rawValue, "loadStateChanged")
+        XCTAssertEqual(EngineEventKind.downloadProgress.rawValue, "downloadProgress")
+        XCTAssertEqual(EngineEventKind.residencyChanged.rawValue, "residencyChanged")
+    }
+
+    func testEngineModelSnapshotRow() throws {
+        try assertWireStable(
+            EngineModelSnapshotRow.self, fixture: "EngineModelSnapshotRow",
+            expected: EngineModelSnapshotRow(
+                id: "yooz-light-v2", displayName: "Yooz-Light",
+                description: "Fast, on-device cleanup", tier: .light,
+                sizeBytes: 276_000_000, loadState: .loaded, isActive: true
+            )
+        )
+    }
+
+    func testEngineModuleSnapshot() throws {
+        try assertWireStable(
+            EngineModuleSnapshot.self, fixture: "EngineModuleSnapshot",
+            expected: EngineModuleSnapshot(
+                module: "touchup",
+                models: [EngineModelSnapshotRow(
+                    id: "yooz-light-v2", displayName: "Yooz-Light",
+                    description: "Fast, on-device cleanup", tier: .light,
+                    sizeBytes: 276_000_000, loadState: .loaded, isActive: true
+                )],
+                activeId: "yooz-light-v2"
+            )
+        )
+    }
+
+    func testEngineStateSnapshot() throws {
+        try assertWireStable(
+            EngineStateSnapshot.self, fixture: "EngineStateSnapshot",
+            expected: EngineStateSnapshot(modules: [
+                EngineModuleSnapshot(
+                    module: "touchup",
+                    models: [EngineModelSnapshotRow(
+                        id: "yooz-light-v2", displayName: "Yooz-Light",
+                        description: "Fast, on-device cleanup", tier: .light,
+                        sizeBytes: 276_000_000, loadState: .loaded, isActive: true
+                    )],
+                    activeId: "yooz-light-v2"
+                ),
+            ])
+        )
+    }
 }
