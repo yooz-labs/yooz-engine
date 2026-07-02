@@ -1,0 +1,14 @@
+{
+  "models" : [
+    {
+      "cached" : true,
+      "deletable" : false,
+      "displayName" : "Yooz-Light",
+      "id" : "yooz-light-v2",
+      "isActive" : true,
+      "loaded" : true,
+      "module" : "llm",
+      "sizeBytes" : 550000000
+    }
+  ]
+}

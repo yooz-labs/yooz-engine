@@ -1,0 +1,6 @@
+{
+  "model" : "yooz-light-v2",
+  "processingTimeMs" : 120,
+  "text" : "Hello, world.",
+  "tokensGenerated" : 4
+}

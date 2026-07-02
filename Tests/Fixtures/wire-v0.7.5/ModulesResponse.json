@@ -1,0 +1,23 @@
+{
+  "buildVariant" : "full",
+  "engineVersion" : "0.7.5",
+  "modules" : [
+    {
+      "detail" : {
+        "rules_total" : "1560"
+      },
+      "loaded" : true,
+      "name" : "grammar",
+      "version" : "0.7.5"
+    },
+    {
+      "detail" : {
+
+      },
+      "error" : "not loaded",
+      "loaded" : false,
+      "name" : "stt",
+      "version" : "0.7.5"
+    }
+  ]
+}

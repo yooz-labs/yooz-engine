@@ -1,0 +1,12 @@
+{
+  "modules" : {
+    "grammar" : true,
+    "llm" : true,
+    "stt" : true,
+    "touchup" : true,
+    "tts" : false,
+    "vad" : true
+  },
+  "status" : "ok",
+  "version" : "0.7.5"
+}

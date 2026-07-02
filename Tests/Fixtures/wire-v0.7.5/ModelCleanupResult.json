@@ -1,0 +1,6 @@
+{
+  "perRepo" : {
+    "models--foo--bar" : 999999
+  },
+  "totalReclaimedBytes" : 999999
+}
