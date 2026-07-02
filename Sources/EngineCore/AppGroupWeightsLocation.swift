@@ -4,6 +4,7 @@
 // Copyright 2026 Yooz Labs. All rights reserved.
 
 import Foundation
+import OSLog
 
 /// Resolves the shared weights cache location for the sandboxed XPC service
 /// packaging (engine#227; `../yooz/docs/engine-app-packaging.md` "Standalone
@@ -32,6 +33,8 @@ import Foundation
 /// container; it is NOT yet app-group-aware — tracked as a known follow-up,
 /// out of scope for the XPC packaging epic itself.
 public enum AppGroupWeightsLocation {
+    private static let logger = Logger(subsystem: "live.yooz.engine", category: "AppGroupWeightsLocation")
+
     /// Pure path construction: the HF hub-cache directory inside an
     /// already-resolved app-group container. Exposed separately from
     /// `redirectHuggingFaceCache` so this is unit-testable without a real
@@ -56,12 +59,23 @@ public enum AppGroupWeightsLocation {
     /// cached), but the underlying `HubApi`/downloader clients it feeds may
     /// resolve their own cache root at construction time.
     ///
-    /// Returns `false` (a no-op — never crashes, never throws) when the
-    /// group directory can't be resolved or created — an empty identifier,
-    /// or (rare in practice) a filesystem failure creating the
-    /// subdirectory. Callers fall through to
+    /// `fileManager` is injectable (defaults to `.default`) so a test double
+    /// can exercise the "container resolves but the subdirectory can't be
+    /// created" branch deterministically — `FileManager` is an open class,
+    /// not a protocol, so the double is a thin subclass overriding just the
+    /// two methods this function calls, delegating everything else to a real
+    /// `FileManager` (same "backend double, not a mock" shape as
+    /// `CannedStreamTransport` in `XPCStreamingTests.swift`).
+    ///
+    /// Returns `nil` (a no-op — never crashes, never throws) when the
+    /// directory can't be resolved or created, logging WHY at debug level so
+    /// a misconfigured group id doesn't fail silently and invisibly (a
+    /// consumer app that gets the id wrong would otherwise see permanent,
+    /// undiagnosable duplicate multi-GB downloads with no trace in the log).
+    /// Distinguishes three causes in the log: empty identifier, unresolvable
+    /// container, and an uncreatable subdirectory. Callers fall through to
     /// `EngineConfig.huggingFaceCacheDirectory`'s own sandboxed-container
-    /// fallback in that case, so the engine still works — just without
+    /// fallback in every case, so the engine still works — just without
     /// cross-process cache sharing.
     ///
     /// Note `containerURL(forSecurityApplicationGroupIdentifier:)` itself
@@ -75,19 +89,30 @@ public enum AppGroupWeightsLocation {
     /// actually shared with anything unless a sandboxed process with the
     /// matching entitlement also resolves it.
     @discardableResult
-    public static func redirectHuggingFaceCache(groupIdentifier: String) -> Bool {
-        guard !groupIdentifier.isEmpty, let container = FileManager.default.containerURL(
+    public static func redirectHuggingFaceCache(
+        groupIdentifier: String,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard !groupIdentifier.isEmpty else {
+            logger.debug("redirectHuggingFaceCache: empty group identifier, skipping")
+            return nil
+        }
+        guard let container = fileManager.containerURL(
             forSecurityApplicationGroupIdentifier: groupIdentifier
         ) else {
-            return false
+            logger.debug("redirectHuggingFaceCache: could not resolve container for group '\(groupIdentifier, privacy: .public)'")
+            return nil
         }
         let hubCache = huggingFaceHubCacheURL(inContainer: container)
-        guard (try? FileManager.default.createDirectory(
-            at: hubCache, withIntermediateDirectories: true
-        )) != nil else {
-            return false
+        do {
+            try fileManager.createDirectory(at: hubCache, withIntermediateDirectories: true)
+        } catch {
+            logger.debug(
+                "redirectHuggingFaceCache: could not create '\(hubCache.path, privacy: .public)': \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
         }
         setenv("HF_HUB_CACHE", hubCache.path, 1)
-        return true
+        return hubCache
     }
 }

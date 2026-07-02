@@ -3,13 +3,21 @@
 //
 // Copyright 2026 Yooz Labs. All rights reserved.
 //
-// Coverage for engine#227's app-group weights wiring. The container-resolving
-// half (`redirectHuggingFaceCache`) needs a real `application-groups`
-// entitlement + provisioning profile to succeed, which a plain `swift test` /
-// `xcodebuild test` process never has — so its no-op (never crash) contract
-// is what's pinned here. The pure path-construction half
-// (`huggingFaceHubCacheURL(inContainer:)`) is fully unit-testable and pins
-// the "Application Support, not Caches" contract from the packaging doc.
+// Coverage for engine#227's app-group weights wiring. The pure
+// path-construction half (`huggingFaceHubCacheURL(inContainer:)`) is fully
+// unit-testable and pins the "Application Support, not Caches" contract from
+// the packaging doc. The container-resolving half
+// (`redirectHuggingFaceCache`) is environment-dependent:
+// `containerURL(forSecurityApplicationGroupIdentifier:)` does NOT require the
+// `application-groups` entitlement to resolve a container for an unsandboxed
+// caller (a plain `swift test` process, like a consumer app's unsandboxed
+// local dev run, typically DOES resolve one, landing under
+// `~/Library/Group Containers/<id>/`) — macOS only enforces entitlement
+// matching for a genuinely sandboxed caller (real XCTest-hosted-by-app runs,
+// CI). So the tests below assert the OBSERVABLE CONTRACT (success shape XOR
+// untouched-on-failure shape, never a crash) rather than a fixed true/false
+// outcome, keeping them stable across both environments — see
+// `AppGroupWeightsLocation.swift`'s own doc comment for the full rationale.
 
 import XCTest
 @testable import EngineCore
@@ -51,7 +59,7 @@ final class AppGroupWeightsLocationTests: XCTestCase {
     /// blank identifier (which would otherwise be a confusing failure mode
     /// distinct from "entitlement missing").
     func testEmptyGroupIdentifierIsANoOp() {
-        XCTAssertFalse(AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier: ""))
+        XCTAssertNil(AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier: ""))
     }
 
     /// `containerURL(forSecurityApplicationGroupIdentifier:)` doesn't
@@ -60,10 +68,19 @@ final class AppGroupWeightsLocationTests: XCTestCase {
     /// consumer app's local unsandboxed dev run, is not sandboxed at all —
     /// macOS only enforces group-entitlement matching for a truly sandboxed
     /// caller). So this asserts the OBSERVABLE CONTRACT rather than a fixed
-    /// true/false outcome, keeping it stable across sandboxed CI and
-    /// unsandboxed local runs: on success, `HF_HUB_CACHE` must point under
-    /// "Application Support" (never "Caches"); on failure, `HF_HUB_CACHE`
-    /// must be left exactly as it was (never a crash either way).
+    /// success/failure outcome, keeping it stable across sandboxed CI and
+    /// unsandboxed local runs: on success, the returned URL (and
+    /// `HF_HUB_CACHE`) must point under "Application Support" (never
+    /// "Caches"); on failure, `HF_HUB_CACHE` must be left exactly as it was
+    /// (never a crash either way).
+    ///
+    /// Mutates the process-global `HF_HUB_CACHE` env var and (on an
+    /// unsandboxed run) creates a real directory under
+    /// `~/Library/Group Containers/`; both are restored/removed in this
+    /// test, which assumes XCTest's default serial-within-class execution
+    /// (no `-parallel-testing-enabled` for this bundle) — a future
+    /// parallelized run of `EngineCoreTests` would need this test isolated
+    /// from anything else touching `HF_HUB_CACHE`.
     func testRedirectHonorsItsDocumentedEnvVarContract() {
         let priorValue = ProcessInfo.processInfo.environment["HF_HUB_CACHE"]
         defer {
@@ -76,19 +93,70 @@ final class AppGroupWeightsLocationTests: XCTestCase {
         unsetenv("HF_HUB_CACHE")
 
         let groupID = "engine-core-tests.app-group-contract-probe"
-        let succeeded = AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier: groupID)
+        let hubCache = AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier: groupID)
 
-        guard succeeded else {
+        guard let hubCache else {
             XCTAssertNil(ProcessInfo.processInfo.environment["HF_HUB_CACHE"])
             return
         }
-        let hubCache = ProcessInfo.processInfo.environment["HF_HUB_CACHE"]
-        XCTAssertNotNil(hubCache)
-        XCTAssertTrue(hubCache?.contains("Application Support") ?? false)
-        XCTAssertFalse(hubCache?.contains("/Caches/") ?? true)
-        // Clean up the directory this run created on disk.
-        if let hubCache {
-            try? FileManager.default.removeItem(atPath: hubCache)
+        XCTAssertTrue(hubCache.path.contains("Application Support"))
+        XCTAssertFalse(hubCache.path.contains("/Caches/"))
+        XCTAssertEqual(ProcessInfo.processInfo.environment["HF_HUB_CACHE"], hubCache.path)
+        // Clean up the ENTIRE group-container root this run created on disk
+        // (not just the `hub` leaf) — `containerURL` resolves
+        // `~/Library/Group Containers/<groupID>/`, and `hubCache` is several
+        // path components below that root.
+        if let containerRoot = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: groupID
+        ) {
+            try? FileManager.default.removeItem(at: containerRoot)
         }
+    }
+
+    /// Deterministic coverage of the "container resolves but the
+    /// subdirectory can't be created" branch — not reachable via the real
+    /// `FileManager.default` in a plain test process (the container it
+    /// resolves to is always writable here), so a thin subclass overrides
+    /// just `containerURL(forSecurityApplicationGroupIdentifier:)` (returns
+    /// a real, valid URL) and `createDirectory(at:withIntermediateDirectories:attributes:)`
+    /// (always throws), delegating nothing else — a backend double, not a
+    /// mock, matching `CannedStreamTransport`'s shape in
+    /// `XPCStreamingTests.swift`.
+    func testUncreatableDirectoryReturnsNilAndLeavesEnvVarUntouched() {
+        let priorValue = ProcessInfo.processInfo.environment["HF_HUB_CACHE"]
+        defer {
+            if let priorValue {
+                setenv("HF_HUB_CACHE", priorValue, 1)
+            } else {
+                unsetenv("HF_HUB_CACHE")
+            }
+        }
+        unsetenv("HF_HUB_CACHE")
+
+        let result = AppGroupWeightsLocation.redirectHuggingFaceCache(
+            groupIdentifier: "irrelevant-because-the-double-ignores-it",
+            fileManager: AlwaysFailingCreateDirectoryFileManager()
+        )
+
+        XCTAssertNil(result)
+        XCTAssertNil(ProcessInfo.processInfo.environment["HF_HUB_CACHE"])
+    }
+}
+
+/// Test double for `testUncreatableDirectoryReturnsNilAndLeavesEnvVarUntouched`.
+/// Resolves a real (writable) container so `redirectHuggingFaceCache` reaches
+/// its `createDirectory` call, then fails that one call deterministically —
+/// simulating a read-only volume / disk-full / permission-denied condition
+/// the real `FileManager.default` can't be coaxed into hitting reliably in a
+/// test process.
+private final class AlwaysFailingCreateDirectoryFileManager: FileManager {
+    private struct ForcedFailure: Error {}
+
+    override func createDirectory(
+        at url: URL,
+        withIntermediateDirectories createIntermediates: Bool,
+        attributes: [FileAttributeKey: Any]? = nil
+    ) throws {
+        throw ForcedFailure()
     }
 }
