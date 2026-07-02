@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    YoozEngineXPC.entitlements — engine#227.
+
+    Canonical entitlement set for the sandboxed XPC service packaging
+    (`../yooz/docs/engine-app-packaging.md` "Standalone packaging — sandboxed
+    XPC service"). A consumer app copies this file (renaming the app group
+    suffix to its own, see below) when it defines its own `.xpc` target.
+
+    - `app-sandbox` only. NEVER `com.apple.security.inherit` — inheritance is
+      for child processes an app spawns itself; a system-launched XPC service
+      needs its own sandbox, and `inherit` is exactly the mechanism that made
+      the deprecated nested-helper-`.app` shape (`Contents/Helpers/`) trip
+      ITMS-90296.
+    - `network.client` for HuggingFace weight downloads (STT/LLM/Grammar
+      models are pulled on first use — see AGENTS.md "HF model auto-download").
+      No `network.server`: the XPC service is addressed by bundle id via
+      `NSXPCConnection`, never a loopback socket.
+    - `application-groups`: team-ID-prefixed, shared with the host app so
+      both sides resolve the same `containerURL(forSecurityApplicationGroupIdentifier:)`
+      for the weights cache (Application Support, not Caches — see
+      "Weights/app-group wiring" in docs/CONSUMER_INTEGRATION.md). This
+      repo's own harness target has no real Team ID, so `$(TeamIdentifierPrefix)`
+      resolves empty for local ad-hoc builds; a shipping consumer app supplies
+      a real team + provisioning profile with the matching group registered
+      in its App ID.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>$(TeamIdentifierPrefix)live.yooz.engine.shared</string>
+    </array>
+</dict>
+</plist>

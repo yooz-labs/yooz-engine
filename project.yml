@@ -442,6 +442,105 @@ targets:
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
+  # Sandboxed XPC service (engine#227): the App Store standalone packaging
+  # `../yooz/docs/engine-app-packaging.md` calls "preferred" — hosts
+  # `XPCServiceHandler(transport: InProcessTransport())` behind
+  # `NSXPCListener.service()`, giving crash/OOM isolation an in-process build
+  # can't (an engine crash no longer takes the host app down). Composed with
+  # the Whisper variant's module set (Lite + MLX STT: AppleSTTModule +
+  # GrammarModule + LLMModule + STTModule, no VAD/Infinite) via the
+  # `YoozEngineInProcess` SPM product — the SAME product a standalone app
+  # links for its in-process build, so there is no third route table (see
+  # `XPCServiceHandler.swift`). Consumer apps copy this target's shape
+  # (sources, entitlements, Info.plist) into their own `project.yml` — see
+  # docs/CONSUMER_INTEGRATION.md "XPC service embed recipe".
+  #
+  # Dev-only within this repo: nothing here embeds `YoozEngineXPC.xpc`
+  # except `YoozEngineXPCHarness` below, which proves the packaging round
+  # trips but is never archived/shipped.
+  YoozEngineXPC:
+    type: xpc-service
+    platform: macOS
+    sources:
+      - XPCService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.xpc
+        PRODUCT_NAME: YoozEngineXPC
+        INFOPLIST_FILE: XPCService/Info.plist
+        CODE_SIGN_ENTITLEMENTS: XPCService/YoozEngineXPC.entitlements
+        SKIP_INSTALL: "YES"
+        # Dev-only target in this repo (see header comment) — manual ad-hoc
+        # signing keeps `xcodebuild build` working without a paid Apple
+        # Developer team configured on the build machine. A shipping
+        # consumer app supplies its own DEVELOPMENT_TEAM + provisioning
+        # profile with the `application-groups` capability registered.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+      configs:
+        Debug:
+          # Matches the full engine variant's Debug override (see YoozEngine
+          # target above): hardened runtime triggers a TCC prompt on
+          # sandboxed resource access that never resolves headlessly.
+          ENABLE_HARDENED_RUNTIME: false
+        Release:
+          ENABLE_HARDENED_RUNTIME: true
+    dependencies:
+      # SDK + in-process facade come from the SAME local SPM package
+      # (`YoozEngineClient`, declared under `packages:` above) that
+      # `IntegrationTests` already links — `EngineCore` for
+      # `AppGroupWeightsLocation`, `YoozEngineClient` for
+      # `XPCServiceHandler`/`XPCServiceListenerDelegate`, and
+      # `YoozEngineInProcess` for `InProcessTransport` (which pulls in
+      # STTModule/LLMModule/GrammarModule/AppleSTTModule/VADModule
+      # transitively — VAD riding along is harmless: it's just linked, not
+      # specially exposed, and matches what a real Whisper-variant in-process
+      # consumer already links today).
+      - package: YoozEngineClient
+        product: EngineCore
+      - package: YoozEngineClient
+        product: YoozEngineClient
+      - package: YoozEngineClient
+        product: YoozEngineInProcess
+
+  # Dev-only harness (engine#227) — NOT shipped, NOT archived. Embeds
+  # `YoozEngineXPC.xpc` under its own `Contents/XPCServices/` and round-trips
+  # health + streaming STT through `XPCTransport` against the packaged
+  # service. See `XPCServiceHarness/HarnessMain.swift`'s header comment for
+  # how to run it (a plain executable, not an XCTest target — XPC services
+  # are launchd-managed with no GUI test runner involved).
+  YoozEngineXPCHarness:
+    type: application
+    platform: macOS
+    sources:
+      - XPCServiceHarness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.xpc.harness
+        PRODUCT_NAME: YoozEngineXPCHarness
+        INFOPLIST_FILE: XPCServiceHarness/Info.plist
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        # Dev-only, never archived — see header comment.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+      configs:
+        Debug:
+          ENABLE_HARDENED_RUNTIME: false
+        Release:
+          ENABLE_HARDENED_RUNTIME: true
+    dependencies:
+      - package: YoozEngineClient
+        product: YoozEngineClient
+      # Embed under Contents/XPCServices/ (xcodegen infers the destination
+      # from the dependency's `xpc-service` product type). `link: false` —
+      # an XPC service is a separate launchd-managed executable, never a
+      # link-time dependency, only a target dependency + embed/copy phase.
+      - target: YoozEngineXPC
+        embed: true
+        codeSign: true
+        link: false
+
   YoozEngineTests:
     type: bundle.unit-test
     platform: macOS
@@ -653,6 +752,23 @@ schemes:
           defaultPlan: true
       targets:
         - IntegrationTests
+
+  # Dev-only XPC packaging proof (engine#227). Builds the harness AND its
+  # embedded `YoozEngineXPC.xpc` dependency in one shot. Not part of the
+  # default `YoozEngine` scheme (no CI wiring — see AGENTS.md "Packaging and
+  # transports" for status) and never archived. Run:
+  #   xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngineXPCHarness \
+  #     -configuration Debug -skipMacroValidation -derivedDataPath build build
+  #   "build/Build/Products/Debug/YoozEngineXPCHarness.app/Contents/MacOS/YoozEngineXPCHarness"
+  YoozEngineXPCHarness:
+    build:
+      targets:
+        YoozEngineXPCHarness: all
+        YoozEngineXPC: all
+    run:
+      config: Debug
+    archive:
+      config: Release
 
   # Live gemma4 parity (#184). Separate scheme + test plan so the gate var
   # INFINITE_LIVE=1 reaches the xctest process (xcodebuild does not propagate
