@@ -44,8 +44,10 @@ final class InProcessSessionTests: XCTestCase {
     func testSessionBeginAndEndRouteInProcessAndReachRegisteredConformer() async throws {
         let counter = ResetCounter()
         await ModuleRegistry.shared.register(SessionTestConformer(counter: counter))
-        defer {
-            Task { await ModuleRegistry.shared.unregister(SessionTestConformer.name) }
+        // Awaited teardown (not a fire-and-forget Task) so the shared-singleton
+        // registry is guaranteed clean before any later test observes it.
+        addTeardownBlock {
+            await ModuleRegistry.shared.unregister(SessionTestConformer.name)
         }
 
         let transport = InProcessTransport()

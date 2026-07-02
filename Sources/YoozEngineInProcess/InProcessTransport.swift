@@ -263,8 +263,8 @@ public final class InProcessTransport: EngineTransport {
     /// `POST /v1/session/begin` (engine issue #114 / #222). Fans out
     /// `resetForNewSession()` to every registered `SessionResettable` module
     /// via the shared `EngineCore.SessionCoordinator` — the same component
-    /// the loopback `APIServer` route calls — so the wire shape
-    /// (`{sessionId, ts}`) matches byte-for-byte regardless of transport.
+    /// the loopback `APIServer` route calls — so the response carries the
+    /// same wire fields (`{sessionId, ts}`) regardless of transport.
     private func handleSessionBegin() async throws -> Data {
         let result = await SessionCoordinator.begin()
         NSLog(

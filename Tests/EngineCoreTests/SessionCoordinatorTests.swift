@@ -36,8 +36,11 @@ final class SessionCoordinatorTests: XCTestCase {
     func testBeginFansOutAndReturnsFreshSessionId() async {
         let counter = ResetCounter()
         await ModuleRegistry.shared.register(CoordinatorTestConformer(counter: counter))
-        defer {
-            Task { await ModuleRegistry.shared.unregister(CoordinatorTestConformer.name) }
+        // Awaited teardown (not a fire-and-forget Task) so the shared-singleton
+        // registry is guaranteed clean before the next test method registers
+        // the same conformer name.
+        addTeardownBlock {
+            await ModuleRegistry.shared.unregister(CoordinatorTestConformer.name)
         }
 
         let first = await SessionCoordinator.begin()
@@ -51,11 +54,11 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(calls, 2, "each begin() call fans out to the registered conformer once")
     }
 
-    func testEndFansOutWithNoWirePayload() async {
+    func testEndFansOutAndReturnsCount() async {
         let counter = ResetCounter()
         await ModuleRegistry.shared.register(CoordinatorTestConformer(counter: counter))
-        defer {
-            Task { await ModuleRegistry.shared.unregister(CoordinatorTestConformer.name) }
+        addTeardownBlock {
+            await ModuleRegistry.shared.unregister(CoordinatorTestConformer.name)
         }
 
         let fanoutCount = await SessionCoordinator.end()

@@ -14,6 +14,12 @@ import Foundation
 /// returning a UUID lets consumer apps tag their own logs / metrics so a
 /// recording can be correlated end-to-end across engine + client traces.
 /// `ts` is an ISO-8601 UTC timestamp captured server-side at fan-out start.
+///
+/// Deliberately NOT `Codable`: `fanoutCount` is caller-side telemetry, not
+/// part of the wire contract. Each transport encodes only `sessionId` + `ts`
+/// through its own wire type (`SessionBeginResponse` on the loopback server,
+/// `SessionBeginBody` in `InProcessTransport`), so conforming this struct to
+/// `Codable` and encoding it directly would leak `fanoutCount` onto the wire.
 public struct SessionBeginResult: Sendable {
     public let sessionId: String
     public let ts: String

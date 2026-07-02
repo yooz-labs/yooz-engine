@@ -80,6 +80,31 @@ final class XPCRoundTripTests: XCTestCase {
         }
     }
 
+    /// The per-recording session boundary (engine issue #114 / #222) rides the
+    /// XPC path for free because `XPCServiceHandler` forwards to
+    /// `InProcessTransport`: `begin` returns `{sessionId, ts}` and `end`
+    /// returns an empty body, both intact across a real `NSXPCConnection`.
+    func testSessionBeginAndEndRoundTripOverXPC() async throws {
+        let service = Service()
+        defer { service.invalidate() }
+        let connection = NSXPCConnection(listenerEndpoint: service.listener.endpoint)
+        let transport = XPCTransport(connection: connection)
+        try await transport.connect()
+
+        struct BeginResponse: Decodable {
+            let sessionId: String
+            let ts: String
+        }
+
+        let beginData = try await transport.post("/v1/session/begin", body: Data())
+        let begin = try JSONDecoder().decode(BeginResponse.self, from: beginData)
+        XCTAssertFalse(begin.sessionId.isEmpty)
+        XCTAssertFalse(begin.ts.isEmpty)
+
+        let endData = try await transport.post("/v1/session/end", body: Data())
+        XCTAssertTrue(endData.isEmpty, "end should cross XPC as an empty body")
+    }
+
     /// Typed errors survive the XPC boundary: an unsupported endpoint comes back
     /// as `unsupportedOperation`, not a generic connection error.
     func testUnsupportedEndpointPropagatesTypedErrorOverXPC() async throws {
