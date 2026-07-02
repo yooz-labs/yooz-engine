@@ -47,8 +47,51 @@ public final class InProcessTransport: EngineTransport {
 
     private let host: EngineInProcessHost
 
+    /// The typed endpoint table (engine#225 Phase B): converted route
+    /// families dispatch through this before the legacy switches below. The
+    /// handler bodies are the same closures `APIServer` registers on the
+    /// loopback router — declared once, in the module that owns each family
+    /// (`SessionEndpoints` in EngineCore; `TouchUpEndpoints` /
+    /// `ModelManagementEndpoints` in LLMModule).
+    static let endpointTable = EndpointTable(
+        SessionEndpoints.endpoints()
+            + TouchUpEndpoints.pickerEndpoints()
+            + ModelManagementEndpoints.endpoints(
+                activeSTTRepoDirName: { InProcessTransport.activeSTTRepoDirName() }
+            )
+    )
+
     public init(host: EngineInProcessHost = .shared) {
         self.host = host
+    }
+
+    /// Dispatch a request through the endpoint table. Returns nil when the
+    /// route is not (yet) table-converted, so the caller falls through to
+    /// its legacy switch. `WireError`s are rethrown as
+    /// `YoozEngineError.serverError` — the same typed error surface this
+    /// transport has always exposed to the SDK.
+    private func dispatchViaTable(
+        _ method: RouteMethod, _ path: String, body: Data = Data()
+    ) async throws -> Data? {
+        guard let (endpoint, params) = Self.endpointTable.match(
+            method: method, path: route(path)
+        ) else { return nil }
+        do {
+            let response = try await endpoint.handler(
+                WireRequest(body: body, pathParameters: params, query: Self.query(of: path))
+            )
+            return response.body
+        } catch let error as WireError {
+            throw YoozEngineError.serverError(
+                statusCode: error.status, code: error.code, message: error.message
+            )
+        }
+    }
+
+    /// The raw query substring of `path` (no leading `?`), or nil.
+    private static func query(of path: String) -> String? {
+        guard let q = path.firstIndex(of: "?") else { return nil }
+        return String(path[path.index(after: q)...])
     }
 
     public func connect() async throws {
@@ -64,6 +107,9 @@ public final class InProcessTransport: EngineTransport {
 
     public func get(_ path: String) async throws -> Data {
         try await connect()
+        if let tableResponse = try await dispatchViaTable(.get, path) {
+            return tableResponse
+        }
         switch route(path) {
         case "/v1/health":
             return try await handleHealth()
@@ -79,10 +125,6 @@ public final class InProcessTransport: EngineTransport {
             return try await handleLLMStatus()
         case "/v1/llm/models":
             return try await handleLLMModels()
-        case "/v1/touchup/models":
-            return try await handleTouchUpModels()
-        case "/v1/models":
-            return try await handleModelsInventory()
         default:
             throw YoozEngineError.unsupportedOperation(operation: "GET \(route(path))")
         }
@@ -100,6 +142,9 @@ public final class InProcessTransport: EngineTransport {
     // touch the machine's real model cache.
     public func post(_ path: String, body: Data) async throws -> Data {
         try await connect()
+        if let tableResponse = try await dispatchViaTable(.post, path, body: body) {
+            return tableResponse
+        }
         switch route(path) {
         case "/v1/grammar/check":
             return try await handleGrammar(body)
@@ -121,14 +166,6 @@ public final class InProcessTransport: EngineTransport {
             return try await handleLLMUnload(body)
         case "/v1/touchup":
             return try await handleTouchUp(body)
-        case "/v1/touchup/model":
-            return try await handleSetTouchUpModel(body)
-        case "/v1/models/cleanup":
-            return try await handleModelsCleanup()
-        case "/v1/session/begin":
-            return try await handleSessionBegin()
-        case "/v1/session/end":
-            return try await handleSessionEnd()
         default:
             throw YoozEngineError.unsupportedOperation(operation: "POST \(route(path))")
         }
@@ -136,14 +173,10 @@ public final class InProcessTransport: EngineTransport {
 
     public func delete(_ path: String) async throws -> Data {
         try await connect()
-        let routed = route(path)
-        let prefix = "/v1/models/"
-        if routed.hasPrefix(prefix) {
-            let raw = String(routed.dropFirst(prefix.count))
-            let id = raw.removingPercentEncoding ?? raw
-            return try await handleDeleteModel(id)
+        if let tableResponse = try await dispatchViaTable(.delete, path) {
+            return tableResponse
         }
-        throw YoozEngineError.unsupportedOperation(operation: "DELETE \(routed)")
+        throw YoozEngineError.unsupportedOperation(operation: "DELETE \(route(path))")
     }
 
     @available(macOS 14.0, iOS 17.0, *)
@@ -274,33 +307,10 @@ public final class InProcessTransport: EngineTransport {
     }
 
     // MARK: - Session boundary
-
-    /// `POST /v1/session/begin` (engine issue #114 / #222). Fans out
-    /// `resetForNewSession()` to every registered `SessionResettable` module
-    /// via the shared `EngineCore.SessionCoordinator` — the same component
-    /// the loopback `APIServer` route calls — so the response carries the
-    /// same wire fields (`{sessionId, ts}`) regardless of transport.
-    private func handleSessionBegin() async throws -> Data {
-        let result = await SessionCoordinator.begin()
-        NSLog(
-            "InProcessTransport: session begin id=%@ fanout=%d",
-            result.sessionId, result.fanoutCount
-        )
-        return try JSONEncoder().encode(
-            SessionBeginResponse(sessionId: result.sessionId, ts: result.ts)
-        )
-    }
-
-    /// `POST /v1/session/end` (engine issue #114 / #222). Same fan-out as
-    /// `begin`; the loopback route returns 204 No Content, so this returns an
-    /// empty body — `EngineTransport.post` has no separate "no content"
-    /// signal, and an empty `Data` is what `HTTPTransport` also produces for
-    /// a 204 response.
-    private func handleSessionEnd() async throws -> Data {
-        let fanoutCount = await SessionCoordinator.end()
-        NSLog("InProcessTransport: session end fanout=%d", fanoutCount)
-        return Data()
-    }
+    //
+    // `/v1/session/{begin,end}` dispatch through the endpoint table
+    // (`SessionEndpoints`, EngineCore) — the same handler closures the
+    // loopback server registers. See `dispatchViaTable`.
 
     private func handleGrammar(_ body: Data) async throws -> Data {
         let request = try JSONDecoder().decode(GrammarCheckRequest.self, from: body)
@@ -770,135 +780,21 @@ public final class InProcessTransport: EngineTransport {
         return try JSONEncoder().encode(response)
     }
 
-    private func handleTouchUpModels() async throws -> Data {
-        let models = await TouchUpEngine.shared.availableModels()
-        let active = await TouchUpEngine.shared.activeModel
-        let activeId = models.first(where: \.isActive)?.id ?? active.rawValue
-        return try JSONEncoder().encode(
-            TouchUpModelsResponse(models: models, activeId: activeId)
-        )
-    }
-
-    private func handleSetTouchUpModel(_ body: Data) async throws -> Data {
-        let request = try JSONDecoder().decode(TouchUpSetModelRequest.self, from: body)
-        guard let selection = TouchUpModelSelection(rawValue: request.id) else {
-            throw YoozEngineError.serverError(
-                statusCode: 400, code: "invalid_model",
-                message: "Unknown TouchUp model '\(request.id)'"
-            )
-        }
-        let info = try await TouchUpEngine.shared.setActiveModel(
-            selection, preload: request.preload ?? true
-        )
-        return try JSONEncoder().encode(info)
-    }
+    // `GET /v1/touchup/models` and `POST /v1/touchup/model` dispatch through
+    // the endpoint table (`TouchUpEndpoints`, LLMModule). See
+    // `dispatchViaTable`.
 
     // MARK: - Model management (disk hygiene)
-
-    /// `GET /v1/models` — the cross-module inventory with real on-disk sizes.
-    /// Mirrors the loopback `APIServer` `/v1/models` handler so the SDK is
-    /// transport-agnostic.
-    private func handleModelsInventory() async throws -> Data {
-        let store = ModelStore()
-        let rows = await store.inventory(
-            llm: await llmInventoryInputs(),
-            activeSTTRepoDirName: activeSTTRepoDirName()
-        )
-        let models = rows.map {
-            ManagedModelInfo(
-                id: $0.id, module: $0.module, displayName: $0.displayName,
-                sizeBytes: $0.sizeBytes, cached: $0.cached, loaded: $0.loaded,
-                isActive: $0.isActive, deletable: $0.deletable
-            )
-        }
-        return try JSONEncoder().encode(ManagedModelsResponse(models: models))
-    }
-
-    /// `DELETE /v1/models/:id` — unload then remove a model's reclaimable copies.
-    /// Refuses to delete the active model (409).
-    private func handleDeleteModel(_ id: String) async throws -> Data {
-        let store = ModelStore()
-
-        if let modelType = LLMModelType(rawValue: id) {
-            let active = await TouchUpEngine.shared.activeModel
-            if active.rawValue == id {
-                throw YoozEngineError.serverError(
-                    statusCode: 409, code: "model_active",
-                    message: "Cannot delete the active model '\(id)'"
-                )
-            }
-            let descriptor = LLMModelCatalog.cacheDescriptors().first { $0.id == id }
-            do {
-                // Disk first; free resident weights only on success so a failed
-                // delete leaves the model usable rather than unloaded-but-present.
-                let reclaimed = try await store.deleteModel(
-                    hfRepoDirName: descriptor?.hfRepoDirName,
-                    modelsDirSubdir: descriptor?.modelsDirSubdir
-                )
-                await TouchUpEngine.shared.unload(modelType)
-                return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
-            } catch {
-                NSLog("InProcessTransport: DELETE model '%@' failed: %@", id, error.localizedDescription)
-                throw error
-            }
-        }
-
-        if id.hasPrefix("models--") {
-            if id == activeSTTRepoDirName() {
-                throw YoozEngineError.serverError(
-                    statusCode: 409, code: "model_active",
-                    message: "Cannot delete the active model '\(id)'"
-                )
-            }
-            do {
-                let reclaimed = try await store.deleteModel(hfRepoDirName: id, modelsDirSubdir: nil)
-                return try JSONEncoder().encode(DeleteModelResult(id: id, reclaimedBytes: reclaimed))
-            } catch {
-                NSLog("InProcessTransport: DELETE model '%@' failed: %@", id, error.localizedDescription)
-                throw error
-            }
-        }
-
-        throw YoozEngineError.serverError(
-            statusCode: 404, code: "unknown_model",
-            message: "Unknown model '\(id)'"
-        )
-    }
-
-    /// `POST /v1/models/cleanup` — the one-shot disk-hygiene migration.
-    private func handleModelsCleanup() async throws -> Data {
-        let store = ModelStore()
-        do {
-            let report = try await store.cleanupAll(
-                descriptors: LLMModelCatalog.cacheDescriptors()
-            )
-            return try JSONEncoder().encode(ModelCleanupResult(
-                totalReclaimedBytes: report.totalReclaimedBytes,
-                perRepo: report.perRepo
-            ))
-        } catch {
-            NSLog("InProcessTransport: model cleanup failed: %@", error.localizedDescription)
-            throw error
-        }
-    }
-
-    /// LLM rows for the inventory: cache descriptors + live picker state.
-    private func llmInventoryInputs() async -> [ModelStore.LLMInventoryInput] {
-        let picker = await TouchUpEngine.shared.availableModels()
-        return LLMModelCatalog.cacheDescriptors().map { descriptor in
-            let row = picker.first { $0.id == descriptor.id }
-            return ModelStore.LLMInventoryInput(
-                descriptor: descriptor,
-                displayName: row?.displayName ?? descriptor.id,
-                loaded: row?.loadState == .loaded,
-                isActive: row?.isActive ?? false
-            )
-        }
-    }
+    //
+    // `GET /v1/models`, `DELETE /v1/models/:id`, and `POST /v1/models/cleanup`
+    // dispatch through the endpoint table (`ModelManagementEndpoints`,
+    // LLMModule), with this transport injecting the STT-owned input below.
 
     /// Hub dir name of the active STT model, or `nil` for Apple Speech (no HF
-    /// footprint). Parakeet TDT is the only HF-backed STT family.
-    private func activeSTTRepoDirName() -> String? {
+    /// footprint). Parakeet TDT is the only HF-backed STT family. Injected
+    /// into `ModelManagementEndpoints` at table construction — the endpoints
+    /// live in LLMModule, which cannot depend on STTModule.
+    private static func activeSTTRepoDirName() -> String? {
         let engine = YoozSTTEngine.shared
         guard engine.currentBackend != .appleSTT,
               let hfID = engine.currentLanguage.huggingFaceID
