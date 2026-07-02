@@ -12,16 +12,14 @@ import os
 /// are resident at once, `MLXAdmissionGate` decides which resident model's
 /// compute gets the GPU right now (engine#228).
 ///
-/// - `interactive`: latency-sensitive, small — a live streaming STT session,
-///   a short grammar call. Never queues at the gate; always admitted
-///   immediately. While active, it signals `background` submissions to
-///   queue or yield.
-/// - `background`: throughput work that can tolerate queuing — batch
-///   transcription, TouchUp/LLM generation, Infinite append/generate.
-public enum MLXWorkloadClass: String, Codable, Sendable {
-    case interactive
-    case background
-}
+/// The underlying enum is `YoozEngineWire.GPUWorkloadClass` (the name the
+/// SDK exposes; it also rides the wire as the optional `workloadClass`
+/// request field) — #228 originally declared this enum here with an
+/// SDK-side mirror held in sync by rawValue; the #225 wire consolidation
+/// collapsed the two into the single `YoozEngineWire` declaration, and
+/// this alias keeps `MLXWorkloadClass` as the engine-side name the
+/// admission gate's scheduling API is written against.
+public typealias MLXWorkloadClass = GPUWorkloadClass
 
 /// Process-wide admission gate arbitrating MLX/GPU compute between
 /// concurrently-running workloads.

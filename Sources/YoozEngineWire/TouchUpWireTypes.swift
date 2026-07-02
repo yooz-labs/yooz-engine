@@ -21,19 +21,31 @@ public enum TouchUpMode: String, Codable, Sendable {
     case full
 }
 
-public struct TouchUpRequest: Codable, Sendable {
+public struct TouchUpRequest: Codable, Sendable, Equatable {
     public let text: String
     public let mode: TouchUpMode
     public let language: String?
+    /// Optional GPU-admission override (engine#228). Nil (the default)
+    /// lets the engine classify this call as `.background` — see
+    /// `GPUWorkloadClass`. Deliberately strict on decode: an unknown value
+    /// rejects the request rather than silently downgrading (see the
+    /// `GPUWorkloadClass` doc).
+    public let workloadClass: GPUWorkloadClass?
 
-    public init(text: String, mode: TouchUpMode, language: String? = nil) {
+    public init(
+        text: String,
+        mode: TouchUpMode,
+        language: String? = nil,
+        workloadClass: GPUWorkloadClass? = nil
+    ) {
         self.text = text
         self.mode = mode
         self.language = language
+        self.workloadClass = workloadClass
     }
 }
 
-public struct TouchUpResponse: Codable, Sendable {
+public struct TouchUpResponse: Codable, Sendable, Equatable {
     public let result: String
     public let mode: TouchUpMode
     public let processingTimeMs: Int?
@@ -57,7 +69,7 @@ public struct TouchUpResponse: Codable, Sendable {
 
 // MARK: - Picker (canonical module-picker pattern; AGENTS.md "Module model
 // picker pattern"). Single definition — previously separate copies in
-// `LLMModule/TouchUp/TouchUpPickerTypes.swift` (engine) and
+// `YoozEngine/TouchUp/TouchUpPickerTypes.swift` (LLMModule) and
 // `YoozEngineClient/Types/TouchUpTypes.swift` (SDK).
 
 /// One model in the TouchUp picker. Snapshot at the time of the

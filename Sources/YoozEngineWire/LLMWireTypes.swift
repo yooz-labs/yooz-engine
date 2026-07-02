@@ -7,47 +7,37 @@ import Foundation
 
 /// Request body for `POST /v1/llm/generate`.
 ///
-/// Decodes `systemPrompt` from either `systemPrompt` (canonical) or
-/// `system_prompt` (legacy snake_case) so older callers keep working without
-/// a server-only shim struct. Encoding always emits the canonical
-/// `systemPrompt` key; this asymmetry only affects the decode path, so SDK
-/// (encode-only) callers see no behavior change.
-public struct LLMGenerateRequest: Codable, Sendable {
+/// Canonical keys only (`systemPrompt` camelCase). The legacy snake_case
+/// `system_prompt` spelling some pre-SDK callers still post is a
+/// loopback-server-only decode concern, handled by the
+/// `LegacyLLMGenerateRequest` shim in `YoozEngine/Server/APITypes.swift` —
+/// the same pattern as `LegacySTTSetBackendRequest` — so this shared type
+/// stays free of transport-specific compat baggage.
+public struct LLMGenerateRequest: Codable, Sendable, Equatable {
     public let prompt: String
     public let model: String?
     public let systemPrompt: String?
+    /// Optional GPU-admission override (engine#228). Nil (the default)
+    /// lets the engine classify this call as `.background` — see
+    /// `GPUWorkloadClass`. Deliberately strict on decode: an unknown value
+    /// rejects the request rather than silently downgrading (see the
+    /// `GPUWorkloadClass` doc).
+    public let workloadClass: GPUWorkloadClass?
 
     public init(
         prompt: String,
         model: String? = nil,
-        systemPrompt: String? = nil
+        systemPrompt: String? = nil,
+        workloadClass: GPUWorkloadClass? = nil
     ) {
         self.prompt = prompt
         self.model = model
         self.systemPrompt = systemPrompt
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case prompt, model, systemPrompt, system_prompt
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.prompt = try container.decode(String.self, forKey: .prompt)
-        self.model = try container.decodeIfPresent(String.self, forKey: .model)
-        self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
-            ?? container.decodeIfPresent(String.self, forKey: .system_prompt)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(prompt, forKey: .prompt)
-        try container.encodeIfPresent(model, forKey: .model)
-        try container.encodeIfPresent(systemPrompt, forKey: .systemPrompt)
+        self.workloadClass = workloadClass
     }
 }
 
-public struct LLMGenerateResponse: Codable, Sendable {
+public struct LLMGenerateResponse: Codable, Sendable, Equatable {
     public let text: String
     public let model: String
     public let tokensGenerated: Int?
@@ -71,6 +61,12 @@ public struct LLMGenerateResponse: Codable, Sendable {
 /// Describes one LLM model known to the engine. Returned by
 /// `GET /v1/llm/models` and consumed by thin-client UI (e.g. whisper's
 /// "Touch-up Model" dropdown).
+///
+/// The field set is intentionally forward-compatible: `sizeBytes` and
+/// `latencyHintMs` are optional so future backends (Apple Intelligence,
+/// remote) can omit them without breaking decoders. `id` is the stable
+/// wire value (`LLMModelType.rawValue` on the server side, e.g.
+/// `"yooz-light-v2"`); `displayName` is user-facing ("Yooz-Light").
 public struct LLMModelInfo: Codable, Sendable, Equatable {
     public let id: String
     public let displayName: String
@@ -94,8 +90,10 @@ public struct LLMModelInfo: Codable, Sendable, Equatable {
 }
 
 /// Response body for `GET /v1/llm/models`. `current` carries the id of
-/// the engine's preferred model. `available` is the full catalogue with
-/// per-model load state.
+/// the engine's preferred model — held for the engine process lifetime;
+/// clients that need cross-session persistence must cache the value
+/// themselves and re-apply via `setModel(_:)` after reconnect.
+/// `available` is the full catalogue with per-model load state.
 public struct LLMModelsResponse: Codable, Sendable, Equatable {
     public let current: String
     public let available: [LLMModelInfo]
@@ -128,7 +126,8 @@ public struct LLMStatus: Codable, Sendable, Equatable {
     /// download. `nil` when no download is in flight.
     public let progress: Double?
     /// Lifecycle state for the active LLM tier (engine#125). `nil`
-    /// on pre-#125 server builds.
+    /// on pre-#125 server builds — consumers MAY infer state from
+    /// `loaded` + `progress` when nil.
     public let state: LoadState?
     /// Human-readable error from the last failed load. `nil` unless
     /// `state == .failed`.
