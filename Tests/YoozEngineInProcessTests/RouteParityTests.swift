@@ -136,6 +136,45 @@ final class RouteParityTests: XCTestCase {
         }
     }
 
+    // MARK: - Endpoint table (engine#225 Phase B)
+
+    /// The in-process dispatch table must cover exactly the spec catalog's
+    /// `converted` set: a spec promoted to `EndpointSpecs.converted` without
+    /// a bound handler — or a handler bound for a spec never promoted —
+    /// fails here. Together with `testEveryNonAllowlistedRouteIsReachableInProcess`
+    /// (which proves the same routes actually dispatch), this pins the
+    /// "each migrated route declared exactly once" acceptance criterion of
+    /// engine#225.
+    func testEndpointTableCoversExactlyTheConvertedSpecs() {
+        XCTAssertEqual(
+            Set(InProcessTransport.endpointTable.specs),
+            Set(EndpointSpecs.converted),
+            "InProcessTransport's table and EndpointSpecs.converted drifted"
+        )
+    }
+
+    /// Every converted spec must match in the table with a concrete path —
+    /// including the parameterized `DELETE /v1/models/:id`, whose captured
+    /// id must come back percent-decoded.
+    func testConvertedSpecsMatchInTheTable() {
+        for spec in EndpointSpecs.converted {
+            let concrete = spec.path
+                .split(separator: "/", omittingEmptySubsequences: false)
+                .map { $0.hasPrefix(":") ? "some%2Did" : String($0) }
+                .joined(separator: "/")
+            let match = InProcessTransport.endpointTable.match(
+                method: spec.method, path: concrete
+            )
+            XCTAssertNotNil(match, "\(spec.key) does not match in the endpoint table")
+            if let match, let name = spec.parameterNames.first {
+                XCTAssertEqual(
+                    match.pathParameters[name], "some-id",
+                    "captured :\(name) was not percent-decoded"
+                )
+            }
+        }
+    }
+
     // MARK: - Dispatch helpers
 
     /// Classify a manifest entry: `true` when dispatch reached a real handler
