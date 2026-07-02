@@ -21,12 +21,14 @@ import YoozEngineClient
 /// `POST /v1/stt/{batch,engine,load}`, and streaming via `openSTTStream`;
 /// `POST /v1/grammar/check`; `POST /v1/vad/detect`; LLM
 /// `GET /v1/llm/{status,models}`, `POST /v1/llm/{generate,model,preload,unload}`;
-/// TouchUp `GET /v1/touchup/models`, `POST /v1/touchup{,/model}`.
+/// TouchUp `GET /v1/touchup/models`, `POST /v1/touchup{,/model}`;
+/// `POST /v1/session/{begin,end}` — the per-recording session-reset boundary
+/// (engine issue #114 / #222), fanned out via the shared
+/// `EngineCore.SessionCoordinator` so this transport and the loopback server
+/// behave identically.
 ///
 /// Reported as `unsupportedOperation`:
 ///   - **Streaming qwen3 preview** — loopback/dev only (unstable; engine#154).
-///   - **Per-recording session reset** (`/v1/session/*`) — the in-process
-///     consumer resets module state directly; not yet routed here.
 ///   - **Infinite** (`/v1/infinite/*`) — its consumer is the loopback host.
 ///
 /// Each handler decodes the same wire body the SDK sub-client encoded and emits
@@ -108,6 +110,10 @@ public final class InProcessTransport: EngineTransport {
             return try await handleSetTouchUpModel(body)
         case "/v1/models/cleanup":
             return try await handleModelsCleanup()
+        case "/v1/session/begin":
+            return try await handleSessionBegin()
+        case "/v1/session/end":
+            return try await handleSessionEnd()
         default:
             throw YoozEngineError.unsupportedOperation(operation: "POST \(route(path))")
         }
@@ -250,6 +256,35 @@ public final class InProcessTransport: EngineTransport {
             modules: manifests
         )
         return try JSONEncoder().encode(response)
+    }
+
+    // MARK: - Session boundary
+
+    /// `POST /v1/session/begin` (engine issue #114 / #222). Fans out
+    /// `resetForNewSession()` to every registered `SessionResettable` module
+    /// via the shared `EngineCore.SessionCoordinator` — the same component
+    /// the loopback `APIServer` route calls — so the wire shape
+    /// (`{sessionId, ts}`) matches byte-for-byte regardless of transport.
+    private func handleSessionBegin() async throws -> Data {
+        let result = await SessionCoordinator.begin()
+        NSLog(
+            "InProcessTransport: session begin id=%@ fanout=%d",
+            result.sessionId, result.fanoutCount
+        )
+        return try JSONEncoder().encode(
+            SessionBeginBody(sessionId: result.sessionId, ts: result.ts)
+        )
+    }
+
+    /// `POST /v1/session/end` (engine issue #114 / #222). Same fan-out as
+    /// `begin`; the loopback route returns 204 No Content, so this returns an
+    /// empty body — `EngineTransport.post` has no separate "no content"
+    /// signal, and an empty `Data` is what `HTTPTransport` also produces for
+    /// a 204 response.
+    private func handleSessionEnd() async throws -> Data {
+        let fanoutCount = await SessionCoordinator.end()
+        NSLog("InProcessTransport: session end fanout=%d", fanoutCount)
+        return Data()
     }
 
     private func handleGrammar(_ body: Data) async throws -> Data {
@@ -912,4 +947,17 @@ private struct TouchUpBody: Decodable {
 private struct SetModelBody: Decodable {
     let id: String
     let preload: Bool?
+}
+
+// MARK: - Wire response mirrors
+//
+// Encode structs matching the keys the SDK sub-client (or, for `/v1/session`,
+// the raw `EngineTransport.post` caller) decodes. Mirrors the app-target
+// `SessionBeginResponse` (`YoozEngine/Server/APITypes.swift`), which cannot be
+// reused directly here because it conforms to Hummingbird's `ResponseCodable`,
+// a protocol not available to a plain SPM target.
+
+private struct SessionBeginBody: Encodable {
+    let sessionId: String
+    let ts: String
 }
