@@ -234,6 +234,7 @@ public final class HTTPTransport: EngineTransport {
         task.resume()
 
         let (stream, continuation) = AsyncStream<EngineEvent>.makeStream()
+        let logger = self.logger
         let readTask = Task {
             let decoder = JSONDecoder()
             while !Task.isCancelled {
@@ -252,7 +253,19 @@ public final class HTTPTransport: EngineTransport {
                 @unknown default:
                     data = nil
                 }
-                guard let data, let event = try? decoder.decode(EngineEvent.self, from: data) else {
+                guard let data else { continue }
+                // A skipped frame is logged, never silently swallowed
+                // (PR #239 review): with `EngineEventKind`'s tolerant
+                // decode, an unrecognized kind still decodes (as
+                // `.unknown`), so reaching this catch means a genuinely
+                // malformed frame — wire-shape drift worth a Console trail.
+                let event: EngineEvent
+                do {
+                    event = try decoder.decode(EngineEvent.self, from: data)
+                } catch {
+                    logger.error(
+                        "openEvents: dropping undecodable /v1/events frame: \(error.localizedDescription, privacy: .public)"
+                    )
                     continue
                 }
                 continuation.yield(event)

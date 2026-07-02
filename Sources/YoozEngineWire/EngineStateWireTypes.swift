@@ -10,7 +10,7 @@ import Foundation
 /// per-app reconciliation + polling stacks each consumer previously had to
 /// build for itself (see the engine#226 issue body for the whisper-side
 /// cost this is paying down).
-public enum EngineEventKind: String, Codable, Sendable {
+public enum EngineEventKind: String, Codable, Sendable, CaseIterable {
     /// The active model for a module changed (`setModel`/persisted-restore).
     /// Fires synchronously with the picker route's response — a client
     /// that only reads the HTTP response already has this; the event
@@ -29,6 +29,26 @@ public enum EngineEventKind: String, Codable, Sendable {
     /// A module's resident-model set changed (e.g. the single-resident
     /// eviction that runs after a successful model switch).
     case residencyChanged
+    /// Forward-compat fallback: an event kind this SDK build does not
+    /// know. Never emitted by the engine; produced only by the tolerant
+    /// decode below when a newer engine ships a kind this build predates.
+    case unknown
+
+    /// Tolerant decode: any unknown raw value maps to `.unknown` instead
+    /// of throwing — the `ModelTier`/`ModelLoadState` convention, chosen
+    /// deliberately over `GPUWorkloadClass`-style strict decode because
+    /// the rationales differ by channel direction. A strict request body
+    /// protects explicit CALLER intent (an unknown value is the caller's
+    /// typo; a 400 lets it retry). A push frame has no caller and no
+    /// retry: strict decode on an older SDK would fail the whole
+    /// `EngineEvent` decode for every frame of a newer engine's fifth
+    /// kind, silently dropping `module`/`ts` along with it. Tolerant
+    /// decode keeps the frame; subscribers ignore `.unknown` via
+    /// `EngineEvent.payload`.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = EngineEventKind(rawValue: raw) ?? .unknown
+    }
 }
 
 /// One frame pushed to `/v1/events` subscribers — WebSocket on loopback,
@@ -74,6 +94,48 @@ public struct EngineEvent: Codable, Sendable, Equatable {
         self.progress = progress
         self.message = message
         self.ts = ts
+    }
+}
+
+/// Typed view of an `EngineEvent`'s kind-dependent fields (engine#226,
+/// PR #239 review). The wire shape stays a flat struct (JSON has no native
+/// sum type, and every sibling DTO in this target is flat), but consumers
+/// should match on `event.payload` rather than hand-rolling per-kind
+/// optional unwraps — the compiler then enforces exhaustive handling and a
+/// frame whose required fields are missing lands in `.unrecognized` in one
+/// place instead of being silently dropped by an ad hoc `guard let`.
+public enum EngineEventPayload: Sendable, Equatable {
+    case modelChanged(modelId: String)
+    case loadStateChanged(modelId: String, loadState: ModelLoadState, message: String?)
+    case downloadProgress(modelId: String, progress: Double)
+    case residencyChanged(modelId: String)
+    /// The event kind is unknown to this SDK build (`EngineEventKind.unknown`,
+    /// tolerant decode of a newer engine's kind) or a required field for a
+    /// known kind is missing (malformed frame). Subscribers ignore it;
+    /// `EngineEvent.module` / `.ts` remain readable for diagnostics.
+    case unrecognized
+}
+
+extension EngineEvent {
+    /// Resolve the kind-dependent optionals into the typed payload. See
+    /// `EngineEventPayload`.
+    public var payload: EngineEventPayload {
+        switch kind {
+        case .modelChanged:
+            guard let modelId else { return .unrecognized }
+            return .modelChanged(modelId: modelId)
+        case .loadStateChanged:
+            guard let modelId, let loadState else { return .unrecognized }
+            return .loadStateChanged(modelId: modelId, loadState: loadState, message: message)
+        case .downloadProgress:
+            guard let modelId, let progress else { return .unrecognized }
+            return .downloadProgress(modelId: modelId, progress: progress)
+        case .residencyChanged:
+            guard let modelId else { return .unrecognized }
+            return .residencyChanged(modelId: modelId)
+        case .unknown:
+            return .unrecognized
+        }
     }
 }
 

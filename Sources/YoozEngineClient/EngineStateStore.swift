@@ -74,10 +74,20 @@ public final class EngineStateStore: ObservableObject {
     /// Fetch the initial snapshot, then start (or restart) the live event
     /// subscription. Call once at picker mount. Safe to call again (e.g.
     /// after a transport reconnect) — cancels any prior subscription first.
+    ///
+    /// Order matters (PR #239 review): subscribe FIRST, then fetch the
+    /// snapshot. The bus has no replay, so the opposite order drops any
+    /// transition landing in the fetch-to-subscribe window (classically: a
+    /// download completing right as the picker mounts) and the store stays
+    /// stale until the next unrelated event. With subscribe-first, an event
+    /// arriving while the snapshot fetch is in flight is applied on this
+    /// `@MainActor` store in arrival order; the snapshot — captured by the
+    /// engine AFTER the subscription existed — then lands as at-least-as-new
+    /// baseline state.
     @available(macOS 14.0, iOS 17.0, *)
     public func start() async {
-        await refreshSnapshot()
         subscribeToEvents()
+        await refreshSnapshot()
     }
 
     /// Cancel the live event subscription. `modules`/`latestEvents` are left
@@ -136,11 +146,13 @@ public final class EngineStateStore: ObservableObject {
     private func apply(_ event: EngineEvent) {
         latestEvents[EventKey(module: event.module, kind: event.kind)] = event
 
-        switch event.kind {
-        case .modelChanged:
-            guard let modelId = event.modelId,
-                  let module = modules[event.module]
-            else { return }
+        // Match on the typed payload, not the raw kind + hand-unwrapped
+        // optionals: `EngineEventPayload` centralizes the kind-dependent
+        // field contract, and a malformed/newer-engine frame lands in one
+        // `.unrecognized` arm instead of a per-case `guard let` maze.
+        switch event.payload {
+        case .modelChanged(let modelId):
+            guard let module = modules[event.module] else { return }
             modules[event.module] = EngineModuleSnapshot(
                 module: module.module,
                 models: module.models.map {
@@ -152,11 +164,8 @@ public final class EngineStateStore: ObservableObject {
                 },
                 activeId: modelId
             )
-        case .loadStateChanged:
-            guard let modelId = event.modelId,
-                  let loadState = event.loadState,
-                  let module = modules[event.module]
-            else { return }
+        case .loadStateChanged(let modelId, let loadState, _):
+            guard let module = modules[event.module] else { return }
             modules[event.module] = EngineModuleSnapshot(
                 module: module.module,
                 models: module.models.map { row in
@@ -172,6 +181,15 @@ public final class EngineStateStore: ObservableObject {
         case .downloadProgress, .residencyChanged:
             // No snapshot field carries progress or resident-set membership
             // today — these surface only via `latestEvents`/`latestEvent(_:)`.
+            // The stale-row concern `residencyChanged` might suggest is
+            // covered engine-side: eviction publishes a per-model
+            // `loadStateChanged` for every evicted tier (see
+            // `TouchUpEngine.evictModelsExcept`), which the arm above applies.
+            break
+        case .unrecognized:
+            // Newer-engine event kind or malformed frame — already recorded
+            // in `latestEvents` for diagnostics; nothing to fold into
+            // `modules`.
             break
         }
     }
