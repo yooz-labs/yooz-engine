@@ -303,10 +303,21 @@ final class InProcessTransportTests: XCTestCase {
             to: refs.appendingPathComponent("main"), atomically: true, encoding: .utf8
         )
 
+        // HF_HUB_CACHE takes precedence over HF_HOME in
+        // `EngineConfig.huggingFaceCacheDirectory`; clear it too or an ambient
+        // HF_HUB_CACHE would defeat the redirect and point cleanup at the
+        // machine's real cache.
         let savedHome = ProcessInfo.processInfo.environment["HF_HOME"]
+        let savedHubCache = ProcessInfo.processInfo.environment["HF_HUB_CACHE"]
         setenv("HF_HOME", home.path, 1)
+        unsetenv("HF_HUB_CACHE")
         defer {
             if let savedHome { setenv("HF_HOME", savedHome, 1) } else { unsetenv("HF_HOME") }
+            if let savedHubCache {
+                setenv("HF_HUB_CACHE", savedHubCache, 1)
+            } else {
+                unsetenv("HF_HUB_CACHE")
+            }
             try? fm.removeItem(at: home)
         }
 

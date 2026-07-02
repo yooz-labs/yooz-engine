@@ -1105,6 +1105,17 @@ final class APIServer: ObservableObject {
         buildWebSocketRouter()
     }
 
+    // Route-parity comment contract (#223): every `router.get/post/delete(...)`
+    // registration below, plus `wsRouter.ws(...)` in `buildWebSocketRouter()`,
+    // MUST have a matching entry in `RouteManifest.all` (EngineCore,
+    // `Sources/EngineCore/RouteManifest.swift`). That manifest is what
+    // `RouteParityTests` (Tests/YoozEngineInProcessTests) walks to assert every
+    // non-allowlisted route is reachable through `InProcessTransport` — so a
+    // route added here without a manifest entry silently escapes that check.
+    // This is a hand-kept contract, not an automated one: the app-target half
+    // (asserting this router's registrations against the manifest) needs the
+    // app-hosted Xcode test target and is blocked on #105 / #202. Keep the two
+    // lists in sync by hand until that lands.
     private func buildRouter() -> Router<YoozEngineRequestContext> {
         let router = Router(context: YoozEngineRequestContext.self)
         #if canImport(STTModule)

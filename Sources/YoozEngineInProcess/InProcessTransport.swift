@@ -31,6 +31,11 @@ import YoozEngineClient
 ///   - **Streaming qwen3 preview** — loopback/dev only (unstable; engine#154).
 ///   - **Infinite** (`/v1/infinite/*`) — its consumer is the loopback host.
 ///
+/// `RouteParityAllowlist.loopbackOnly` (EngineCore, `RouteManifest.swift`) is
+/// the reviewable, tested source of truth for this list — this comment is a
+/// human-readable summary of it, not a second authority; update the allowlist
+/// first and let this comment follow (#223).
+///
 /// Each handler decodes the same wire body the SDK sub-client encoded and emits
 /// the same wire shape the sub-client decodes, so the SDK is byte-for-byte
 /// agnostic to which transport served it.
@@ -83,6 +88,16 @@ public final class InProcessTransport: EngineTransport {
         }
     }
 
+    // Handler contract (#223): every POST handler dispatched below MUST
+    // validate its request (JSON-decode the body, or an equivalent cheap
+    // guard) BEFORE doing any disk/network/model work. RouteParityTests
+    // drives each route with a minimal invalid request and relies on that
+    // fail-fast gate to prove dispatch reachability without side effects.
+    // Handlers with no request body to gate on (`/v1/models/cleanup`,
+    // `/v1/session/*`) DO run their real work on every test sweep, so they
+    // must stay cheap and side-effect-safe in a bare test process — the test
+    // additionally redirects the HF cache env vars so cleanup can never
+    // touch the machine's real model cache.
     public func post(_ path: String, body: Data) async throws -> Data {
         try await connect()
         switch route(path) {
