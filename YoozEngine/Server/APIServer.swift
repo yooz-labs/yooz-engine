@@ -1335,6 +1335,7 @@ final class APIServer: ObservableObject {
                     + ModelManagementEndpoints.endpoints(
                         activeSTTRepoDirName: { Self.activeSTTRepoDirName() }
                     )
+                    + EngineStateEndpoints.endpoints()
             ),
             on: router
         )
@@ -3355,6 +3356,40 @@ final class APIServer: ObservableObject {
             await sendError("Streaming STT is not bundled in this build variant")
             await MainActor.run { [weak self] in self?.sttStreamCancel = nil }
             #endif
+        }
+
+        // `/v1/events` (engine#226): a live push feed of `EngineEvent`s —
+        // model-selection changes, load-state transitions, download
+        // progress, residency changes — across every module. One-directional
+        // (server → client); the handler never reads `inbound` for content,
+        // only to detect the client closing the socket, so the loop below
+        // can cancel the send task and let the closure return (Hummingbird
+        // tears down the connection once the closure returns).
+        let eventsLogger = Logging.Logger(label: "live.yooz.engine.events.stream")
+        wsRouter.ws("/v1/events") { inbound, outbound, _ in
+            let encoder = JSONEncoder()
+            let stream = await EngineEventBus.shared.subscribe()
+            let sendTask = Task {
+                for await event in stream {
+                    do {
+                        let data = try encoder.encode(event)
+                        guard let text = String(data: data, encoding: .utf8) else { continue }
+                        try await outbound.write(.text(text))
+                    } catch {
+                        break
+                    }
+                }
+            }
+            defer { sendTask.cancel() }
+            do {
+                for try await _ in inbound.messages(maxSize: 1024) {
+                    // No client-sent content is expected; draining `inbound`
+                    // is only how this closure observes the client closing
+                    // the connection.
+                }
+            } catch {
+                eventsLogger.debug("events stream: inbound closed with error: \(error)")
+            }
         }
 
         return wsRouter

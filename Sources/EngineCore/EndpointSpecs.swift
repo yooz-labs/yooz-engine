@@ -34,6 +34,13 @@ public enum EndpointSpecs {
     public static let modelsDelete = EndpointSpec(.delete, "/v1/models/:id")
     public static let modelsCleanup = EndpointSpec(.post, "/v1/models/cleanup")
 
+    // Engine state family (engine#226) — handlers in `EngineStateEndpoints`
+    // (LLMModule; today's only contributor is the TouchUp picker). `/v1/events`
+    // is NOT here: it is a WebSocket upgrade, not a REST body, so it is not
+    // table-dispatchable — see `RouteManifest`'s manual entry, mirroring
+    // `/v1/stt/stream`.
+    public static let engineState = EndpointSpec(.get, "/v1/state")
+
     /// Every converted spec. Transport bindings (`APIServer.buildRouter`,
     /// `InProcessTransport`'s table) must cover exactly this set —
     /// `EndpointTableTests` pins the table side.
@@ -41,6 +48,7 @@ public enum EndpointSpecs {
         sessionBegin, sessionEnd,
         touchUpModels, touchUpSetModel,
         modelsInventory, modelsDelete, modelsCleanup,
+        engineState,
     ]
 
     // MARK: - Legacy (hand-implemented per transport; conversion tracked on #225)

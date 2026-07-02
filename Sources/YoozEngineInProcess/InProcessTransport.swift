@@ -25,7 +25,10 @@ import YoozEngineClient
 /// `POST /v1/session/{begin,end}` — the per-recording session-reset boundary
 /// (engine issue #114 / #222), fanned out via the shared
 /// `EngineCore.SessionCoordinator` so this transport and the loopback server
-/// behave identically.
+/// behave identically; `GET /v1/state` and streaming via `openEvents`
+/// (engine#226) — the cross-module snapshot + live event feed backing
+/// `EngineStateStore`, sourced from the same `EngineEventBus` the loopback
+/// WS route reads from.
 ///
 /// Reported as `unsupportedOperation`:
 ///   - **Streaming qwen3 preview** — loopback/dev only (unstable; engine#154).
@@ -59,6 +62,7 @@ public final class InProcessTransport: EngineTransport {
             + ModelManagementEndpoints.endpoints(
                 activeSTTRepoDirName: { InProcessTransport.activeSTTRepoDirName() }
             )
+            + EngineStateEndpoints.endpoints()
     )
 
     public init(host: EngineInProcessHost = .shared) {
@@ -177,6 +181,16 @@ public final class InProcessTransport: EngineTransport {
             return tableResponse
         }
         throw YoozEngineError.unsupportedOperation(operation: "DELETE \(route(path))")
+    }
+
+    /// `/v1/events` (engine#226): subscribe directly to the shared
+    /// `EngineEventBus` — no socket, no translation layer. The same
+    /// `EngineEvent`s the loopback WS route serializes are handed to the
+    /// caller as-is.
+    @available(macOS 14.0, iOS 17.0, *)
+    public func openEvents() async throws -> AsyncStream<EngineEvent> {
+        try await connect()
+        return await EngineEventBus.shared.subscribe()
     }
 
     @available(macOS 14.0, iOS 17.0, *)
