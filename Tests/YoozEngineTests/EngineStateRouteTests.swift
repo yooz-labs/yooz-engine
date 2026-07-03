@@ -126,10 +126,46 @@ final class EngineStateRouteTests: XCTestCase {
     /// `POST /v1/touchup/model` route, and receive + decode the frame.
     /// Covers the Hummingbird WS registration, the handler's task-group
     /// send loop, and frame encoding in one pass.
+    ///
+    /// Hardened after a 4259s (71 min) wall-clock PASS on a desktop run of
+    /// the original shape (PR #239 merge review). Diagnosis: delivery
+    /// through this exact stack measures ~35 ms against the live engine at
+    /// the same commit (raw `URLSessionWebSocketTask`; empty redirected HF
+    /// cache, so no hidden download either — `preload: false` throughout).
+    /// The implementation is prompt; the anomaly points at an environmental
+    /// suspension of the test process mid-wait (machine sleep / App Nap),
+    /// which the original shape permitted: `wsTask.receive()` had no
+    /// per-receive bound, so the 10s "deadline" only applied BETWEEN
+    /// frames. This version is structurally incapable of a silent
+    /// multi-minute stall:
+    ///
+    ///  - every wait is bounded (a reader task appends frames to a buffer;
+    ///    the test polls the buffer with short timeouts and never awaits a
+    ///    raw receive), so worst-case runtime is seconds and a stall fails
+    ///    loudly instead of hanging;
+    ///  - the blind 300 ms post-upgrade sleep is replaced with a
+    ///    deterministic handshake (re-selecting the already-active model
+    ///    publishes `modelChanged` unconditionally; poll until the first
+    ///    frame proves the subscription is live);
+    ///  - prompt delivery is ASSERTED (< 10 s on the suspending clock) —
+    ///    it is the PR's feature claim, not a nice-to-have;
+    ///  - an `NSProcessInfo` activity assertion opts out of App Nap for
+    ///    the duration; and
+    ///  - elapsed time is measured on BOTH `ContinuousClock` (advances
+    ///    through process suspension) and `SuspendingClock` (does not), so
+    ///    a recurrence self-diagnoses: continuous >> suspending in the
+    ///    failure message means the PROCESS was suspended, not the engine
+    ///    slow.
     @MainActor
     func testEventsWebSocketDeliversModelChangedFrame() async throws {
         try await resetEngineState()
         try await withServer { _ in
+            let activity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "EngineStateRouteTests WS latency assertion"
+            )
+            defer { ProcessInfo.processInfo.endActivity(activity) }
+
             let wsURL = URL(string: "ws://\(EngineConfig.host):\(EngineConfig.port)/v1/events")!
             let session = URLSession(configuration: .ephemeral)
             let wsTask = session.webSocketTask(with: wsURL)
@@ -139,11 +175,50 @@ final class EngineStateRouteTests: XCTestCase {
                 session.invalidateAndCancel()
             }
 
-            // Give the WS upgrade a moment to complete before publishing —
-            // the bus has no replay, so a frame published before the
-            // subscription lands is legitimately dropped.
-            try await Task.sleep(for: .milliseconds(300))
+            // Single long-lived reader owns every raw receive() and appends
+            // decoded frames to a buffer; consumers poll the buffer with
+            // short bounded waits. No consumer ever awaits a raw receive(),
+            // so no wait can outlive its timeout, and no cancellation race
+            // can drop a frame (the buffer is append-only until popped).
+            let buffer = FrameBuffer()
+            let reader = Task {
+                while !Task.isCancelled {
+                    guard let message = try? await wsTask.receive() else { break }
+                    guard case .string(let text) = message,
+                          let data = text.data(using: .utf8),
+                          let event = try? JSONDecoder().decode(EngineEvent.self, from: data)
+                    else { continue }
+                    await buffer.append(event)
+                }
+            }
+            defer { reader.cancel() }
 
+            // Handshake: prove the subscription is live before the timed
+            // assertion. Re-selecting the already-active model publishes
+            // `modelChanged` unconditionally. Bounded: 20 x (POST + 250ms).
+            var subscriptionLive = false
+            for _ in 0..<20 {
+                let (http, _) = try await post(
+                    "/v1/touchup/model",
+                    body: try JSONEncoder().encode(
+                        TouchUpSetModelRequest(id: "yooz-light-v2", preload: false)
+                    )
+                )
+                XCTAssertEqual(http.statusCode, 200)
+                if await buffer.popFirst(waitingUpTo: .milliseconds(250)) != nil {
+                    subscriptionLive = true
+                    break
+                }
+            }
+            guard subscriptionLive else {
+                XCTFail("WS subscription never went live: no frame within ~5s across 20 publishes")
+                return
+            }
+
+            // Timed assertion: switch to quality; the frame must arrive
+            // promptly.
+            let continuousStart = ContinuousClock.now
+            let suspendingStart = SuspendingClock.now
             let (http, _) = try await post(
                 "/v1/touchup/model",
                 body: try JSONEncoder().encode(
@@ -152,29 +227,65 @@ final class EngineStateRouteTests: XCTestCase {
             )
             XCTAssertEqual(http.statusCode, 200)
 
-            // Scan (bounded) for the frame this test caused; unrelated
-            // events from the shared bus may interleave.
+            // Bounded scan: at most 40 frame-waits of 250ms each (~10s
+            // worst case). Unrelated events from the shared bus (leftover
+            // handshake frames included) may interleave.
             let expected = EngineEventPayload.modelChanged(modelId: "yooz-quality-v2")
             var matched: EngineEvent?
-            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-            while ContinuousClock.now < deadline {
-                let message = try await wsTask.receive()
-                guard case .string(let text) = message,
-                      let data = text.data(using: .utf8),
-                      let event = try? JSONDecoder().decode(EngineEvent.self, from: data)
-                else { continue }
+            for _ in 0..<40 {
+                guard let event = await buffer.popFirst(waitingUpTo: .milliseconds(250)) else { continue }
                 if event.module == "touchup", event.payload == expected {
                     matched = event
                     break
                 }
             }
+            let continuousElapsed = continuousStart.duration(to: .now)
+            let suspendingElapsed = suspendingStart.duration(to: .now)
+
             XCTAssertNotNil(
                 matched,
-                "expected the modelChanged frame over the live /v1/events WebSocket"
+                """
+                modelChanged frame not delivered within the bounded scan. \
+                continuous=\(continuousElapsed) suspending=\(suspendingElapsed) \
+                (continuous >> suspending means the test process was suspended \
+                mid-wait — machine sleep / App Nap — not that the engine was slow).
+                """
+            )
+            // The feature claim: events arrive promptly. Measured ~35ms via
+            // this stack; 10s is three orders of magnitude of headroom. The
+            // suspending clock excludes process-suspension time so an
+            // environmental sleep cannot fail this assertion spuriously.
+            XCTAssertLessThan(
+                suspendingElapsed, .seconds(10),
+                "event delivery must be prompt"
             )
 
             // Restore the default for subsequent tests.
             _ = try await TouchUpEngine.shared.setActiveModel(.yoozLight, preload: false)
+        }
+    }
+}
+
+/// Append-only frame buffer shared between the WS reader task and the test
+/// body. `popFirst(waitingUpTo:)` polls with short sleeps rather than
+/// suspending on the socket, so no wait can outlive its timeout and no
+/// cancellation race can drop a frame (a timed-out poll leaves the buffer
+/// untouched; the frame is picked up by the next poll).
+private actor FrameBuffer {
+    private var frames: [EngineEvent] = []
+
+    func append(_ event: EngineEvent) {
+        frames.append(event)
+    }
+
+    func popFirst(waitingUpTo timeout: Duration) async -> EngineEvent? {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while true {
+            if !frames.isEmpty {
+                return frames.removeFirst()
+            }
+            guard ContinuousClock.now < deadline else { return nil }
+            try? await Task.sleep(for: .milliseconds(25))
         }
     }
 }
