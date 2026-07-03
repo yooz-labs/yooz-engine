@@ -90,7 +90,7 @@ curl http://localhost:19920/v1/health
 `-skipMacroValidation` is required from the CLI because `MLXHuggingFaceMacros`
 (used by `#huggingFaceTokenizerLoader`) is an external Swift macro that Xcode
 otherwise prompts to trust on first run. The Xcode UI handles this prompt; CLI
-and CI builds need the flag. CI sets it automatically (see
+and scripted builds need the flag. The dispatch-only CI jobs set it (see
 `.github/workflows/ci.yml`).
 
 ### Running tests
@@ -110,6 +110,33 @@ KVCOMPRESSION_LIVE=1 xcodebuild -project YoozEngine.xcodeproj \
   -scheme YoozEngine -skipMacroValidation \
   -destination 'platform=macOS' test
 ```
+
+### Build verification policy (merge gate) — RULE
+
+**Builds and tests are verified LOCALLY in a sandboxed environment; GitHub CI
+runs only cheap Ubuntu checks.** Decided 2026-07-03 (closes #237): hosted
+macos runners are billed at a premium and proved slow to useless here — the
+post-merge engine-app job never once completed inside its 120-minute timeout.
+
+- **The merge gate for every PR** is local sandboxed verification on the dev
+  machine: a clean git worktree with an isolated `-derivedDataPath`, running
+  `swift test` (SPM suites) plus `xcodebuild build` for the three app variants
+  (`YoozEngine`, `YoozEngineWhisper`, `YoozEngineLite`; add the XPC harness
+  scheme when XPC packaging is touched). Agent sessions MUST run this gate
+  before opening the PR and report exactly what ran.
+- **GitHub CI on PRs/pushes** = SwiftLint (official container on Ubuntu),
+  typos spellcheck, path detection. Anything that can run on Ubuntu belongs
+  in CI; actual macOS builds do not run automatically.
+- **The heavy macOS jobs still exist** behind `workflow_dispatch` in
+  `.github/workflows/ci.yml` for on-demand runs (e.g. release tags).
+- **App-hosted XCTest suites** (`YoozEngineTests`, hosted by Yooz Engine.app)
+  additionally require a desktop GUI session — the runner cannot attach from
+  headless/sandboxed contexts. Before running them, kill stale
+  `Yooz Engine` processes and check nothing holds port 19920, or the run
+  wedges. Live XPC proofs (harness executable) are headless-safe.
+- `Vendor/YoozTextCleanup` is gitignored: copy it from the canonical checkout
+  (or build from `text-cleanup/`) into any fresh worktree before xcodebuild.
+- A local pre-push hook remains tracked in #23.
 
 ## API
 
