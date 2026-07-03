@@ -396,9 +396,9 @@ public final class InProcessTransport: EngineTransport {
         // against the caller's expected sample count (bodyBytes / ~10 per
         // JSON float) would pinpoint decode-time truncation vs. a downstream
         // transcription-time loss.
-        Self.sttLogger.log(
-            "stt.batch.enter samples=\(request.samples.count, privacy: .public) mode=\(mode.rawValue, privacy: .public) language=\(request.language, privacy: .public) aligned=\(request.aligned == true, privacy: .public)"
-        )
+        let enterMessage = "stt.batch.enter samples=\(request.samples.count) mode=\(mode.rawValue) "
+            + "language=\(request.language) aligned=\(request.aligned == true)"
+        Self.sttLogger.log("\(enterMessage, privacy: .public)")
         try await YoozSTTEngine.shared.start(language: language)
 
         // `batchTranscribe` is non-throwing and returns `ParakeetResult.empty`
@@ -434,9 +434,9 @@ public final class InProcessTransport: EngineTransport {
                 tokens: tokens
             )
             let data = try JSONEncoder().encode(response)
-            Self.sttLogger.log(
-                "stt.batch.exit chars=\(result.text.count, privacy: .public) elapsedMs=\(start.duration(to: .now).milliseconds, privacy: .public) aligned=true"
-            )
+            let exitMessage = "stt.batch.exit chars=\(result.text.count) "
+                + "elapsedMs=\(start.duration(to: .now).milliseconds) aligned=true"
+            Self.sttLogger.log("\(exitMessage, privacy: .public)")
             return data
         }
 
@@ -452,9 +452,9 @@ public final class InProcessTransport: EngineTransport {
             tokens: nil
         )
         let data = try JSONEncoder().encode(response)
-        Self.sttLogger.log(
-            "stt.batch.exit chars=\(result.text.count, privacy: .public) elapsedMs=\(start.duration(to: .now).milliseconds, privacy: .public) aligned=false"
-        )
+        let exitMessage = "stt.batch.exit chars=\(result.text.count) "
+            + "elapsedMs=\(start.duration(to: .now).milliseconds) aligned=false"
+        Self.sttLogger.log("\(exitMessage, privacy: .public)")
         return data
     }
 

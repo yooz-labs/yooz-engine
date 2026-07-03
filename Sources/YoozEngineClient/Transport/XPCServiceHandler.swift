@@ -63,9 +63,8 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
         let state = signposter.beginInterval(
             "xpc.request", id: signpostID, "\(method, privacy: .public) \(path, privacy: .public)"
         )
-        requestLogger.log(
-            "xpc.request.enter method=\(method, privacy: .public) path=\(path, privacy: .public) bodyBytes=\(bodyByteCount, privacy: .public)"
-        )
+        let enterMessage = "xpc.request.enter method=\(method) path=\(path) bodyBytes=\(bodyByteCount)"
+        requestLogger.log("\(enterMessage, privacy: .public)")
         Task {
             do {
                 let data: Data
@@ -83,16 +82,16 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
                     )
                 }
                 let elapsedMs = start.duration(to: .now).milliseconds
-                requestLogger.log(
-                    "xpc.request.exit method=\(method, privacy: .public) path=\(path, privacy: .public) responseBytes=\(data.count, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public)"
-                )
+                let exitMessage = "xpc.request.exit method=\(method) path=\(path) "
+                    + "responseBytes=\(data.count) elapsedMs=\(elapsedMs)"
+                requestLogger.log("\(exitMessage, privacy: .public)")
                 signposter.endInterval("xpc.request", state, "ok")
                 reply(data, nil)
             } catch {
                 let elapsedMs = start.duration(to: .now).milliseconds
-                requestLogger.error(
-                    "xpc.request.error method=\(method, privacy: .public) path=\(path, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) error=\(String(describing: error), privacy: .public)"
-                )
+                let errorMessage = "xpc.request.error method=\(method) path=\(path) "
+                    + "elapsedMs=\(elapsedMs) error=\(String(describing: error))"
+                requestLogger.error("\(errorMessage, privacy: .public)")
                 signposter.endInterval("xpc.request", state, "error")
                 reply(nil, XPCErrorBridge.toNSError(error))
             }

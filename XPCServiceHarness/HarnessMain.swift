@@ -54,6 +54,7 @@
 
 import AVFoundation
 import Foundation
+import XPCHarnessSupport
 import YoozEngineClient
 
 @main
@@ -187,7 +188,15 @@ struct HarnessMain {
             exit(1)
         }
         let wavPath = arguments[wavIndex + 1]
-        let expectSentences = intArgument(arguments, flag: "--expect-sentences")
+        // `--expect-sentences` and `--warm-runs` are counts; a negative
+        // value is caller error, not "flag absent" (PR #251 review) — catch
+        // it here with a clear message rather than letting it trap later
+        // (`1...expected` in `sentenceCoverage`, `0..<warmRuns` below).
+        let expectSentences = HarnessArguments.intArgument(arguments, flag: "--expect-sentences")
+        if let expectSentences, expectSentences < 0 {
+            log("BATCH_USAGE --expect-sentences must be >= 0, got \(expectSentences)")
+            exit(1)
+        }
         let concurrentStream = arguments.contains("--concurrent-stream")
         // The XPC service is on-demand (launchd tears it down once the last
         // connection closes) — a single-shot harness process pays a cold
@@ -198,7 +207,11 @@ struct HarnessMain {
         // connection before the measured run, so cold-start cost can be
         // isolated from steady-state latency instead of contaminating
         // every measurement.
-        let warmRuns = intArgument(arguments, flag: "--warm-runs") ?? 0
+        let warmRuns = HarnessArguments.intArgument(arguments, flag: "--warm-runs") ?? 0
+        if warmRuns < 0 {
+            log("BATCH_USAGE --warm-runs must be >= 0, got \(warmRuns)")
+            exit(1)
+        }
 
         let samples: [Float]
         do {
@@ -256,8 +269,11 @@ struct HarnessMain {
             streamTask?.cancel()
             log("BATCH_OK chars=\(result.text.count) elapsedMs=\(elapsedMs)")
             log("BATCH_TEXT: \(result.text)")
-            if let expectSentences {
-                let covered = sentenceCoverage(result.text, upTo: expectSentences)
+            // expectSentences == 0 means "don't check coverage" — skip the
+            // log line entirely rather than print a meaningless "0/0"
+            // (PR #251 review; negative values already exited above).
+            if let expectSentences, expectSentences > 0 {
+                let covered = HarnessArguments.sentenceCoverage(result.text, upTo: expectSentences)
                 log("SENTENCE_COVERAGE \(covered)/\(expectSentences)")
             }
             if result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -348,7 +364,14 @@ struct HarnessMain {
         var suppliedSource = false
         converter.convert(to: outBuffer, error: &error) { _, statusPointer in
             if suppliedSource {
-                statusPointer.pointee = .noDataNow
+                // The single source buffer has already been handed over —
+                // signal end of input, not "no data YET" (PR #251 review:
+                // `.noDataNow` told the converter more input might still
+                // arrive, so it silently stopped short instead of flushing
+                // the tail — reproduced as 799 lost frames, ~50ms, on a
+                // 44.1kHz stereo -> 16kHz mono conversion). `.endOfStream`
+                // tells it this is genuinely all the input there is.
+                statusPointer.pointee = .endOfStream
                 return nil
             }
             suppliedSource = true
@@ -358,42 +381,6 @@ struct HarnessMain {
         if let error { throw error }
         return Array(UnsafeBufferPointer(start: outBuffer.floatChannelData![0], count: Int(outBuffer.frameLength)))
     }
-
-    private static func intArgument(_ arguments: [String], flag: String) -> Int? {
-        guard let idx = arguments.firstIndex(of: flag), idx + 1 < arguments.count else { return nil }
-        return Int(arguments[idx + 1])
-    }
-
-    /// Coarse coverage metric: counts how many of the numbered-sentence
-    /// markers ("number one" / "number 1" style ordinals, matching the
-    /// synthesized test corpus's script) appear in `text`, out of
-    /// `expected`. Deliberately loose (substring, not exact ordinal
-    /// spelling match) since Parakeet's own ordinal transcription varies
-    /// ("11" vs "eleven") — see the corpus's own `script.txt` ground truth.
-    private static func sentenceCoverage(_ text: String, upTo expected: Int) -> Int {
-        let lowered = text.lowercased()
-        var covered = 0
-        for n in 1...expected {
-            let digitForm = "number \(n)."
-            let digitFormComma = "number \(n),"
-            if lowered.contains(digitForm) || lowered.contains(digitFormComma) {
-                covered += 1
-                continue
-            }
-            if let word = Self.ordinalWords[n], lowered.contains("number \(word)") {
-                covered += 1
-            }
-        }
-        return covered
-    }
-
-    private static let ordinalWords: [Int: String] = [
-        1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
-        8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
-        14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
-        19: "nineteen", 20: "twenty", 21: "twenty one", 22: "twenty two", 23: "twenty three",
-        24: "twenty four",
-    ]
 
     private enum HarnessError: Error {
         case audioBufferAllocationFailed
