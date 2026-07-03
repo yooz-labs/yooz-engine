@@ -11,6 +11,18 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
     private let transport: any EngineTransport
     private let logger = Logger(subsystem: "live.yooz.engine.client", category: "xpc-service")
 
+    /// Request-forensics logger (yooz-labs/yooz-whisper#280): every unary
+    /// `request(method:path:body:)` call is logged at entry + exit with byte
+    /// counts and elapsed time. Separate from `logger` above (a different
+    /// subsystem/category on purpose) so `log stream --predicate
+    /// 'subsystem == "live.yooz.engine"'` isolates this forensic stream from
+    /// the connection-lifecycle logging `logger` already carries. This must
+    /// work in Release builds — no `#if DEBUG` gating — because the service's
+    /// stdout `print()` output is unrecoverable once launchd-managed (the
+    /// blindness that made #280 nearly undebuggable in the first place).
+    private let requestLogger = Logger(subsystem: "live.yooz.engine", category: "xpc")
+    private let signposter = OSSignposter(subsystem: "live.yooz.engine", category: "xpc")
+
     // Active streaming sessions keyed by id. Each holds the session + the
     // connection to push results back on + the drain task feeding the callback.
     private struct StreamEntry {
@@ -44,6 +56,16 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
         withReply reply: @escaping (Data?, Error?) -> Void
     ) {
         let transport = self.transport
+        let bodyByteCount = body?.count ?? 0
+        let requestLogger = self.requestLogger
+        let start = ContinuousClock.now
+        let signpostID = signposter.makeSignpostID()
+        let state = signposter.beginInterval(
+            "xpc.request", id: signpostID, "\(method, privacy: .public) \(path, privacy: .public)"
+        )
+        requestLogger.log(
+            "xpc.request.enter method=\(method, privacy: .public) path=\(path, privacy: .public) bodyBytes=\(bodyByteCount, privacy: .public)"
+        )
         Task {
             do {
                 let data: Data
@@ -60,8 +82,18 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
                         message: "Unsupported method '\(method)'"
                     )
                 }
+                let elapsedMs = start.duration(to: .now).milliseconds
+                requestLogger.log(
+                    "xpc.request.exit method=\(method, privacy: .public) path=\(path, privacy: .public) responseBytes=\(data.count, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public)"
+                )
+                signposter.endInterval("xpc.request", state, "ok")
                 reply(data, nil)
             } catch {
+                let elapsedMs = start.duration(to: .now).milliseconds
+                requestLogger.error(
+                    "xpc.request.error method=\(method, privacy: .public) path=\(path, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+                signposter.endInterval("xpc.request", state, "error")
                 reply(nil, XPCErrorBridge.toNSError(error))
             }
         }
@@ -405,5 +437,16 @@ public final class XPCServiceListenerDelegate: NSObject, NSXPCListenerDelegate, 
         }
         newConnection.resume()
         return true
+    }
+}
+
+/// Millisecond projection used by the request-forensics logging above
+/// (#280) — `Duration` has no built-in `Double` millisecond accessor.
+/// `public` so `YoozEngineInProcess`'s matching STT-batch forensic logging
+/// (`InProcessTransport.handleBatch`) can share it rather than duplicate it.
+public extension Duration {
+    var milliseconds: Double {
+        let (seconds, attoseconds) = components
+        return Double(seconds) * 1_000 + Double(attoseconds) / 1_000_000_000_000_000
     }
 }
