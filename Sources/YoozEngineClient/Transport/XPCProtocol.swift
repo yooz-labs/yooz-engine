@@ -49,6 +49,28 @@ import Foundation
     /// Finalize and close the stream. The service delivers the `final` result
     /// (if any) then a `streamDidFinish` callback.
     func closeStream(streamID: String)
+
+    // MARK: - Events (engine#244)
+    //
+    // `/v1/events` (engine#226) is one-directional (server -> client only —
+    // unlike streaming STT there is no client-initiated `send`), so its wire
+    // shape mirrors the `open`/`close` pair above without a `sendAudio`
+    // counterpart. `subscriptionID` plays the same role `streamID` does for
+    // STT: the client generates it, registers the receiving side BEFORE this
+    // call returns, and the service pushes frames keyed by it.
+
+    /// Open the `/v1/events` push channel under a client-generated
+    /// `subscriptionID`. The service subscribes to the shared
+    /// `EngineEventBus` (via the injected `EngineTransport.openEvents()`)
+    /// and pushes every `EngineEvent` published after this call to the
+    /// client callback (`eventDidOccur`) until `closeEvents` or the
+    /// connection dies. Replies with an error on failure, or `nil` on
+    /// success — mirrors `openSTTStream`'s reply contract.
+    func openEvents(subscriptionID: String, withReply reply: @escaping (Error?) -> Void)
+
+    /// Stop a subscription opened by `openEvents`, releasing the service-side
+    /// `EngineEventBus` subscription. Fire-and-forget, like `closeStream`.
+    func closeEvents(subscriptionID: String)
 }
 
 /// Client-exported callback the service pushes streaming results to (epic #192
@@ -61,6 +83,20 @@ import Foundation
 
     /// The stream ended: `error == nil` is a clean close, otherwise the failure.
     func streamDidFinish(streamID: String, error: Error?)
+
+    // MARK: - Events (engine#244)
+
+    /// One JSON-encoded `EngineEvent` for `subscriptionID`.
+    func eventDidOccur(subscriptionID: String, eventData: Data)
+
+    /// The event subscription ended service-side. There is no failure mode
+    /// here — `EngineEventBus` subscriptions don't error, so this only fires
+    /// after a service-side teardown (e.g. an encode failure — see
+    /// `XPCServiceHandler.drainEvents`). A connection failure is NOT reported
+    /// through this callback; it surfaces via the connection's own
+    /// interruption/invalidation handlers, per `XPCTransport.openEvents()`'s
+    /// documented contract.
+    func eventsDidFinish(subscriptionID: String)
 }
 
 /// Maps `YoozEngineError` to/from `NSError` so the SDK's typed errors survive the

@@ -21,6 +21,17 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
     private let streamLock = NSLock()
     private var streams: [String: StreamEntry] = [:]
 
+    // Active `/v1/events` subscriptions keyed by client-generated
+    // subscriptionID (engine#244). Separate dict + lock from `streams` above
+    // — distinct concern (one bus subscription, not an `STTStreamSession`),
+    // no reason to couple their locking.
+    private struct EventEntry {
+        let connection: NSXPCConnection
+        let drainTask: Task<Void, Never>
+    }
+    private let eventLock = NSLock()
+    private var eventSubscriptions: [String: EventEntry] = [:]
+
     public init(transport: any EngineTransport) {
         self.transport = transport
         super.init()
@@ -183,6 +194,117 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
         entry?.session.close()
     }
 
+    // MARK: - Events (engine#244)
+
+    public func openEvents(subscriptionID: String, withReply reply: @escaping (Error?) -> Void) {
+        // Capture the connection now — `NSXPCConnection.current()` is only valid
+        // inside an incoming call, not later from the drain task.
+        guard let connection = NSXPCConnection.current() else {
+            reply(XPCErrorBridge.toNSError(YoozEngineError.engineNotReachable))
+            return
+        }
+        let transport = self.transport
+        Task { [weak self] in
+            do {
+                let stream = try await transport.openEvents()
+                guard let self else {
+                    reply(XPCErrorBridge.toNSError(YoozEngineError.engineNotReachable))
+                    return
+                }
+                let drainTask = Task { [weak self] in
+                    guard let self else { return }
+                    await self.drainEvents(subscriptionID: subscriptionID, stream: stream, connection: connection)
+                }
+                self.addEventSubscription(
+                    EventEntry(connection: connection, drainTask: drainTask), id: subscriptionID
+                )
+                reply(nil)
+            } catch {
+                reply(XPCErrorBridge.toNSError(error))
+            }
+        }
+    }
+
+    public func closeEvents(subscriptionID: String) {
+        eventLock.lock()
+        let entry = eventSubscriptions[subscriptionID]
+        eventSubscriptions[subscriptionID] = nil
+        eventLock.unlock()
+        // Cancelling the drain task ends its `for await` over the bus
+        // stream — `AsyncStream`'s cancellation-aware `next()` returns nil
+        // as soon as the task is cancelled, which fires `EngineEventBus`'s
+        // `onTermination` and releases the subscription. No separate
+        // "unsubscribe" call to make (see `EngineEventBus.subscribe()`'s doc).
+        entry?.drainTask.cancel()
+    }
+
+    /// Cancel + release every active event subscription — called when the
+    /// client connection drops, so an orphaned drain task (and its
+    /// `EngineEventBus` subscription) don't leak.
+    public func cancelAllEventSubscriptions() {
+        eventLock.lock()
+        let entries = eventSubscriptions
+        eventSubscriptions.removeAll()
+        eventLock.unlock()
+        for entry in entries.values {
+            entry.drainTask.cancel()
+        }
+    }
+
+    /// Drains an `/v1/events` subscription to the client callback over
+    /// `connection`, keyed by `subscriptionID`. Mirrors
+    /// `drain(streamID:session:connection:)` above, but one-directional and
+    /// over a plain `AsyncStream` (no `STTStreamSession` to close) — see
+    /// `EngineTransport.openEvents()`'s doc.
+    private func drainEvents(subscriptionID: String, stream: AsyncStream<EngineEvent>, connection: NSXPCConnection) async {
+        let encoder = JSONEncoder()
+        let proxy = connection.remoteObjectProxyWithErrorHandler { [weak self] error in
+            self?.logger.error("xpc: events \(subscriptionID, privacy: .public) callback failed: \(error.localizedDescription, privacy: .public)")
+            self?.cancelAndRemoveEventSubscription(subscriptionID)
+        }
+        let callback = proxy as? YoozEngineXPCStreamClientProtocol
+        for await event in stream {
+            do {
+                let data = try encoder.encode(event)
+                callback?.eventDidOccur(subscriptionID: subscriptionID, eventData: data)
+            } catch {
+                // An encode failure ends the subscription rather than
+                // silently dropping the frame — matches `drain`'s STT
+                // decode-failure handling.
+                logger.error("xpc: events \(subscriptionID, privacy: .public) encode failed: \(error.localizedDescription, privacy: .public)")
+                break
+            }
+        }
+        // The loop above exits via cancellation (closeEvents / connection
+        // death — both already tore down the local entry) or the encode
+        // failure just above (which has not) — `EngineEventBus` never
+        // finishes a subscriber's stream on its own (see its doc comment).
+        // Tell the client either way so a still-live connection's
+        // `AsyncStream` ends deterministically rather than going quiet.
+        callback?.eventsDidFinish(subscriptionID: subscriptionID)
+        removeEventSubscription(subscriptionID)
+    }
+
+    private func addEventSubscription(_ entry: EventEntry, id: String) {
+        eventLock.lock()
+        eventSubscriptions[id] = entry
+        eventLock.unlock()
+    }
+
+    private func removeEventSubscription(_ subscriptionID: String) {
+        eventLock.lock()
+        eventSubscriptions[subscriptionID] = nil
+        eventLock.unlock()
+    }
+
+    private func cancelAndRemoveEventSubscription(_ subscriptionID: String) {
+        eventLock.lock()
+        let entry = eventSubscriptions[subscriptionID]
+        eventSubscriptions[subscriptionID] = nil
+        eventLock.unlock()
+        entry?.drainTask.cancel()
+    }
+
     /// Decode Float32 little-endian PCM bytes into `[Float]` (alignment-safe).
     private static func floats(from data: Data) -> [Float] {
         let count = data.count / MemoryLayout<Float>.size
@@ -244,10 +366,12 @@ public final class XPCServiceListenerDelegate: NSObject, NSXPCListenerDelegate, 
         newConnection.interruptionHandler = {
             logger.debug("xpc: connection interrupted (peer crashed or restarted)")
             handler.cancelAllStreams()
+            handler.cancelAllEventSubscriptions()
         }
         newConnection.invalidationHandler = {
             logger.debug("xpc: connection invalidated")
             handler.cancelAllStreams()
+            handler.cancelAllEventSubscriptions()
         }
         newConnection.resume()
         return true

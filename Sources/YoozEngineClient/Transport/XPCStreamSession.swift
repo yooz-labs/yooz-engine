@@ -49,11 +49,16 @@ final class XPCSTTStreamSession: STTStreamSession, @unchecked Sendable {
 
 /// Client-exported callback object: receives the service's streaming pushes and
 /// routes them to the right `XPCSTTStreamSession` by `streamID`. One per
-/// connection (set as `exportedObject`).
+/// connection (set as `exportedObject`). Also routes the `/v1/events`
+/// (engine#244) push callbacks to the right `XPCEventSubscription` by
+/// `subscriptionID` — folded into this one exported object rather than a
+/// second `exportedObject`, since `NSXPCConnection.exportedInterface` /
+/// `exportedObject` are each singular per connection.
 @available(macOS 14.0, iOS 17.0, *)
 final class XPCStreamClient: NSObject, YoozEngineXPCStreamClientProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var sessions: [String: XPCSTTStreamSession] = [:]
+    private var eventSubscriptions: [String: XPCEventSubscription] = [:]
 
     func register(_ session: XPCSTTStreamSession, for streamID: String) {
         lock.lock()
@@ -67,14 +72,35 @@ final class XPCStreamClient: NSObject, YoozEngineXPCStreamClientProtocol, @unche
         lock.unlock()
     }
 
-    /// Finish every active stream (e.g. on connection invalidation/interruption).
+    func registerEvents(_ subscription: XPCEventSubscription, for subscriptionID: String) {
+        lock.lock()
+        eventSubscriptions[subscriptionID] = subscription
+        lock.unlock()
+    }
+
+    func unregisterEvents(_ subscriptionID: String) {
+        lock.lock()
+        eventSubscriptions[subscriptionID] = nil
+        lock.unlock()
+    }
+
+    /// Finish every active STT stream AND event subscription (e.g. on
+    /// connection invalidation/interruption). This is the client-side half
+    /// of the "the stream finishes rather than silently going quiet"
+    /// contract `XPCTransport.openEvents()` documents (engine#244) — STT
+    /// streams already had it, events now share the same wiring.
     func finishAll(error: Error) {
         lock.lock()
-        let active = sessions
+        let activeSessions = sessions
+        let activeEvents = eventSubscriptions
         sessions.removeAll()
+        eventSubscriptions.removeAll()
         lock.unlock()
-        for session in active.values {
+        for session in activeSessions.values {
             session.finish(error: error)
+        }
+        for subscription in activeEvents.values {
+            subscription.finish()
         }
     }
 
@@ -82,6 +108,12 @@ final class XPCStreamClient: NSObject, YoozEngineXPCStreamClientProtocol, @unche
         lock.lock()
         defer { lock.unlock() }
         return sessions[streamID]
+    }
+
+    private func eventSubscription(_ subscriptionID: String) -> XPCEventSubscription? {
+        lock.lock()
+        defer { lock.unlock() }
+        return eventSubscriptions[subscriptionID]
     }
 
     func streamDidProduce(streamID: String, resultData: Data) {
@@ -100,5 +132,28 @@ final class XPCStreamClient: NSObject, YoozEngineXPCStreamClientProtocol, @unche
         let session = session(streamID)
         unregister(streamID)
         session?.finish(error: error.map { XPCErrorBridge.toYoozEngineError($0) })
+    }
+
+    // MARK: - Events (engine#244)
+
+    func eventDidOccur(subscriptionID: String, eventData: Data) {
+        // Single lookup so a concurrent eventsDidFinish/finishAll can't change
+        // the subscription between the decode-failure branch and delivery —
+        // mirrors `streamDidProduce` above.
+        guard let subscription = eventSubscription(subscriptionID) else { return }
+        guard let event = try? JSONDecoder().decode(EngineEvent.self, from: eventData) else {
+            // A malformed frame ends the subscription rather than silently
+            // dropping it, matching `streamDidProduce`'s decode-failure handling.
+            unregisterEvents(subscriptionID)
+            subscription.finish()
+            return
+        }
+        subscription.deliver(event)
+    }
+
+    func eventsDidFinish(subscriptionID: String) {
+        let subscription = eventSubscription(subscriptionID)
+        unregisterEvents(subscriptionID)
+        subscription?.finish()
     }
 }

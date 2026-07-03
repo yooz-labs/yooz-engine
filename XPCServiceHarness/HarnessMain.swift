@@ -6,8 +6,8 @@
 // Dev-only harness (engine#227) — NOT shipped, NOT an XCTest target. Proves
 // the packaged `YoozEngineXPC.xpc` service is reachable end-to-end through
 // `XPCTransport` once embedded under this app's own `Contents/XPCServices/`.
-// Round-trips `GET /v1/health` and a streaming STT open/send/receive/close
-// cycle.
+// Round-trips `GET /v1/health`, a streaming STT open/send/receive/close
+// cycle, and (engine#244) an `/v1/events` open/publish/receive cycle.
 //
 // Why not XCTest: XPC services are launchd-managed with no GUI test-runner
 // involved, and this repo's headless build environment cannot attach an
@@ -79,8 +79,71 @@ struct HarnessMain {
             exit(1)
         }
 
+        // `/v1/events` (engine#244): open the push channel, then trigger a
+        // REAL engine-side publish (`POST /v1/touchup/model`, preload:false
+        // so no download/MLX load is involved — same reasoning as forcing
+        // Apple STT above, keep this harness fast and hermetic) and confirm
+        // the resulting `modelChanged` frame arrives back over the XPC
+        // callback proxy. Unlike streaming STT this has no
+        // permission/hardware dependency, so — unlike `STREAM_TYPED_ERROR`
+        // above — a timeout here IS a packaging regression, not an
+        // environment difference; treat it as a hard failure.
+        do {
+            let stream = try await client.openEvents()
+
+            try await client.touchUp.setModel(id: "yooz-quality-v2", preload: false)
+
+            let matched = await Self.firstMatchingEvent(stream, timeoutSeconds: 5) {
+                $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+            }
+            // Restore the default selection so this harness run doesn't
+            // leave the persisted `ModelSelectionStore` state changed for
+            // whatever runs next against the same weights directory.
+            try? await client.touchUp.setModel(id: "yooz-light-v2", preload: false)
+
+            if let matched {
+                log("EVENTS_OK event=\(matched)")
+            } else {
+                log("EVENTS_TIMEOUT no modelChanged frame arrived over /v1/events within 5s")
+                exit(1)
+            }
+        } catch let error as YoozEngineError {
+            log("EVENTS_TYPED_ERROR \(error)")
+        } catch {
+            log("EVENTS_UNEXPECTED_ERROR \(error)")
+            exit(1)
+        }
+
         log("HARNESS_DONE")
         exit(0)
+    }
+
+    /// Scan `stream` for the first event matching `predicate`, bounded by
+    /// `timeoutSeconds` so a genuine regression (no frame ever arrives)
+    /// exits the harness promptly instead of hanging forever. The scanning
+    /// `for await` runs in its own child task, so it owns the stream's
+    /// iterator for the whole call — no cross-task iterator sharing needed.
+    /// Losing the race (timeout fires first) cancels that task, which ends
+    /// its `for await` loop via `AsyncStream`'s cancellation-aware `next()`.
+    private static func firstMatchingEvent(
+        _ stream: AsyncStream<EngineEvent>,
+        timeoutSeconds: Double,
+        where predicate: @escaping @Sendable (EngineEvent) -> Bool
+    ) async -> EngineEvent? {
+        await withTaskGroup(of: Optional<EngineEvent>.self) { group in
+            group.addTask {
+                for await event in stream where predicate(event) {
+                    return event
+                }
+                return nil  // the stream ended before a match arrived
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                return nil
+            }
+            defer { group.cancelAll() }
+            return await group.next() ?? nil
+        }
     }
 
     private static func log(_ message: String) {
