@@ -30,7 +30,9 @@ Thanks for considering a contribution. The engine is the heart of the Yooz ecosy
    ```
 
    `-skipMacroValidation` is required so the `MLXHuggingFaceMacros` trust prompt doesn't hang the headless invocation.
-5. **Run lint**: SwiftLint locally (`swiftlint lint`) and Spell Check (`typos` if you have it). CI runs both on every PR.
+
+   Local verification is the merge gate for builds and tests (CI runs only lint and spellcheck; see AGENTS.md "Build verification policy"). For changes touching module composition or packaging, also build the other variants (`YoozEngineWhisper`, `YoozEngineLite`) so a variant-only breakage doesn't reach main.
+5. **Run lint**: SwiftLint locally (`swiftlint lint`) and Spell Check (`typos` if you have it). CI runs both on every PR — those are the only recurring CI checks; builds do not run in CI.
 6. **Open a PR** against `main` (or the epic branch). Describe what changed, why, and how to test it. Reference the issue number with `Closes #N`.
 7. **Address review findings**. Maintainers run an automated multi-agent review on every PR before merge (you don't need to run it yourself); plus human review. Address every finding that isn't a genuine false positive; for skips, explain why in a PR comment.
 8. **Merge after CI green**. Don't merge with red CI. Maintainers handle the merge.

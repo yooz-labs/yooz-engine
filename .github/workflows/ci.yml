@@ -35,6 +35,9 @@ jobs:
   # future cheap checks that want to skip docs-only PRs.
   changes:
     name: Detect Changed Paths
+    # paths-filter has no natural base ref on manual dispatch; the macOS
+    # jobs no longer consume these outputs, so skip it there entirely.
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     # dorny/paths-filter calls the GitHub API to list PR files; needs read.
@@ -85,8 +88,11 @@ jobs:
     if: needs.changes.outputs.swift == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.ci == 'true'
     # Runs in the official SwiftLint container on Ubuntu — lint does not
     # need a macOS runner. Same binary + same .swiftlint.yml as local.
+    # Pinned so a new SwiftLint release cannot silently flip green PRs
+    # red (or stop catching things) with no diff in this repo; bump the
+    # pin deliberately.
     runs-on: ubuntu-latest
-    container: ghcr.io/realm/swiftlint:latest
+    container: ghcr.io/realm/swiftlint:0.65.0
     timeout-minutes: 10
 
     steps:

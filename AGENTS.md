@@ -126,7 +126,7 @@ post-merge engine-app job never once completed inside its 120-minute timeout.
   before opening the PR and report exactly what ran.
 - **GitHub CI on PRs/pushes** = SwiftLint (official container on Ubuntu),
   typos spellcheck, path detection. Anything that can run on Ubuntu belongs
-  in CI; actual macOS builds do not.
+  in CI; actual macOS builds do not run automatically.
 - **The heavy macOS jobs still exist** behind `workflow_dispatch` in
   `.github/workflows/ci.yml` for on-demand runs (e.g. release tags).
 - **App-hosted XCTest suites** (`YoozEngineTests`, hosted by Yooz Engine.app)
