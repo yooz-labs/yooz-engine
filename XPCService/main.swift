@@ -5,6 +5,7 @@
 
 import EngineCore
 import Foundation
+import STTModule
 import YoozEngineClient
 import YoozEngineInProcess
 
@@ -30,6 +31,30 @@ import YoozEngineInProcess
 // `AppGroupWeightsLocation`'s documented fallback contract.
 if let groupID = Bundle.main.object(forInfoDictionaryKey: "YoozAppGroupIdentifier") as? String {
     AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier: groupID)
+}
+
+// Proactive STT warmup (engine#252, yooz-labs/yooz-whisper#280 follow-up).
+// This service is on-demand (launchd tears it down once the last connection
+// closes) and never stays warm across app launches the way the loopback host
+// does. Measured: the first Parakeet batch call in a freshly-launched
+// process took ~105s for 111s of audio (first-ever Metal/MLX shader JIT
+// compilation for this binary), vs. ~4s for a second call in the same,
+// now-warm process — matching the loopback baseline exactly. Pay that cost
+// here, off the user's first real request, instead of on it.
+//
+// Fire-and-forget: does NOT block `listener.resume()` below, so the service
+// starts accepting connections immediately; `/v1/health` etc. are unaffected
+// while warmup runs. Mechanics (cache-check before any download, the
+// enqueueLoad coalescing, the bounded dummy inference, backend gating) all
+// live in `YoozSTTEngine.warmupIfNeeded` — this call site is just language
+// resolution + the fire-and-forget kickoff. Runs unconditionally on every
+// spawn, including connections that never touch STT: at ~2s of warm-cost
+// once cached (0 cost, no download, when not cached — see
+// `warmupIfNeeded`'s doc), that is an acceptable tradeoff against the ~105s
+// cold-start alternative for the STT connections that do arrive.
+Task {
+    let language = await YoozSTTEngine.resolveWarmupLanguage()
+    YoozSTTEngine.shared.warmupIfNeeded(language: language)
 }
 
 // `NSXPCListener.service()`'s `resume()` does not return under normal

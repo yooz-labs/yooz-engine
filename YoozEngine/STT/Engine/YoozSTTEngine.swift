@@ -929,6 +929,164 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
         )
     }
 
+    // MARK: - Warmup (engine#252)
+    //
+    // Pays the first-ever Metal/MLX shader JIT compilation cost (measured
+    // ~105s vs ~4s warm) ahead of the caller's first real request, instead
+    // of on it. `XPCService/main.swift` calls `warmupIfNeeded` once at
+    // service startup; `InProcessTransport.handleBatch` / `openSTTStream`
+    // call `awaitWarmupIfNeeded` before their own dispatch so a real
+    // request racing the warmup waits for it instead of contending with it
+    // for the GPU (PR #255 review, finding C2: the load-only coalescing via
+    // `enqueueLoad` below resolves as soon as `start()` returns, BEFORE the
+    // warmup's own JIT-compiling dummy transcription finishes — without
+    // this second wait, a request in that window would run its own
+    // first-ever inference concurrently with the warmup's).
+
+    /// In-flight (or most-recently-started) warmup, if any. Guarded by
+    /// `lock` like `model` / `streamingContext`.
+    private var warmupTask: Task<Void, Never>?
+
+    /// Kick off a proactive load + one silent dummy transcription for
+    /// `language`, off the caller's own request path. Fire-and-forget —
+    /// call once at process/service startup; the `Task` runs independently.
+    /// A second call while one is already in flight is a silent no-op (this
+    /// warmup is a one-shot per process, not a repeating background job).
+    ///
+    /// No-ops (silently, without creating a `Task` at all) when
+    /// `currentBackend` is not MLX-backed — Apple STT is OS-provided and has
+    /// no Metal JIT cost to pay.
+    public func warmupIfNeeded(language: STTLanguage) {
+        guard currentBackend == .parakeet || currentBackend == .fastConformer else { return }
+        lock.lock()
+        guard warmupTask == nil else { lock.unlock(); return }
+        let task = Task { await self.runWarmup(language: language) }
+        warmupTask = task
+        lock.unlock()
+    }
+
+    /// Await any in-flight warmup, bounded by `deadlineSeconds`, before a
+    /// real request proceeds with its own dispatch (finding C2). No-op
+    /// (returns immediately) if no warmup is in flight: already finished
+    /// (the common case once warm), never started (a non-MLX backend, or a
+    /// call before `warmupIfNeeded` ever ran), or skipped because the
+    /// weights were not cached (see `runWarmup`). Does not throw — a
+    /// timed-out or failed warmup is not this caller's failure; it falls
+    /// through to its own normal load path exactly as if no warmup had run.
+    public func awaitWarmupIfNeeded(deadlineSeconds: Double) async {
+        lock.lock()
+        let task = warmupTask
+        lock.unlock()
+        guard let task else { return }
+        await Self.race(against: deadlineSeconds) { await task.value }
+    }
+
+    private func runWarmup(language: STTLanguage) async {
+        // Findings C1 + 6: check the cache FIRST, before touching
+        // `loadState` via `enqueueLoad`/`start` at all. A cache miss is a
+        // silent no-op — never a download (downloads happen only from
+        // explicit user action, e.g. `/v1/stt/load` or a real request; a
+        // background warmup consuming multiple GB with zero consent is a
+        // product-policy violation), and never a `loadState`/
+        // `lastLoadError` mutation a `/v1/stt/status` poll could observe
+        // from an otherwise-untouched, freshly-spawned service.
+        guard await isModelCached(language: language) else {
+            NSLog("YoozSTTEngine: warmup skipped for %@ — weights not cached", language.rawValue)
+            return
+        }
+        do {
+            // Routes through the same `enqueueLoad` coalescing primitive
+            // `InProcessTransport.handleBatch` / `openSTTStream` use, so a
+            // real request's own `enqueueLoad` call for the same language
+            // (already in flight here) shares this exact load instead of
+            // independently paying `ParakeetModel.fromDirectory`'s full
+            // cost. `allowFetch: false` is defense in depth (finding C1):
+            // even though `isModelCached` just confirmed a cache hit, this
+            // closes the check-then-act window and guarantees this call
+            // can never download regardless of what changed on disk
+            // in between.
+            let loadTask = await enqueueLoad(language: language) {
+                try await self.start(language: language, allowFetch: false)
+            }
+            try await loadTask.value
+            // The load alone only materializes weights — it does not
+            // exercise the Conformer/PredictNetwork/JointNetwork MLX
+            // kernels, which is where the JIT cost actually lives. One
+            // silent dummy transcription forces that compilation now.
+            // Bounded (finding 7): a fully synchronous `ParakeetModel`
+            // call cannot be interrupted mid-call (the same caveat
+            // `awaitLoadTask` documents for the load path), so this can't
+            // literally cancel a wedged compile — but it guarantees this
+            // Task gives up and settles at the deadline instead of
+            // running as an unbounded orphaned background job forever.
+            await Self.race(against: EngineConfig.modelLoadDeadlineSeconds) {
+                _ = await self.batchTranscribe(
+                    samples: [Float](repeating: 0, count: 16_000), mode: .normal
+                )
+            }
+            NSLog("YoozSTTEngine: warmup complete for %@", language.rawValue)
+        } catch {
+            NSLog("YoozSTTEngine: warmup failed for %@: %@", language.rawValue, String(describing: error))
+        }
+    }
+
+    /// Whether `language`'s weights are already materialized on disk,
+    /// without ever downloading. Reuses `getModelDirectory`'s existing
+    /// `allowFetch: false` offline-only path (which throws
+    /// `HubCacheError.cachedPathResolutionFailed` on a cache miss) rather
+    /// than duplicating cache-location logic.
+    private func isModelCached(language: STTLanguage) async -> Bool {
+        (try? await getModelDirectory(for: language, allowFetch: false)) != nil
+    }
+
+    /// Race `work` against a `seconds` timeout; whichever finishes first
+    /// wins, and the other side is cancelled. Cancelling a losing `work`
+    /// only stops this call from continuing to wait on it — it does NOT
+    /// interrupt already-running synchronous MLX compute (see callers'
+    /// docs), so this bounds how long a CALLER waits, not how long the
+    /// underlying work actually runs.
+    private static func race(against seconds: Double, _ work: @escaping () async -> Void) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await work() }
+            group.addTask { try? await Task.sleep(for: .seconds(max(0, seconds))) }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
+    /// Preference order (PR #255 review, finding I3): the engine-persisted
+    /// active STT selection (`ModelSelectionStore`, engine#226) if one
+    /// exists and parses as an implemented language, else
+    /// `EngineConfig.defaultSTTLanguage` (`YOOZ_DEFAULT_STT_LANG`), else
+    /// English (that env var's own documented fallback).
+    ///
+    /// Nothing currently WRITES an `"stt"` entry to `ModelSelectionStore`
+    /// (only `TouchUpEngine` does today) — checked anyway so warmup picks
+    /// up a persisted STT selection transparently if a future change adds
+    /// one, with no warmup-side update needed.
+    ///
+    /// Env-var caveat, verified empirically for this XPC packaging: a
+    /// shell-exported probe variable (and `HF_HUB_CACHE`) was confirmed
+    /// ABSENT from a freshly-spawned `NSXPCListener.service()` process's
+    /// own environment (`ps eww <pid>` on the spawned service showed
+    /// neither), so `YOOZ_DEFAULT_STT_LANG` set in a launching shell does
+    /// NOT reach this XPC service today. `EngineConfig.defaultSTTLanguage`
+    /// still degrades safely to `.english` in that case (its own
+    /// documented fallback), so this preference chain stays correct
+    /// either way; the env var only takes effect for the loopback host app
+    /// (which inherits its own launch environment normally) unless a
+    /// future change threads it through the XPC service's Info.plist
+    /// (`LSEnvironment`) or an explicit `launchctl setenv`.
+    public static func resolveWarmupLanguage(
+        selectionStore: ModelSelectionStore = .shared
+    ) async -> STTLanguage {
+        if let activeId = await selectionStore.activeId(for: "stt"),
+           let language = STTLanguage.fromCode(activeId), language.isImplemented {
+            return language
+        }
+        return EngineConfig.defaultSTTLanguage
+    }
+
     // MARK: - Private Methods
 
     /// Resolve the on-disk directory for the active STT model.
