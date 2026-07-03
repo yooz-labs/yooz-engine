@@ -65,7 +65,9 @@ public protocol EngineTransport: Sendable {
     ///
     /// - HTTP: opens a WebSocket at `/v1/events` and decodes each frame.
     /// - In-process: subscribes directly to the shared `EngineEventBus`.
-    /// - XPC: not yet implemented — see `XPCTransport.openEvents()`.
+    /// - XPC: bridges the push channel over the connection's callback proxy
+    ///   (engine#244) — see `XPCTransport.openEvents()` for the
+    ///   finishes-on-connection-death contract specific to that transport.
     @available(macOS 14.0, iOS 17.0, *)
     func openEvents() async throws -> AsyncStream<EngineEvent>
 }

@@ -6,8 +6,9 @@ import Foundation
 /// loopback, Apple's sanctioned in-bundle IPC).
 ///
 /// Byte-level: `get/post/delete` funnel through the single `request` XPC method.
-/// Streaming STT is Phase 3b (it needs a bidirectional callback proxy, not a
-/// once-fired reply block) — `openSTTStream` reports `unsupportedOperation` until then.
+/// Server-push surfaces — streaming STT (epic #192 Phase 3b) and `/v1/events`
+/// (engine#244) — ride the bidirectional callback proxy instead: the client
+/// exports `XPCStreamClient` and the service pushes frames back through it.
 public final class XPCTransport: EngineTransport, @unchecked Sendable {
     /// Non-routable placeholder — XPC addresses by service name, not URL/port.
     public let baseURL = URL(string: "xpc://engine")!
@@ -90,25 +91,40 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
         return session
     }
 
-    /// `/v1/events` (engine#226) is NOT yet implemented over XPC.
+    /// Open the `/v1/events` push channel over XPC (engine#244).
     ///
-    /// `YoozEngineXPCProtocol` / `YoozEngineXPCStreamClientProtocol` only
-    /// export the STT-streaming callback surface today (`openSTTStream` /
-    /// `streamDidProduce` / `streamDidFinish`) — bridging a generic,
-    /// long-lived, multi-subscriber event push over that would mean adding
-    /// new exported interface methods to both protocols, the same surface
-    /// the sibling XPC-service-packaging epic (#227) is actively building
-    /// out (`XPCServiceHandler`, `Contents/XPCServices/` packaging). Doing
-    /// it here first would collide with that work rather than build on it,
-    /// so this stays an honest `unsupportedOperation` until #227 lands and
-    /// the bridge can be added deliberately, likely alongside real XPC
-    /// packaging tests. `RouteManifest`'s `/v1/events` entry only needs
-    /// loopback + in-process parity (`RouteParityTests`) — XPC has no
-    /// equivalent gate yet since no `.xpc` bundle ships (see
-    /// `docs/engine-app-packaging.md`).
+    /// Mirrors `openSTTStream`'s callback-proxy shape: a client-generated id
+    /// (`subscriptionID`) is registered with `streamClient` BEFORE asking the
+    /// service to open, so a frame that arrives the instant the service
+    /// subscribes can't race the registration. Unlike STT streaming this is
+    /// one-directional — there is no client-initiated `send`, so the wire
+    /// pair is just `openEvents`/`closeEvents` (see `XPCProtocol.swift`).
+    ///
+    /// Contract: the returned stream FINISHES (no further frames — plain
+    /// `AsyncStream<EngineEvent>` carries no `Failure` channel to surface an
+    /// error through) when the underlying `NSXPCConnection` is interrupted or
+    /// invalidated, exactly like every in-flight STT stream already does
+    /// (`streamClient.finishAll`, wired in `init` below). It does NOT
+    /// silently stop producing frames while still claiming to be open — a
+    /// caller that wants live events across a service crash/respawn must
+    /// detect the finish and call `openEvents()` again on a (possibly
+    /// reconnected) transport. See `ReconnectingXPCTransport` (yooz-whisper)
+    /// for the reconnect half of that story.
     @available(macOS 14.0, iOS 17.0, *)
     public func openEvents() async throws -> AsyncStream<EngineEvent> {
-        throw YoozEngineError.unsupportedOperation(operation: "openEvents (XPC)")
+        let subscriptionID = UUID().uuidString
+        let (stream, continuation) = AsyncStream<EngineEvent>.makeStream()
+        let subscription = XPCEventSubscription(
+            subscriptionID: subscriptionID, connection: connection, continuation: continuation
+        )
+        streamClient.registerEvents(subscription, for: subscriptionID)
+        do {
+            try await openEventsRequest(subscriptionID: subscriptionID)
+        } catch {
+            streamClient.unregisterEvents(subscriptionID)
+            throw error
+        }
+        return stream
     }
 
     private func openStream(streamID: String, language: String, mode: String) async throws {
@@ -124,6 +140,31 @@ public final class XPCTransport: EngineTransport, @unchecked Sendable {
                     return
                 }
                 service.openSTTStream(streamID: streamID, language: language, mode: mode) { error in
+                    if let error {
+                        state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
+                    } else {
+                        state.resume(.success(()))
+                    }
+                }
+            }
+        } onCancel: {
+            state.cancel()
+        }
+    }
+
+    private func openEventsRequest(subscriptionID: String) async throws {
+        let state = SendState<Void>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard state.register(continuation) else { return }
+                let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                    state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
+                }
+                guard let service = proxy as? YoozEngineXPCProtocol else {
+                    state.resume(.failure(YoozEngineError.engineNotReachable))
+                    return
+                }
+                service.openEvents(subscriptionID: subscriptionID) { error in
                     if let error {
                         state.resume(.failure(XPCErrorBridge.toYoozEngineError(error)))
                     } else {

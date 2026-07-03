@@ -28,8 +28,8 @@ Pick a transport based on how your app ships, not on which modules you need (mod
 
 | Transport | Use when | Status as of 2026-07 |
 |---|---|---|
-| **In-process** (`YoozEngineInProcess` SPM product, `InProcessTransport`) | You're an App Store standalone app. No socket, no separate process — the engine actors run in your sandbox. **Recommended today.** Yooz Whisper ships this (pinned by revision in its `project.yml`, engine 0.7.5 at time of writing). | Shipping. Gaps: `/v1/session/*` (per-recording reset) is not yet routed in-process (tracked engine#222); `/v1/infinite/*` is intentionally unsupported in-process — Infinite's consumer is the loopback host. |
-| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Packaged and provable (engine#227).** This repo's own `project.yml` ships `YoozEngineXPC` (the `.xpc` target), entitlements, and a dev-only harness that round-trips health + streaming STT through it — see "XPC service embed recipe" below. No shipping consumer app has adopted it yet; Whisper's migration is a follow-up (whisper#267), in-process stays its fallback in the meantime. |
+| **In-process** (`YoozEngineInProcess` SPM product, `InProcessTransport`) | You're an App Store standalone app. No socket, no separate process — the engine actors run in your sandbox. **Recommended today.** Yooz Whisper ships this (pinned by revision in its `project.yml`, engine 0.7.5 at time of writing). | Shipping. One gap: `/v1/infinite/*` is intentionally unsupported in-process — Infinite's consumer is the loopback host. (The former `/v1/session/*` gap closed in engine#232; sessions dispatch through the shared endpoint table on every transport.) |
+| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Packaged and provable (engine#227), full route surface (engine#244).** This repo's own `project.yml` ships `YoozEngineXPC` (the `.xpc` target), entitlements, and a dev-only harness that round-trips health + streaming STT through it — see "XPC service embed recipe" below. `/v1/events` bridges over the same callback-proxy shape as streaming STT (engine#244), so a picker built on `EngineStateStore` now works on all three transports. No shipping consumer app has adopted XPC yet; Whisper's migration is a follow-up (whisper#267), in-process stays its fallback in the meantime. |
 | **Loopback** (`HTTPTransport`, this document's default) | You're the super-yooz host, or doing local dev/testing. Not valid for an App Store standalone — the unsandboxed helper `.app` under `Contents/Helpers/` fails App Store review (ITMS-90296). | Shipping, default. |
 
 In-process integration looks like this instead of the TL;DR above:
@@ -297,7 +297,7 @@ The SDK is `Sendable`; you can safely use one `YoozEngineClient` for the lifetim
 
 ## Available services
 
-Transport-agnostic except where noted. Two different kinds of restriction apply, don't conflate them: `vad` is a **variant** restriction (only the full `YoozEngine` variant links `VADModule`; the in-process transport does route `/v1/vad/detect` when the module is linked), while `infinite` and the raw `/v1/session/*` routes are **transport** restrictions (Infinite is loopback-only by design; session routes are unrouted in-process until engine#222). See "Transport selection" above and "Build Variants" in `AGENTS.md`.
+Transport-agnostic except where noted. Two different kinds of restriction apply, don't conflate them: `vad` is a **variant** restriction (only the full `YoozEngine` variant links `VADModule`; the in-process transport does route `/v1/vad/detect` when the module is linked), while `infinite` is a **transport** restriction (Infinite is loopback-only by design). The former `/v1/session/*` transport gap closed in engine#232 — sessions now dispatch through the shared endpoint table on every transport. See "Transport selection" above and "Build Variants" in `AGENTS.md`.
 
 ```swift
 let client = YoozEngineClient()
@@ -433,12 +433,28 @@ download; the caller learns the outcome from the event stream, not from
 the response.
 
 `EngineStateStore` is transport-agnostic — `client.openEvents()` resolves
-through whichever `EngineTransport` the client was built with. On loopback
-and in-process it just works. **XPC does not support `/v1/events` yet**
-(`XPCTransport.openEvents()` throws `unsupportedOperation`; tracked
-alongside the `.xpc` service packaging work, engine#227) — an app on the
-XPC transport should not build a picker on `EngineStateStore` until that
-lands.
+through whichever `EngineTransport` the client was built with. On loopback,
+in-process, and now XPC (engine#244) it just works: `XPCTransport.openEvents()`
+bridges the push channel over the same callback-proxy shape streaming STT
+already uses (`openEvents`/`closeEvents` on the XPC protocol, frames pushed
+to the client's exported callback object), one `EngineEventBus` subscription
+per `openEvents()` call — in practice one per client connection, since
+`EngineStateStore` opens exactly one, but the wire protocol supports N
+concurrent subscriptions keyed by client-generated id.
+
+One XPC-specific contract to know: the returned `AsyncStream<EngineEvent>`
+**finishes** (stops producing frames, with no error to inspect — plain
+`AsyncStream` has no `Failure` channel) when the underlying `NSXPCConnection`
+is interrupted or invalidated, rather than silently going quiet forever.
+`EngineStateStore.subscribeToEvents()`'s `for await` loop exits at that
+point without setting `lastError` (a clean finish isn't a fetch failure), so
+a consumer that wants live events across an XPC service crash/respawn must
+notice the subscription ended and call `state.start()` again — `start()` is
+documented as safe to call repeatedly for exactly this reason. In practice
+that means wiring the re-subscribe off whatever reconnect signal your
+transport wrapper exposes (e.g. yooz-whisper's `ReconnectingXPCTransport.onReconnect`)
+rather than assuming the store's live feed survives a service respawn on
+its own.
 
 `GET /v1/state` and `/v1/events` are cross-module: `EngineStateStore.modules`
 is keyed by module name (`"touchup"` today), so the same store instance
@@ -609,13 +625,13 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 | Engine starts but shows "port in use" alert (loopback only) | A stale engine instance is holding 19920 | Set `YOOZ_ENGINE_AUTO_RECOVER=1` for dev (SDK will SIGKILL the holder). For ship, surface the error to the user. |
 | MLXHuggingFaceMacros build failure from CLI | Macro requires explicit trust on first use | Pass `-skipMacroValidation` to xcodebuild. Xcode UI handles this prompt automatically; CI / scripts must pass the flag. |
 | `connect()` succeeds but service calls 501 | Active build variant doesn't bundle that module (e.g. Lite has no MLX STT), OR (in-process only) the route isn't implemented by `InProcessTransport` yet | Check `client.modules()` — `unavailable` modules return 501 by design. For an in-process-only gap (not module-not-bundled), see the `/v1/session/*` and Infinite rows below. |
-| `/v1/session/begin` / `/v1/session/end` throw `unsupportedOperation` (in-process) | These routes aren't wired in `InProcessTransport` yet (engine#222) — unrouted paths throw, they do not silently no-op | Per-recording state reset (KV caches, streaming buffers) doesn't fire in-process today. Handle the error (or gate the call on transport, as whisper's `SessionClient` does) until #222 lands; loopback is unaffected. |
 | Infinite calls throw `unsupportedOperation` (in-process/XPC) | Infinite is loopback-only by design — its consumer is the loopback host (super-yooz), not the in-process/XPC path | Don't wire Infinite into an in-process/XPC-packaged standalone. If you need it, use the loopback transport. |
 | Infinite `generate` returns 501 (loopback) | The active model has no runnable Swift MLX backend (only retrieval today); session state is preserved | Switch to a Swift-runtime-supported model (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B or E4B), or branch on the stable `generation_unavailable` code. Create/append/checkpoint/delete keep working regardless. |
 | Infinite models are visible but disabled | Host RAM tier cannot run that row | Use `loadState == .unavailable`, `ramTier`, and `maxContextTokens` from `/v1/infinite/models` to explain the requirement. |
 | Infinite session creation starts failing after repeated tests | Sessions are engine-owned and capped at 16 | Delete sessions explicitly with `client.infinite.deleteSession(id:)`; `/v1/session/begin` does not clean them up. |
 | Building against `XPCTransport` produces no bundle to test | Your own app hasn't packaged a `.xpc` service target yet | Not a gap in the engine — `YoozEngineXPC` in this repo is the reference implementation (engine#227). Copy its shape ("XPC service embed recipe" above) into your app's `project.yml`. |
 | XPC service builds but weights re-download per process | App and XPC service don't share an `application-groups` entitlement, or `AppGroupWeightsLocation.redirectHuggingFaceCache` wasn't called before the first HF fetch | See "Weights/app-group wiring" above. Both processes must declare the SAME group id; call the redirect at the very top of `main.swift`. |
+| `EngineStateStore`'s picker UI silently stops updating after an XPC service crash/respawn | `openEvents()`'s `AsyncStream` finished (connection interruption/invalidation) — that's the documented contract, not a bug — but nothing re-subscribed | Detect the finish (the `for await` loop in `subscribeToEvents()` returning) and call `state.start()` again, typically off your transport wrapper's own reconnect signal (e.g. `ReconnectingXPCTransport.onReconnect` in yooz-whisper). See "Engine-owned selection state" above. |
 
 ---
 
