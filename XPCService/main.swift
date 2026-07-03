@@ -44,33 +44,17 @@ if let groupID = Bundle.main.object(forInfoDictionaryKey: "YoozAppGroupIdentifie
 //
 // Fire-and-forget: does NOT block `listener.resume()` below, so the service
 // starts accepting connections immediately; `/v1/health` etc. are unaffected
-// while warmup runs in the background. Routes the load through
-// `enqueueLoad` — the SAME coalescing primitive `InProcessTransport.
-// handleBatch` and `openSTTStream` use for parakeet/fastConformer — so a
-// real request racing this warmup for the same language awaits the one
-// underlying load instead of duplicating `ParakeetModel.fromDirectory`.
-// Only the MLX-backed backends need this; Apple STT has no Metal JIT cost.
-if YoozSTTEngine.shared.currentBackend == .parakeet
-    || YoozSTTEngine.shared.currentBackend == .fastConformer {
-    Task {
-        let language = YoozSTTEngine.shared.currentLanguage
-        let loadTask = await YoozSTTEngine.shared.enqueueLoad(language: language) {
-            try await YoozSTTEngine.shared.start(language: language)
-        }
-        do {
-            try await loadTask.value
-            // The load alone only materializes weights — it does not
-            // exercise the Conformer/PredictNetwork/JointNetwork MLX
-            // kernels, which is where the JIT cost actually lives. One
-            // silent dummy transcription forces that compilation now.
-            _ = await YoozSTTEngine.shared.batchTranscribe(
-                samples: [Float](repeating: 0, count: 16_000), mode: .normal
-            )
-            NSLog("YoozEngineXPC: STT warmup complete for %@", language.rawValue)
-        } catch {
-            NSLog("YoozEngineXPC: STT warmup failed for %@: %@", language.rawValue, String(describing: error))
-        }
-    }
+// while warmup runs. Mechanics (cache-check before any download, the
+// enqueueLoad coalescing, the bounded dummy inference, backend gating) all
+// live in `YoozSTTEngine.warmupIfNeeded` — this call site is just language
+// resolution + the fire-and-forget kickoff. Runs unconditionally on every
+// spawn, including connections that never touch STT: at ~2s of warm-cost
+// once cached (0 cost, no download, when not cached — see
+// `warmupIfNeeded`'s doc), that is an acceptable tradeoff against the ~105s
+// cold-start alternative for the STT connections that do arrive.
+Task {
+    let language = await YoozSTTEngine.resolveWarmupLanguage()
+    YoozSTTEngine.shared.warmupIfNeeded(language: language)
 }
 
 // `NSXPCListener.service()`'s `resume()` does not return under normal
