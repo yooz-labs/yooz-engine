@@ -93,6 +93,22 @@ targets:
         SKIP_INSTALL: "YES"
         GENERATE_INFOPLIST_FILE: "YES"
 
+  # Pure, dependency-free helpers for YoozEngineXPCHarness's `--batch-wav`
+  # mode (whisper#280 PR #251 review). Mirrors the SwiftPM `XPCHarnessSupport`
+  # target (Package.swift) so `swift test` can reach this logic directly —
+  # the harness app target itself is deliberately not an XCTest target.
+  XPCHarnessSupport:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/XPCHarnessSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.xpcharnesssupport
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+
   EngineCore:
     type: framework
     platform: macOS
@@ -616,6 +632,8 @@ targets:
       - target: YoozEngineWire
         embed: true
       - target: YoozEngineClient
+        embed: true
+      - target: XPCHarnessSupport
         embed: true
       # Embed under Contents/XPCServices/ (xcodegen infers the destination
       # from the dependency's `xpc-service` product type). `link: false` —

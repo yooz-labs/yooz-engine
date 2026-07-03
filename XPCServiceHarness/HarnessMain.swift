@@ -39,8 +39,22 @@
 // it never calls `requestAuthorization` itself) — see "Verifying the round
 // trip" in docs/CONSUMER_INTEGRATION.md for what a passing run looks like
 // with permission granted vs. not.
+//
+// Batch mode (yooz-labs/yooz-whisper#280 regression gate): `--batch-wav
+// <path> [--expect-sentences N] [--concurrent-stream]` feeds a 16kHz
+// float32 mono WAV through the packaged service's `/v1/stt/batch` (Parakeet,
+// since that is the backend #280 was reported against) and prints
+// `BATCH_OK <chars> <elapsedMs>` plus the full text, exiting nonzero if the
+// text comes back empty. `--concurrent-stream` opens a second, live Parakeet
+// streaming session that feeds audio for the duration of the batch call —
+// reproducing the "batch fires while a stream is still open" usage pattern
+// #280 flagged as untested on the loopback exoneration runs. Requires a
+// cached Parakeet checkpoint (set `HF_HUB_CACHE` to a pre-populated cache to
+// avoid a 2.5GB download at harness start).
 
+import AVFoundation
 import Foundation
+import XPCHarnessSupport
 import YoozEngineClient
 
 @main
@@ -50,6 +64,11 @@ struct HarnessMain {
     static let serviceName = "live.yooz.engine.xpc"
 
     static func main() async {
+        if CommandLine.arguments.contains("--batch-wav") {
+            await runBatchMode()
+            return
+        }
+
         let transport = XPCTransport(serviceName: serviceName)
         let client = YoozEngineClient(transport: transport)
 
@@ -158,5 +177,242 @@ struct HarnessMain {
 
     private static func log(_ message: String) {
         FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+
+    // MARK: - Batch mode (#280)
+
+    private static func runBatchMode() async {
+        let arguments = CommandLine.arguments
+        guard let wavIndex = arguments.firstIndex(of: "--batch-wav"), wavIndex + 1 < arguments.count else {
+            log("BATCH_USAGE --batch-wav <path> [--expect-sentences N] [--concurrent-stream] [--warm-runs N] [--idle-seconds N]")
+            exit(1)
+        }
+        let wavPath = arguments[wavIndex + 1]
+        // `--expect-sentences` and `--warm-runs` are counts; a negative
+        // value is caller error, not "flag absent" (PR #251 review) — catch
+        // it here with a clear message rather than letting it trap later
+        // (`1...expected` in `sentenceCoverage`, `0..<warmRuns` below).
+        let expectSentences = HarnessArguments.intArgument(arguments, flag: "--expect-sentences")
+        if let expectSentences, expectSentences < 0 {
+            log("BATCH_USAGE --expect-sentences must be >= 0, got \(expectSentences)")
+            exit(1)
+        }
+        let concurrentStream = arguments.contains("--concurrent-stream")
+        // The XPC service is on-demand (launchd tears it down once the last
+        // connection closes) — a single-shot harness process pays a cold
+        // model-load/Metal-shader-JIT tax on its first call that a
+        // long-lived consumer app (one NSXPCConnection open for the whole
+        // app lifetime, many PTT recordings across it) only pays once.
+        // `--warm-runs N` does N throwaway transcribe calls over THIS
+        // connection before the measured run, so cold-start cost can be
+        // isolated from steady-state latency instead of contaminating
+        // every measurement.
+        let warmRuns = HarnessArguments.intArgument(arguments, flag: "--warm-runs") ?? 0
+        if warmRuns < 0 {
+            log("BATCH_USAGE --warm-runs must be >= 0, got \(warmRuns)")
+            exit(1)
+        }
+        // Idle-then-measure (team-lead follow-up on whisper#280): the 07:16
+        // live-session stall happened in a process that was already warm
+        // (streaming since 06:51, fast batches at 06:52/06:54) after ~13
+        // minutes with no STT activity — cold first-call Metal JIT cannot
+        // explain a stall in an already-warm process. `--idle-seconds N`
+        // holds the connection open but silent for N seconds after the
+        // warm-up run(s), then fires the measured batch call, to test
+        // whether idling itself (not process freshness) reintroduces the
+        // stall — e.g. via macOS App Nap throttling an unprotected
+        // headless XPC daemon, or MLX/Metal driver-level buffer reclaim.
+        let idleSeconds = HarnessArguments.intArgument(arguments, flag: "--idle-seconds") ?? 0
+        if idleSeconds < 0 {
+            log("BATCH_USAGE --idle-seconds must be >= 0, got \(idleSeconds)")
+            exit(1)
+        }
+
+        let samples: [Float]
+        do {
+            samples = try loadFloat32Samples(path: wavPath)
+        } catch {
+            log("BATCH_LOAD_FAIL \(error)")
+            exit(1)
+        }
+        log("BATCH_LOADED samples=\(samples.count) path=\(wavPath) concurrentStream=\(concurrentStream) warmRuns=\(warmRuns) idleSeconds=\(idleSeconds)")
+
+        let transport = XPCTransport(serviceName: serviceName)
+        let client = YoozEngineClient(transport: transport)
+
+        // Parakeet, not Apple STT: #280 was reported against `sttEngine=yooz-parakeet`,
+        // and the concurrent-stream hypothesis specifically needs both the
+        // batch call and the stream to share `YoozSTTEngine`'s single MLX
+        // `ParakeetModel` instance — Apple STT routes through a wholly
+        // separate actor and would not exercise that shared state at all.
+        do {
+            try await client.stt.setEngine(id: "parakeet", preload: false)
+        } catch {
+            log("BATCH_SET_ENGINE_FAIL \(error)")
+            exit(1)
+        }
+
+        for i in 0..<warmRuns {
+            let warmStart = ContinuousClock.now
+            do {
+                let warmResult = try await client.stt.transcribe(
+                    audioSamples: samples, language: .english, mode: .normal
+                )
+                let warmElapsedMs = warmStart.duration(to: .now).milliseconds
+                log("WARM_RUN \(i) chars=\(warmResult.text.count) elapsedMs=\(warmElapsedMs)")
+            } catch {
+                log("WARM_RUN \(i) FAILED elapsedMs=\(warmStart.duration(to: .now).milliseconds) error=\(error)")
+            }
+        }
+
+        if idleSeconds > 0 {
+            log("IDLE_START seconds=\(idleSeconds)")
+            // Heartbeat every 30s so a long wait is observable in the log
+            // rather than looking hung.
+            var remaining = idleSeconds
+            while remaining > 0 {
+                let chunk = min(30, remaining)
+                try? await Task.sleep(for: .seconds(chunk))
+                remaining -= chunk
+                log("IDLE_TICK remainingSeconds=\(remaining)")
+            }
+            log("IDLE_DONE")
+        }
+
+        var streamTask: Task<Void, Never>?
+        if concurrentStream {
+            streamTask = Task { await runConcurrentParakeetStream(client: client) }
+            // Let the stream actually open (model load if not already
+            // resident) before racing the batch call against it — otherwise
+            // this just measures two sequential cold-loads instead of a
+            // genuine interleave.
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+
+        let start = ContinuousClock.now
+        do {
+            let result = try await client.stt.transcribe(
+                audioSamples: samples, language: .english, mode: .normal
+            )
+            let elapsedMs = start.duration(to: .now).milliseconds
+            streamTask?.cancel()
+            log("BATCH_OK chars=\(result.text.count) elapsedMs=\(elapsedMs)")
+            log("BATCH_TEXT: \(result.text)")
+            // expectSentences == 0 means "don't check coverage" — skip the
+            // log line entirely rather than print a meaningless "0/0"
+            // (PR #251 review; negative values already exited above).
+            if let expectSentences, expectSentences > 0 {
+                let covered = HarnessArguments.sentenceCoverage(result.text, upTo: expectSentences)
+                log("SENTENCE_COVERAGE \(covered)/\(expectSentences)")
+            }
+            if result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                log("BATCH_EMPTY")
+                exit(1)
+            }
+            exit(0)
+        } catch {
+            let elapsedMs = start.duration(to: .now).milliseconds
+            streamTask?.cancel()
+            log("BATCH_FAIL elapsedMs=\(elapsedMs) error=\(error)")
+            exit(1)
+        }
+    }
+
+    /// Opens a live Parakeet streaming session and feeds it small audio
+    /// chunks in a loop (silence is enough — the point is to keep the
+    /// shared `StreamingTranscriber`/`ParakeetModel` busy with MLX
+    /// submissions concurrently with the batch call, not to produce a
+    /// meaningful transcript) until cancelled by the batch call completing.
+    /// Drains `receive()` concurrently so the session's result queue can't
+    /// grow unbounded over the run.
+    private static func runConcurrentParakeetStream(client: YoozEngineClient) async {
+        do {
+            let stream = try await client.stt.startStream(language: .english, mode: .normal)
+            defer { stream.close() }
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    // ~64ms frames at 16kHz, matching the real capture cadence
+                    // documented on `StreamingTranscriber`'s partial-emission
+                    // cadence floor.
+                    let frame = [Float](repeating: 0, count: 1_024)
+                    while !Task.isCancelled {
+                        do {
+                            try await stream.sendAudio(frame)
+                        } catch {
+                            return
+                        }
+                        try? await Task.sleep(for: .milliseconds(64))
+                    }
+                }
+                group.addTask {
+                    while !Task.isCancelled {
+                        guard let result = try? await stream.receive() else { return }
+                        _ = result
+                    }
+                }
+                await group.next()
+                group.cancelAll()
+            }
+        } catch {
+            log("CONCURRENT_STREAM_FAIL \(error)")
+        }
+    }
+
+    /// Loads a WAV file's audio as `[Float]` via `AVAudioFile`, converting to
+    /// 16kHz mono Float32 if the file isn't already in that format (the test
+    /// corpus is, but this keeps the harness usable against arbitrary WAVs).
+    private static func loadFloat32Samples(path: String) throws -> [Float] {
+        let url = URL(fileURLWithPath: path)
+        let file = try AVAudioFile(forReading: url)
+        let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
+        )!
+
+        guard let sourceBuffer = AVAudioPCMBuffer(
+            pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)
+        ) else {
+            throw HarnessError.audioBufferAllocationFailed
+        }
+        try file.read(into: sourceBuffer)
+
+        if file.processingFormat.sampleRate == 16_000,
+           file.processingFormat.channelCount == 1,
+           file.processingFormat.commonFormat == .pcmFormatFloat32 {
+            return Array(UnsafeBufferPointer(start: sourceBuffer.floatChannelData![0], count: Int(sourceBuffer.frameLength)))
+        }
+
+        guard let converter = AVAudioConverter(from: file.processingFormat, to: targetFormat) else {
+            throw HarnessError.converterCreationFailed
+        }
+        let ratio = targetFormat.sampleRate / file.processingFormat.sampleRate
+        let outCapacity = AVAudioFrameCount(Double(sourceBuffer.frameLength) * ratio) + 1_024
+        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
+            throw HarnessError.audioBufferAllocationFailed
+        }
+        var error: NSError?
+        var suppliedSource = false
+        converter.convert(to: outBuffer, error: &error) { _, statusPointer in
+            if suppliedSource {
+                // The single source buffer has already been handed over —
+                // signal end of input, not "no data YET" (PR #251 review:
+                // `.noDataNow` told the converter more input might still
+                // arrive, so it silently stopped short instead of flushing
+                // the tail — reproduced as 799 lost frames, ~50ms, on a
+                // 44.1kHz stereo -> 16kHz mono conversion). `.endOfStream`
+                // tells it this is genuinely all the input there is.
+                statusPointer.pointee = .endOfStream
+                return nil
+            }
+            suppliedSource = true
+            statusPointer.pointee = .haveData
+            return sourceBuffer
+        }
+        if let error { throw error }
+        return Array(UnsafeBufferPointer(start: outBuffer.floatChannelData![0], count: Int(outBuffer.frameLength)))
+    }
+
+    private enum HarnessError: Error {
+        case audioBufferAllocationFailed
+        case converterCreationFailed
     }
 }
