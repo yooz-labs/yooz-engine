@@ -23,6 +23,16 @@
 # re-signs each, mirroring scripts/build-whisper-helper.sh's proven
 # bottom-up pattern (that script hit the same class of problem for the
 # `.app` variants -- see issue #38).
+#
+# PR #256 review (C1): the final `.xpc` re-sign MUST pass `--entitlements`.
+# `codesign --force --sign X` with no `--entitlements` flag does not carry
+# the bundle's existing entitlements forward into the new signature -- it
+# produces a validly-signed but entitlement-LESS `.xpc`, silently dropping
+# `app-sandbox`, `network.client`, and `application-groups` on every build.
+# `codesign --verify` and a plain health round trip both stay green in that
+# state (the signature itself is valid), which is exactly why this needs a
+# capability check, not just a signature check -- see
+# scripts/verify-xpc-portability.sh's entitlements assertion.
 set -euo pipefail
 
 log() { printf "[resign-embedded-xpc] %s\n" "$*"; }
@@ -30,6 +40,7 @@ fail() { printf "[resign-embedded-xpc] ERROR: %s\n" "$*" >&2; exit 1; }
 
 : "${BUILT_PRODUCTS_DIR:?must run from an Xcode build phase}"
 : "${CONTENTS_FOLDER_PATH:?must run from an Xcode build phase}"
+: "${SRCROOT:?must run from an Xcode build phase}"
 
 # The embedded .xpc's own bundle name. This repo's own harness always
 # embeds it under its own product name; a consumer app that renames the
@@ -38,13 +49,23 @@ fail() { printf "[resign-embedded-xpc] ERROR: %s\n" "$*" >&2; exit 1; }
 XPC_BUNDLE_NAME="${XPC_BUNDLE_NAME:-YoozEngineXPC.xpc}"
 XPC_PATH="$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/XPCServices/$XPC_BUNDLE_NAME"
 
+# The entitlements to re-apply to the .xpc's own signature. Defaults to
+# this repo's own XPCService/YoozEngineXPC.entitlements (the same file
+# CODE_SIGN_ENTITLEMENTS already points the target's own build at); a
+# consumer app that renames the copy overrides XPC_ENTITLEMENTS the same
+# way it overrides XPC_BUNDLE_NAME.
+XPC_ENTITLEMENTS="${XPC_ENTITLEMENTS:-$SRCROOT/XPCService/YoozEngineXPC.entitlements}"
+
 [[ -d "$XPC_PATH" ]] || fail "embedded XPC service not found at $XPC_PATH"
+[[ -f "$XPC_ENTITLEMENTS" ]] || fail "entitlements file not found: $XPC_ENTITLEMENTS"
 
 IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
-log "re-signing $XPC_PATH (identity: $IDENTITY)"
+log "re-signing $XPC_PATH (identity: $IDENTITY, entitlements: $XPC_ENTITLEMENTS)"
 
 # Deepest-first: nested frameworks before the .xpc bundle itself, matching
-# build-whisper-helper.sh's "sign deepest-first" convention.
+# build-whisper-helper.sh's "sign deepest-first" convention. Frameworks
+# carry no entitlements of their own (only a spawned process -- the .xpc
+# itself -- does), so they're re-signed without --entitlements.
 shopt -s nullglob
 frameworks=("$XPC_PATH"/Contents/Frameworks/*.framework)
 shopt -u nullglob
@@ -55,7 +76,7 @@ for fw in "${frameworks[@]}"; do
 done
 
 log "  sign: $(basename "$XPC_PATH")"
-codesign --force --sign "$IDENTITY" "$XPC_PATH" \
+codesign --force --sign "$IDENTITY" --entitlements "$XPC_ENTITLEMENTS" "$XPC_PATH" \
     || fail "codesign failed for $XPC_PATH"
 
 log "DONE"
