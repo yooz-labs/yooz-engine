@@ -110,6 +110,34 @@ public final class InProcessTransport: EngineTransport {
         return String(path[path.index(after: q)...])
     }
 
+    /// Await `task`, converting a `LoadDeadlineExceeded` timeout into a
+    /// typed `YoozEngineError` (PR #255 review, finding I4). The raw
+    /// `LoadDeadlineExceeded` struct is not a `YoozEngineError`, so
+    /// `XPCErrorBridge.toNSError` falls through to its non-typed-error
+    /// branch and the client-side `toYoozEngineError` collapses it to
+    /// `.engineNotReachable` — a `modelLoadDeadlineSeconds` (600s) load
+    /// timeout would then look exactly like a dead service to the caller,
+    /// which can trigger a reconnect storm instead of a "still loading"
+    /// message. Shared by every call site that bounds an `enqueueLoad`
+    /// task with `awaitLoadTask` (`handleBatch`, `openSTTStream`,
+    /// `handleSTTLoad`) so the mapping can't drift between them.
+    ///
+    /// Internal (not `private`), not for any external caller — only so
+    /// `Tests/YoozEngineInProcessTests` can exercise the conversion
+    /// directly via `@testable import` (PR #255 review, finding I5).
+    func awaitLoadOrTypedDeadline(
+        _ task: Task<Void, Error>, deadlineSeconds: Double
+    ) async throws {
+        do {
+            try await awaitLoadTask(task, deadlineSeconds: deadlineSeconds)
+        } catch is LoadDeadlineExceeded {
+            throw YoozEngineError.serverError(
+                statusCode: 504, code: "load_deadline_exceeded",
+                message: "STT model load did not complete within \(Int(deadlineSeconds))s"
+            )
+        }
+    }
+
     public func connect() async throws {
         await host.bootstrap()
     }
@@ -236,13 +264,21 @@ public final class InProcessTransport: EngineTransport {
             throw YoozEngineError.unsupportedOperation(operation: "streaming qwen3 preview")
 
         case .parakeet, .fastConformer:
+            // Await any in-flight warmup first (engine#252, PR #255 review
+            // finding C2) so a stream open racing it runs on already-
+            // compiled kernels instead of contending with the warmup's own
+            // JIT-compiling dummy transcription. No-op if none is in
+            // flight.
+            await YoozSTTEngine.shared.awaitWarmupIfNeeded(
+                deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+            )
             // Bound the (possibly first-run) load so a stream open can't hang
             // indefinitely; routes through the same cancellable `enqueueLoad`
             // primitive the load endpoint uses.
             let task = await YoozSTTEngine.shared.enqueueLoad(language: lang) {
                 try await YoozSTTEngine.shared.start(language: lang)
             }
-            try await awaitLoadTask(
+            try await awaitLoadOrTypedDeadline(
                 task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
             )
             guard let transcriber = YoozSTTEngine.shared.createBatchTranscriber(mode: audioMode) else {
@@ -399,7 +435,31 @@ public final class InProcessTransport: EngineTransport {
         let enterMessage = "stt.batch.enter samples=\(request.samples.count) mode=\(mode.rawValue) "
             + "language=\(request.language) aligned=\(request.aligned == true)"
         Self.sttLogger.log("\(enterMessage, privacy: .public)")
-        try await YoozSTTEngine.shared.start(language: language)
+        switch YoozSTTEngine.shared.currentBackend {
+        case .parakeet, .fastConformer:
+            // Await any in-flight warmup first (engine#252, PR #255 review
+            // finding C2) — see the matching comment in `openSTTStream`.
+            await YoozSTTEngine.shared.awaitWarmupIfNeeded(
+                deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+            )
+            // Coalescing + bounded wait (engine#252): route through the same
+            // enqueueLoad/awaitLoadTask primitive openSTTStream already uses
+            // for these backends, so a proactive startup warmup
+            // (XPCService/main.swift) racing this request for the same
+            // language shares the one underlying load instead of each
+            // independently paying `ParakeetModel.fromDirectory`'s full
+            // cost and racing to assign `model` under `YoozSTTEngine`'s
+            // lock. Previously this called `start(language:)` directly,
+            // with no dedup against a concurrent load for the same
+            // language and no bound on how long a wedged load could hang
+            // the caller.
+            let loadTask = await YoozSTTEngine.shared.enqueueLoad(language: language) {
+                try await YoozSTTEngine.shared.start(language: language)
+            }
+            try await awaitLoadOrTypedDeadline(loadTask, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds)
+        default:
+            try await YoozSTTEngine.shared.start(language: language)
+        }
 
         // `batchTranscribe` is non-throwing and returns `ParakeetResult.empty`
         // when no model is loaded — indistinguishable from genuine silence. The
@@ -511,7 +571,7 @@ public final class InProcessTransport: EngineTransport {
                 )
             }
             if wait {
-                try await awaitLoadTask(
+                try await awaitLoadOrTypedDeadline(
                     task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
                 )
             } else {

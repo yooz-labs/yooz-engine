@@ -284,6 +284,13 @@ let package = Package(
                 // dispatch tests can `@testable import LLMModule` for the
                 // FoundationModels availability self-skip gate.
                 "LLMModule",
+                // Direct dep (also transitive via YoozEngineInProcess), PR
+                // #255 review: the warmup tests (`enqueueLoad` coalescing,
+                // cache-miss skip, language resolution) touch
+                // `YoozSTTEngine`/`STTLanguage` directly, not just through
+                // the `YoozEngineClient` abstraction the pre-existing
+                // in-process tests use.
+                "STTModule",
                 .product(name: "MLX", package: "mlx-swift"),
             ],
             path: "Tests/YoozEngineInProcessTests"
