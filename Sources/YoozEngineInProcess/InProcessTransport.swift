@@ -3,6 +3,7 @@ import EngineCore
 import Foundation
 import GrammarModule
 import LLMModule
+import OSLog
 import STTModule
 import VADModule
 import YoozEngineClient
@@ -49,6 +50,17 @@ public final class InProcessTransport: EngineTransport {
     public let port = 0
 
     private let host: EngineInProcessHost
+
+    /// STT batch forensics (yooz-labs/yooz-whisper#280): same
+    /// subsystem/category as `XPCServiceHandler`'s request-forensics logger
+    /// so `log stream --predicate 'subsystem == "live.yooz.engine"'` shows
+    /// the full XPC request -> batch handler timeline in one stream. This
+    /// path is reached both in-process and (via `XPCServiceHandler` ->
+    /// `InProcessTransport`) over XPC, so the log lines carry no
+    /// transport tag of their own — cross-reference against the XPC
+    /// request logger's timestamps to attribute elapsed time to
+    /// marshaling vs. transcription.
+    private static let sttLogger = Logger(subsystem: "live.yooz.engine", category: "xpc")
 
     /// The typed endpoint table (engine#225 Phase B): converted route
     /// families dispatch through this before the legacy switches below. The
@@ -378,6 +390,15 @@ public final class InProcessTransport: EngineTransport {
             )
         }
         let mode = STTModule.AudioMode(rawValue: request.mode) ?? .normal
+        let start = ContinuousClock.now
+        // yooz-labs/yooz-whisper#280 forensics: log the DECODED sample count
+        // (post-JSONDecoder), not the raw body byte count — a mismatch
+        // against the caller's expected sample count (bodyBytes / ~10 per
+        // JSON float) would pinpoint decode-time truncation vs. a downstream
+        // transcription-time loss.
+        let enterMessage = "stt.batch.enter samples=\(request.samples.count) mode=\(mode.rawValue) "
+            + "language=\(request.language) aligned=\(request.aligned == true)"
+        Self.sttLogger.log("\(enterMessage, privacy: .public)")
         try await YoozSTTEngine.shared.start(language: language)
 
         // `batchTranscribe` is non-throwing and returns `ParakeetResult.empty`
@@ -412,7 +433,11 @@ public final class InProcessTransport: EngineTransport {
                 language: request.language,
                 tokens: tokens
             )
-            return try JSONEncoder().encode(response)
+            let data = try JSONEncoder().encode(response)
+            let exitMessage = "stt.batch.exit chars=\(result.text.count) "
+                + "elapsedMs=\(start.duration(to: .now).milliseconds) aligned=true"
+            Self.sttLogger.log("\(exitMessage, privacy: .public)")
+            return data
         }
 
         let result = await YoozSTTEngine.shared.batchTranscribe(
@@ -426,7 +451,11 @@ public final class InProcessTransport: EngineTransport {
             language: request.language,
             tokens: nil
         )
-        return try JSONEncoder().encode(response)
+        let data = try JSONEncoder().encode(response)
+        let exitMessage = "stt.batch.exit chars=\(result.text.count) "
+            + "elapsedMs=\(start.duration(to: .now).milliseconds) aligned=false"
+        Self.sttLogger.log("\(exitMessage, privacy: .public)")
+        return data
     }
 
     /// Pre-load the active backend's STT model for a language and return the

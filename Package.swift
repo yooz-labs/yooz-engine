@@ -76,6 +76,14 @@ let package = Package(
         // in-sandbox. Depends on YoozEngineClient (SDK + transport seam) plus the
         // module products it routes to.
         .library(name: "YoozEngineInProcess", targets: ["YoozEngineInProcess"]),
+
+        // Pure, dependency-free helpers for YoozEngineXPCHarness's
+        // `--batch-wav` mode (whisper#280 PR #251 review). The harness
+        // app target itself is deliberately not an XCTest target (headless
+        // build environment can't attach an app-hosted XCTest runner), so
+        // its pure logic lives here instead, where `swift test` can reach
+        // it directly.
+        .library(name: "XPCHarnessSupport", targets: ["XPCHarnessSupport"]),
     ],
     dependencies: [
         // mlx-swift 0.31.4 release (what mlx-swift-lm main declares). Pin the
@@ -235,6 +243,10 @@ let package = Package(
             ],
             path: "Sources/YoozEngineInProcess"
         ),
+        .target(
+            name: "XPCHarnessSupport",
+            path: "Sources/XPCHarnessSupport"
+        ),
         // Decode-compat fixture tests (#225): proves the post-refactor
         // `YoozEngineWire` types still decode the committed
         // `Tests/Fixtures/wire-v0.7.5/*.json` captured from the pre-refactor
@@ -257,6 +269,11 @@ let package = Package(
             name: "YoozEngineClientTests",
             dependencies: ["YoozEngineClient"],
             path: "Tests/YoozEngineClientTests"
+        ),
+        .testTarget(
+            name: "XPCHarnessSupportTests",
+            dependencies: ["XPCHarnessSupport"],
+            path: "Tests/XPCHarnessSupportTests"
         ),
         .testTarget(
             name: "YoozEngineInProcessTests",
