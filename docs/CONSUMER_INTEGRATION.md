@@ -29,7 +29,7 @@ Pick a transport based on how your app ships, not on which modules you need (mod
 | Transport | Use when | Status as of 2026-07 |
 |---|---|---|
 | **In-process** (`YoozEngineInProcess` SPM product, `InProcessTransport`) | You're an App Store standalone app. No socket, no separate process — the engine actors run in your sandbox. **Recommended today.** Yooz Whisper ships this (pinned by revision in its `project.yml`, engine 0.7.5 at time of writing). | Shipping. One gap: `/v1/infinite/*` is intentionally unsupported in-process — Infinite's consumer is the loopback host. (The former `/v1/session/*` gap closed in engine#232; sessions dispatch through the shared endpoint table on every transport.) |
-| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Packaged and provable (engine#227), full route surface (engine#244).** This repo's own `project.yml` ships `YoozEngineXPC` (the `.xpc` target), entitlements, and a dev-only harness that round-trips health + streaming STT through it — see "XPC service embed recipe" below. `/v1/events` bridges over the same callback-proxy shape as streaming STT (engine#244), so a picker built on `EngineStateStore` now works on all three transports. No shipping consumer app has adopted XPC yet; Whisper's migration is a follow-up (whisper#267), in-process stays its fallback in the meantime. |
+| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Packaged, self-contained, and provable (engine#227, engine#248), full route surface (engine#244).** This repo's own `project.yml` ships `YoozEngineXPC` (the `.xpc` target), entitlements, and a dev-only harness that round-trips health + streaming STT through it in a Release build copied outside DerivedData (`scripts/verify-xpc-portability.sh`) — see "XPC service embed recipe" below. `/v1/events` bridges over the same callback-proxy shape as streaming STT (engine#244), so a picker built on `EngineStateStore` now works on all three transports. No shipping consumer app has adopted XPC yet; Whisper's migration is a follow-up (whisper#267), in-process stays its fallback in the meantime. |
 | **Loopback** (`HTTPTransport`, this document's default) | You're the super-yooz host, or doing local dev/testing. Not valid for an App Store standalone — the unsandboxed helper `.app` under `Contents/Helpers/` fails App Store review (ITMS-90296). | Shipping, default. |
 
 In-process integration looks like this instead of the TL;DR above:
@@ -118,6 +118,25 @@ no GPU entitlement (proven precedent: Pico AI Server, cited in
 for the full template, including the `YoozAppGroupIdentifier` key the
 snippet above reads.
 
+**Self-containment (engine#248):** an `xpc-service` bundle does not get
+Xcode's automatic "Embed Frameworks" treatment for SPM dynamic package
+products the way an `.app` target does — `EngineCore`/`YoozEngineInProcess`
+and everything they pull in transitively (MLX, MLXNN, MLXLMCommon, Hub,
+Tokenizers, ...) build into the shared `PackageFrameworks` build products
+directory but never get copied into `YourAppXPC.xpc`'s own
+`Contents/Frameworks`. Debug builds are masked by an absolute,
+machine-local DerivedData `LC_RPATH` Xcode also writes; a Release build
+crash-loops at spawn with `dyld: Library not loaded: @rpath/MLX.framework/...`.
+Add the equivalent of this repo's `scripts/embed-xpc-package-frameworks.sh`
+as a `postbuildScripts` phase (`basedOnDependencyAnalysis: false`) on your
+own `YourAppXPC` target — it copies `PackageFrameworks/*.framework` into
+the `.xpc`'s `Contents/Frameworks` and signs each copy with
+`$EXPANDED_CODE_SIGN_IDENTITY` so they satisfy hardened-runtime library
+validation (which requires the loaded framework to share the loading
+binary's Team ID). Copy the script's header comment along with it — it
+documents why signing has to happen there and not be left to Xcode's own
+implicit sign step for this bundle.
+
 ### 2. Entitlements — sandboxed, never `inherit`
 
 ```xml
@@ -147,6 +166,30 @@ YourApp:
 xcodegen infers the `Contents/XPCServices/` destination automatically from
 the dependency's `xpc-service` product type — no manual Copy Files phase
 needed.
+
+**A second, distinct self-containment gap (engine#248) surfaces right
+here:** Xcode's embed step strips `Modules/*.swiftmodule` interface
+content from each nested framework inside the `.xpc` as part of copying it
+into `YourApp` — a size optimization — without re-signing the now-smaller
+framework, which invalidates its signature (`codesign --verify` reports "a
+sealed resource is missing or invalid"). Add a second `postbuildScripts`
+phase to `YourApp` (this repo's `scripts/resign-embedded-xpc.sh` is the
+template) that re-signs every framework under
+`Contents/XPCServices/YourAppXPC.xpc/Contents/Frameworks` plus the `.xpc`
+itself, AFTER the embed Copy Files phase runs. Point `XPC_ENTITLEMENTS`
+at YOUR app's entitlements file for the service — the script's default
+is this repo's own `XPCService/YoozEngineXPC.entitlements`, and the final
+`.xpc` re-sign must carry your sandbox/app-group/network keys or the
+service silently loses those capabilities (the signature still verifies). Both this and the step 1
+script only need `$EXPANDED_CODE_SIGN_IDENTITY` to resolve to your app's
+real signing identity to work correctly in a shipping build — this repo's
+own dev-only ad-hoc default (`CODE_SIGN_IDENTITY: "-"`) additionally needs
+`com.apple.security.cs.disable-library-validation` to spawn locally
+(`scripts/dev-adhoc-xpc.entitlements`, used only by
+`scripts/verify-xpc-portability.sh`), because two independently ad-hoc
+signed artifacts never share a Team ID; skip that entitlement in your own
+entitlements once you're signing with a real identity, since matching Team
+IDs already satisfies library validation without it.
 
 ### 4. Talk to it from your app
 
@@ -630,6 +673,9 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 | Infinite models are visible but disabled | Host RAM tier cannot run that row | Use `loadState == .unavailable`, `ramTier`, and `maxContextTokens` from `/v1/infinite/models` to explain the requirement. |
 | Infinite session creation starts failing after repeated tests | Sessions are engine-owned and capped at 16 | Delete sessions explicitly with `client.infinite.deleteSession(id:)`; `/v1/session/begin` does not clean them up. |
 | Building against `XPCTransport` produces no bundle to test | Your own app hasn't packaged a `.xpc` service target yet | Not a gap in the engine — `YoozEngineXPC` in this repo is the reference implementation (engine#227). Copy its shape ("XPC service embed recipe" above) into your app's `project.yml`. |
+| `.xpc` service crash-loops in Release only (`dyld: Library not loaded: @rpath/MLX.framework/...`), works fine in Debug | Debug is masked by an absolute, machine-local DerivedData `LC_RPATH`; Release has none. SPM dynamic package frameworks were never embedded into the `.xpc`'s own `Contents/Frameworks` (engine#248) | Add the `postbuildScripts` embed phase from "XPC service embed recipe" step 1 to your own `.xpc` target. |
+| Embedded `.xpc` fails `codesign --verify` ("a sealed resource is missing or invalid") only after being embedded into the host app, even though it verified fine standalone | Xcode's embed-into-app step strips `Modules/*.swiftmodule` from nested frameworks without re-signing them (engine#248) | Add the `postbuildScripts` re-sign phase from "XPC service embed recipe" step 3 to your app target, AFTER the embed Copy Files phase. |
+| Consumer that COPIES the prebuilt `dist/YoozEngineXPC.xpc` artifact (rather than building the `xpc-service` target from source per this recipe — this is whisper's actual pattern, `scripts/embed-engine-xpc.sh`) sees the service fail library validation or lose capabilities after re-signing | A shallow `codesign --force --sign <identity>` on the copied `.xpc` re-signs only the OUTER bundle: the nested frameworks stay signed with THIS repo's own identity — a Team ID mismatch under hardened-runtime library validation, since they were never re-signed with the consumer's own identity. (whisper's `embed-engine-xpc.sh` already re-applies its own resolved entitlements to the outer bundle correctly; the nested-framework gap is what remains. Separately, ANY re-sign script must pass `--entitlements` — `codesign --force` does not carry entitlements forward, and the resulting entitlement-less signature still verifies clean; see the C1 finding on engine PR #256) | Deep-re-sign every nested framework under `Contents/Frameworks` with your OWN identity, THEN re-sign the `.xpc` itself with `--entitlements` pointing at your OWN resolved entitlements file — mirroring `scripts/resign-embedded-xpc.sh` in this repo, not just a single flat `codesign --force`. Tracked consumer-side as whisper#276. |
 | XPC service builds but weights re-download per process | App and XPC service don't share an `application-groups` entitlement, or `AppGroupWeightsLocation.redirectHuggingFaceCache` wasn't called before the first HF fetch | See "Weights/app-group wiring" above. Both processes must declare the SAME group id; call the redirect at the very top of `main.swift`. |
 | `EngineStateStore`'s picker UI silently stops updating after an XPC service crash/respawn | `openEvents()`'s `AsyncStream` finished (connection interruption/invalidation) — that's the documented contract, not a bug — but nothing re-subscribed | Detect the finish (the `for await` loop in `subscribeToEvents()` returning) and call `state.start()` again, typically off your transport wrapper's own reconnect signal (e.g. `ReconnectingXPCTransport.onReconnect` in yooz-whisper). See "Engine-owned selection state" above. |
 

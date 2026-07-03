@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    dev-adhoc-xpc.entitlements — engine#248 local verification ONLY.
+
+    Used exclusively by scripts/verify-xpc-portability.sh as a
+    CODE_SIGN_ENTITLEMENTS override for the Release harness build. NOT a
+    consumer-facing template (that's XPCService/YoozEngineXPC.entitlements,
+    which a real app copies verbatim per docs/CONSUMER_INTEGRATION.md's
+    "XPC service embed recipe") and NOT used by any default `xcodebuild
+    build` invocation -- project.yml's YoozEngineXPC/YoozEngineXPCHarness
+    targets keep pointing at the real entitlements (or none, for the
+    harness).
+
+    Adds `com.apple.security.cs.disable-library-validation` on top of the
+    same app-sandbox/network/application-groups baseline
+    `XPCService/YoozEngineXPC.entitlements` declares. Ad-hoc-signed code
+    (`CODE_SIGN_IDENTITY: "-"`, this repo's own dev-only default -- see
+    that target's project.yml comment) has no Team Identifier at all, and
+    hardened-runtime library validation rejects loading ANY ad-hoc-signed
+    framework whose signature doesn't share the loading binary's team --
+    two independently ad-hoc-signed artifacts never satisfy that check,
+    even when both say "-". A REAL team-signed build (Developer ID /
+    Apple Distribution, what every shipping consumer app uses) does not
+    hit this at all: matching Team IDs across the executable and its
+    nested frameworks is exactly what scripts/embed-xpc-package-frameworks.sh
+    and scripts/resign-embedded-xpc.sh already produce by signing
+    everything with $EXPANDED_CODE_SIGN_IDENTITY. This file exists purely
+    so the local proof can exercise a real hardened-runtime spawn without
+    requiring a provisioned Developer Portal identity in the build
+    environment -- it is not a statement that shipping XPC services should
+    disable library validation.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>$(TeamIdentifierPrefix)live.yooz.engine.shared</string>
+    </array>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

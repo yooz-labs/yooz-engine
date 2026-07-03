@@ -545,6 +545,20 @@ targets:
   # Dev-only within this repo: nothing here embeds `YoozEngineXPC.xpc`
   # except `YoozEngineXPCHarness` below, which proves the packaging round
   # trips but is never archived/shipped.
+  #
+  # Self-contained in Release (engine#248): `postbuildScripts` below runs
+  # `scripts/embed-xpc-package-frameworks.sh`, which copies
+  # `PackageFrameworks/*.framework` (MLX, Cmlx, Hub, MLXNN, MLXLMCommon,
+  # Tokenizers_*, ...) into this target's own `Contents/Frameworks` and
+  # signs each copy — xcodegen has no embed support for `package:`
+  # dependencies (PR #240), and `.xpc` bundles don't get Xcode's automatic
+  # package-embedding the way `.app` targets do (the script's header
+  # comment has the full root cause). A plain `xcodebuild build` of this
+  # target, in Debug or Release, now produces a `.xpc` that resolves its
+  # own frameworks without depending on any DerivedData-relative rpath —
+  # consumers embedding this target (or copying its shape per
+  # docs/CONSUMER_INTEGRATION.md's "XPC service embed recipe") get the
+  # same self-containment for free.
   YoozEngineXPC:
     type: xpc-service
     platform: macOS
@@ -595,6 +609,16 @@ targets:
         embed: true
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
+    postbuildScripts:
+      # basedOnDependencyAnalysis: false -- no declared input/output files,
+      # so this must always run rather than being skipped by Xcode's
+      # incremental-build heuristics. Runs before Xcode's own implicit
+      # code-signing step for this target (see the script's header comment
+      # for why that ordering is load-bearing).
+      - path: scripts/embed-xpc-package-frameworks.sh
+        name: "Embed SPM Package Frameworks (engine#248)"
+        shell: /bin/bash
+        basedOnDependencyAnalysis: false
 
   # Dev-only harness (engine#227) — NOT shipped, NOT archived. Embeds
   # `YoozEngineXPC.xpc` under its own `Contents/XPCServices/` and round-trips
@@ -643,6 +667,20 @@ targets:
         embed: true
         codeSign: true
         link: false
+    postbuildScripts:
+      # engine#248: Xcode's "Embed Frameworks" copy of the already-signed
+      # YoozEngineXPC.xpc into Contents/XPCServices strips
+      # Modules/*.swiftmodule content from its nested SPM package
+      # frameworks (a size optimization for embedded frameworks) without
+      # re-signing them, invalidating their CodeDirectory. Must run AFTER
+      # that embed (postbuildScripts run after Copy Files phases) and
+      # before this target's own implicit code-signing step. Consumer apps
+      # following docs/CONSUMER_INTEGRATION.md's "XPC service embed
+      # recipe" need the equivalent script phase for the same reason.
+      - path: scripts/resign-embedded-xpc.sh
+        name: "Re-sign Embedded XPC Service (engine#248)"
+        shell: /bin/bash
+        basedOnDependencyAnalysis: false
 
   YoozEngineTests:
     type: bundle.unit-test
