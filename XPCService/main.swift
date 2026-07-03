@@ -5,6 +5,7 @@
 
 import EngineCore
 import Foundation
+import STTModule
 import YoozEngineClient
 import YoozEngineInProcess
 
@@ -30,6 +31,46 @@ import YoozEngineInProcess
 // `AppGroupWeightsLocation`'s documented fallback contract.
 if let groupID = Bundle.main.object(forInfoDictionaryKey: "YoozAppGroupIdentifier") as? String {
     AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier: groupID)
+}
+
+// Proactive STT warmup (engine#252, yooz-labs/yooz-whisper#280 follow-up).
+// This service is on-demand (launchd tears it down once the last connection
+// closes) and never stays warm across app launches the way the loopback host
+// does. Measured: the first Parakeet batch call in a freshly-launched
+// process took ~105s for 111s of audio (first-ever Metal/MLX shader JIT
+// compilation for this binary), vs. ~4s for a second call in the same,
+// now-warm process — matching the loopback baseline exactly. Pay that cost
+// here, off the user's first real request, instead of on it.
+//
+// Fire-and-forget: does NOT block `listener.resume()` below, so the service
+// starts accepting connections immediately; `/v1/health` etc. are unaffected
+// while warmup runs in the background. Routes the load through
+// `enqueueLoad` — the SAME coalescing primitive `InProcessTransport.
+// handleBatch` and `openSTTStream` use for parakeet/fastConformer — so a
+// real request racing this warmup for the same language awaits the one
+// underlying load instead of duplicating `ParakeetModel.fromDirectory`.
+// Only the MLX-backed backends need this; Apple STT has no Metal JIT cost.
+if YoozSTTEngine.shared.currentBackend == .parakeet
+    || YoozSTTEngine.shared.currentBackend == .fastConformer {
+    Task {
+        let language = YoozSTTEngine.shared.currentLanguage
+        let loadTask = await YoozSTTEngine.shared.enqueueLoad(language: language) {
+            try await YoozSTTEngine.shared.start(language: language)
+        }
+        do {
+            try await loadTask.value
+            // The load alone only materializes weights — it does not
+            // exercise the Conformer/PredictNetwork/JointNetwork MLX
+            // kernels, which is where the JIT cost actually lives. One
+            // silent dummy transcription forces that compilation now.
+            _ = await YoozSTTEngine.shared.batchTranscribe(
+                samples: [Float](repeating: 0, count: 16_000), mode: .normal
+            )
+            NSLog("YoozEngineXPC: STT warmup complete for %@", language.rawValue)
+        } catch {
+            NSLog("YoozEngineXPC: STT warmup failed for %@: %@", language.rawValue, String(describing: error))
+        }
+    }
 }
 
 // `NSXPCListener.service()`'s `resume()` does not return under normal

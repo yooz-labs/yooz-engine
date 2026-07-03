@@ -399,7 +399,26 @@ public final class InProcessTransport: EngineTransport {
         let enterMessage = "stt.batch.enter samples=\(request.samples.count) mode=\(mode.rawValue) "
             + "language=\(request.language) aligned=\(request.aligned == true)"
         Self.sttLogger.log("\(enterMessage, privacy: .public)")
-        try await YoozSTTEngine.shared.start(language: language)
+        switch YoozSTTEngine.shared.currentBackend {
+        case .parakeet, .fastConformer:
+            // Coalescing + bounded wait (engine#252): route through the same
+            // enqueueLoad/awaitLoadTask primitive openSTTStream already uses
+            // for these backends, so a proactive startup warmup
+            // (XPCService/main.swift) racing this request for the same
+            // language shares the one underlying load instead of each
+            // independently paying `ParakeetModel.fromDirectory`'s full
+            // cost and racing to assign `model` under `YoozSTTEngine`'s
+            // lock. Previously this called `start(language:)` directly,
+            // with no dedup against a concurrent load for the same
+            // language and no bound on how long a wedged load could hang
+            // the caller.
+            let loadTask = await YoozSTTEngine.shared.enqueueLoad(language: language) {
+                try await YoozSTTEngine.shared.start(language: language)
+            }
+            try await awaitLoadTask(loadTask, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds)
+        default:
+            try await YoozSTTEngine.shared.start(language: language)
+        }
 
         // `batchTranscribe` is non-throwing and returns `ParakeetResult.empty`
         // when no model is loaded — indistinguishable from genuine silence. The

@@ -184,7 +184,7 @@ struct HarnessMain {
     private static func runBatchMode() async {
         let arguments = CommandLine.arguments
         guard let wavIndex = arguments.firstIndex(of: "--batch-wav"), wavIndex + 1 < arguments.count else {
-            log("BATCH_USAGE --batch-wav <path> [--expect-sentences N] [--concurrent-stream]")
+            log("BATCH_USAGE --batch-wav <path> [--expect-sentences N] [--concurrent-stream] [--warm-runs N] [--idle-seconds N]")
             exit(1)
         }
         let wavPath = arguments[wavIndex + 1]
@@ -212,6 +212,21 @@ struct HarnessMain {
             log("BATCH_USAGE --warm-runs must be >= 0, got \(warmRuns)")
             exit(1)
         }
+        // Idle-then-measure (team-lead follow-up on whisper#280): the 07:16
+        // live-session stall happened in a process that was already warm
+        // (streaming since 06:51, fast batches at 06:52/06:54) after ~13
+        // minutes with no STT activity — cold first-call Metal JIT cannot
+        // explain a stall in an already-warm process. `--idle-seconds N`
+        // holds the connection open but silent for N seconds after the
+        // warm-up run(s), then fires the measured batch call, to test
+        // whether idling itself (not process freshness) reintroduces the
+        // stall — e.g. via macOS App Nap throttling an unprotected
+        // headless XPC daemon, or MLX/Metal driver-level buffer reclaim.
+        let idleSeconds = HarnessArguments.intArgument(arguments, flag: "--idle-seconds") ?? 0
+        if idleSeconds < 0 {
+            log("BATCH_USAGE --idle-seconds must be >= 0, got \(idleSeconds)")
+            exit(1)
+        }
 
         let samples: [Float]
         do {
@@ -220,7 +235,7 @@ struct HarnessMain {
             log("BATCH_LOAD_FAIL \(error)")
             exit(1)
         }
-        log("BATCH_LOADED samples=\(samples.count) path=\(wavPath) concurrentStream=\(concurrentStream) warmRuns=\(warmRuns)")
+        log("BATCH_LOADED samples=\(samples.count) path=\(wavPath) concurrentStream=\(concurrentStream) warmRuns=\(warmRuns) idleSeconds=\(idleSeconds)")
 
         let transport = XPCTransport(serviceName: serviceName)
         let client = YoozEngineClient(transport: transport)
@@ -248,6 +263,20 @@ struct HarnessMain {
             } catch {
                 log("WARM_RUN \(i) FAILED elapsedMs=\(warmStart.duration(to: .now).milliseconds) error=\(error)")
             }
+        }
+
+        if idleSeconds > 0 {
+            log("IDLE_START seconds=\(idleSeconds)")
+            // Heartbeat every 30s so a long wait is observable in the log
+            // rather than looking hung.
+            var remaining = idleSeconds
+            while remaining > 0 {
+                let chunk = min(30, remaining)
+                try? await Task.sleep(for: .seconds(chunk))
+                remaining -= chunk
+                log("IDLE_TICK remainingSeconds=\(remaining)")
+            }
+            log("IDLE_DONE")
         }
 
         var streamTask: Task<Void, Never>?
