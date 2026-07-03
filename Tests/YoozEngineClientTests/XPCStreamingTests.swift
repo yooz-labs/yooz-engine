@@ -136,6 +136,11 @@ private final class CannedStreamTransport: EngineTransport, @unchecked Sendable 
     func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession {
         CannedStreamSession()
     }
+
+    @available(macOS 14.0, iOS 17.0, *)
+    func openEvents() async throws -> AsyncStream<EngineEvent> {
+        throw YoozEngineError.unsupportedOperation(operation: "canned events")
+    }
 }
 
 @available(macOS 14.0, iOS 17.0, *)

@@ -447,4 +447,136 @@ final class WireCompatFixtureTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - Engine state / events (engine#226)
+
+    func testEngineEvent() throws {
+        try assertWireStable(
+            EngineEvent.self, fixture: "EngineEvent",
+            expected: EngineEvent(
+                kind: .downloadProgress,
+                module: "touchup",
+                modelId: "yooz-quality-v2",
+                loadState: nil,
+                progress: 0.42,
+                message: nil,
+                ts: "2026-07-02T09:00:00Z"
+            )
+        )
+    }
+
+    /// Every event kind's raw wire value is a stable contract — a picker UI
+    /// subscribing to `/v1/events` switches on `kind`.
+    func testEngineEventKindRawValues() {
+        XCTAssertEqual(EngineEventKind.modelChanged.rawValue, "modelChanged")
+        XCTAssertEqual(EngineEventKind.loadStateChanged.rawValue, "loadStateChanged")
+        XCTAssertEqual(EngineEventKind.downloadProgress.rawValue, "downloadProgress")
+        XCTAssertEqual(EngineEventKind.residencyChanged.rawValue, "residencyChanged")
+    }
+
+    /// Forward compat (the `ModelTier`/`ModelLoadState` convention): a
+    /// newer engine shipping a fifth event kind must decode as `.unknown`
+    /// on this SDK — never throw, which would fail the whole `EngineEvent`
+    /// decode and silently drop the frame (PR #239 review).
+    func testEngineEventKindUnknownRawValueFallsBack() throws {
+        let decoded = try JSONDecoder().decode(
+            EngineEventKind.self, from: Data("\"powerStateChanged\"".utf8)
+        )
+        XCTAssertEqual(decoded, .unknown)
+    }
+
+    /// A whole frame with an unrecognized kind still decodes — `module` and
+    /// `ts` stay readable — and resolves to the `.unrecognized` payload.
+    func testEngineEventWithUnknownKindDecodesAndPayloadIsUnrecognized() throws {
+        let json = """
+        {"kind": "somethingNew", "module": "touchup", "ts": "2026-07-02T09:00:00Z"}
+        """
+        let event = try JSONDecoder().decode(EngineEvent.self, from: Data(json.utf8))
+        XCTAssertEqual(event.kind, .unknown)
+        XCTAssertEqual(event.module, "touchup")
+        XCTAssertEqual(event.payload, .unrecognized)
+    }
+
+    /// `EngineEvent.payload` is the typed view consumers switch on: each
+    /// kind resolves its required fields exhaustively.
+    func testEngineEventPayloadResolvesEachKind() {
+        XCTAssertEqual(
+            EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v2").payload,
+            .modelChanged(modelId: "yooz-light-v2")
+        )
+        XCTAssertEqual(
+            EngineEvent(
+                kind: .loadStateChanged, module: "touchup",
+                modelId: "yooz-quality-v2", loadState: .loaded
+            ).payload,
+            .loadStateChanged(modelId: "yooz-quality-v2", loadState: .loaded, message: nil)
+        )
+        XCTAssertEqual(
+            EngineEvent(
+                kind: .downloadProgress, module: "touchup",
+                modelId: "yooz-quality-v2", progress: 0.5
+            ).payload,
+            .downloadProgress(modelId: "yooz-quality-v2", progress: 0.5)
+        )
+        XCTAssertEqual(
+            EngineEvent(kind: .residencyChanged, module: "touchup", modelId: "yooz-light-v2").payload,
+            .residencyChanged(modelId: "yooz-light-v2")
+        )
+    }
+
+    /// A frame missing a required field for its kind resolves to
+    /// `.unrecognized` — never traps, never half-matches.
+    func testEngineEventPayloadWithMissingRequiredFieldIsUnrecognized() {
+        XCTAssertEqual(
+            EngineEvent(kind: .downloadProgress, module: "touchup", modelId: "x").payload,
+            .unrecognized
+        )
+        XCTAssertEqual(
+            EngineEvent(kind: .modelChanged, module: "touchup").payload,
+            .unrecognized
+        )
+    }
+
+    func testEngineModelSnapshotRow() throws {
+        try assertWireStable(
+            EngineModelSnapshotRow.self, fixture: "EngineModelSnapshotRow",
+            expected: EngineModelSnapshotRow(
+                id: "yooz-light-v2", displayName: "Yooz-Light",
+                description: "Fast, on-device cleanup", tier: .light,
+                sizeBytes: 276_000_000, loadState: .loaded, isActive: true
+            )
+        )
+    }
+
+    func testEngineModuleSnapshot() throws {
+        try assertWireStable(
+            EngineModuleSnapshot.self, fixture: "EngineModuleSnapshot",
+            expected: EngineModuleSnapshot(
+                module: "touchup",
+                models: [EngineModelSnapshotRow(
+                    id: "yooz-light-v2", displayName: "Yooz-Light",
+                    description: "Fast, on-device cleanup", tier: .light,
+                    sizeBytes: 276_000_000, loadState: .loaded, isActive: true
+                )],
+                activeId: "yooz-light-v2"
+            )
+        )
+    }
+
+    func testEngineStateSnapshot() throws {
+        try assertWireStable(
+            EngineStateSnapshot.self, fixture: "EngineStateSnapshot",
+            expected: EngineStateSnapshot(modules: [
+                EngineModuleSnapshot(
+                    module: "touchup",
+                    models: [EngineModelSnapshotRow(
+                        id: "yooz-light-v2", displayName: "Yooz-Light",
+                        description: "Fast, on-device cleanup", tier: .light,
+                        sizeBytes: 276_000_000, loadState: .loaded, isActive: true
+                    )],
+                    activeId: "yooz-light-v2"
+                ),
+            ])
+        )
+    }
 }

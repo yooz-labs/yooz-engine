@@ -222,6 +222,13 @@ final class RouteParityTests: XCTestCase {
         case .delete:
             _ = try await transport.delete(entry.concretePath)
 
+        case .websocket where entry.path == "/v1/events":
+            // `openEvents()` (engine#226) has no parameters to invalidate —
+            // reaching a successful subscribe (rather than
+            // `unsupportedOperation`) is itself the proof this route is
+            // wired in-process.
+            _ = try await transport.openEvents()
+
         case .websocket:
             // The package's minimum platforms (macOS 14 / iOS 17) satisfy
             // `openSTTStream`'s availability annotation, so no runtime guard

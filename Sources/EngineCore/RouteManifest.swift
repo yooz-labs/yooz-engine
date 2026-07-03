@@ -77,6 +77,18 @@ public enum RouteManifest {
                 .websocket, "/v1/stt/stream",
                 inProcessEquivalent: "InProcessTransport.openSTTStream(language:mode:)"
             ),
+            // `/v1/events` (engine#226): same shape as the STT stream entry
+            // above — a WebSocket upgrade on loopback, served in-process by
+            // `openEvents()` (an `EngineTransport` requirement mirroring
+            // `openSTTStream`) rather than a literal socket. Reachable on
+            // BOTH transports, so it needs no `RouteParityAllowlist` entry;
+            // `XPCTransport.openEvents()` is the one transport that does not
+            // (yet) implement it — see that method's doc comment for why
+            // (deferred to #227, the XPC service-packaging epic).
+            RouteManifestEntry(
+                .websocket, "/v1/events",
+                inProcessEquivalent: "InProcessTransport.openEvents()"
+            ),
         ]
 }
 

@@ -196,8 +196,12 @@ final class EndpointTableTests: XCTestCase {
         let manifest = Set(RouteManifest.all.map(\.key))
         XCTAssertEqual(
             manifest.subtracting(projected),
-            ["WS /v1/stt/stream"],
-            "manifest carries entries beyond the catalog + the WS route"
+            // `/v1/stt/stream` and `/v1/events` (engine#226) are the only two
+            // WebSocket upgrades — neither is REST-dispatchable, so neither
+            // lives in `EndpointSpecs`; both are appended by hand in
+            // `RouteManifest.all`.
+            ["WS /v1/events", "WS /v1/stt/stream"],
+            "manifest carries entries beyond the catalog + the WS routes"
         )
         XCTAssertTrue(
             projected.isSubset(of: manifest),

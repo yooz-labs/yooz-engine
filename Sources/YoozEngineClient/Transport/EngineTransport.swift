@@ -55,4 +55,17 @@ public protocol EngineTransport: Sendable {
     /// (`STTLanguage.rawValue` / `AudioMode.rawValue`).
     @available(macOS 14.0, iOS 17.0, *)
     func openSTTStream(language: String, mode: String) async throws -> any STTStreamSession
+
+    /// Open the `/v1/events` push channel (engine#226): a live feed of
+    /// `EngineEvent`s (model-selection changes, load-state transitions,
+    /// download progress, residency changes) across every module the
+    /// engine hosts. One-directional (server → client) — unlike
+    /// `openSTTStream` there is nothing for the caller to send back, so the
+    /// return type is a plain `AsyncStream` rather than a session protocol.
+    ///
+    /// - HTTP: opens a WebSocket at `/v1/events` and decodes each frame.
+    /// - In-process: subscribes directly to the shared `EngineEventBus`.
+    /// - XPC: not yet implemented — see `XPCTransport.openEvents()`.
+    @available(macOS 14.0, iOS 17.0, *)
+    func openEvents() async throws -> AsyncStream<EngineEvent>
 }

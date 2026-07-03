@@ -369,4 +369,38 @@ public enum EngineConfig {
     public static var sttMetricsFileURL: URL {
         telemetryDirectory.appendingPathComponent("stt_metrics.jsonl")
     }
+
+    // MARK: - Engine-owned state (engine#226)
+
+    /// `~/Library/Application Support/YoozEngine/State` — engine-owned
+    /// persisted state, e.g. per-module active model selection
+    /// (`ModelSelectionStore`). Suitable for both packagings: this resolves
+    /// to the CURRENT PROCESS's own sandbox container, same as
+    /// `modelsDirectory` / `cacheDirectory` — the host app's container for
+    /// the in-process transport, the helper's own container over loopback.
+    ///
+    /// `YOOZ_ENGINE_STATE_DIR` overrides the resolved path (mirrors the
+    /// `YOOZ_TELEMETRY_DIR` override on `telemetryDirectory`) so tests and
+    /// throwaway `ModelSelectionStore` instances can redirect away from a
+    /// developer's real Application Support directory without needing a
+    /// dedicated per-instance file argument.
+    public static var stateDirectory: URL {
+        if let override = ProcessInfo.processInfo.environment["YOOZ_ENGINE_STATE_DIR"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        guard let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            fatalError("EngineConfig: Application Support directory not found")
+        }
+        return appSupport.appendingPathComponent("YoozEngine/State")
+    }
+
+    /// Path to the persisted per-module active-model-selection file
+    /// (`ModelSelectionStore`).
+    public static var modelSelectionFileURL: URL {
+        stateDirectory.appendingPathComponent("model-selection.json")
+    }
 }
