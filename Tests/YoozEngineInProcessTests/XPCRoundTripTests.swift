@@ -202,6 +202,85 @@ final class XPCRoundTripTests: XCTestCase {
         XCTAssertTrue(released, "the service-side EngineEventBus subscription must be released on connection death")
     }
 
+    /// The STEADY-STATE unsubscribe (PR #245 review): the consumer simply
+    /// stops iterating — e.g. `EngineStateStore.stop()` at picker teardown —
+    /// while the connection and both processes stay alive. Cancelling the
+    /// consuming task ends the client `AsyncStream`'s iteration, which fires
+    /// its `onTermination` -> `closeEvents` over the wire -> the service
+    /// cancels the drain task -> the `EngineEventBus` subscription is
+    /// released. A regression here would leak one bus subscription per
+    /// picker open/close cycle in a long-running app, invisibly. Also pins
+    /// that the connection itself remains healthy for unrelated calls
+    /// afterward (close is a subscription-level teardown, not connection-level).
+    func testCancellingConsumerReleasesServiceSubscriptionAndKeepsConnectionAlive() async throws {
+        let service = Service()
+        defer { service.invalidate() }
+        let connection = NSXPCConnection(listenerEndpoint: service.listener.endpoint)
+        let transport = XPCTransport(connection: connection)
+        try await transport.connect()
+
+        let baseline = await EngineEventBus.shared.subscriberCount
+        let stream = try await transport.openEvents()
+        let consumer = Task {
+            for await _ in stream {}
+        }
+
+        let subscribed = await Self.pollUntil(timeoutSeconds: 5) {
+            await EngineEventBus.shared.subscriberCount > baseline
+        }
+        XCTAssertTrue(subscribed, "opening the XPC events channel must add a bus subscriber")
+
+        consumer.cancel()
+
+        let released = await Self.pollUntil(timeoutSeconds: 5) {
+            await EngineEventBus.shared.subscriberCount <= baseline
+        }
+        XCTAssertTrue(released, "cancelling the consuming task must release the service-side subscription via closeEvents")
+
+        // The connection survives a subscription-level close.
+        let health = try await transport.get("/v1/health")
+        XCTAssertFalse(health.isEmpty, "the connection must remain usable after an events unsubscribe")
+    }
+
+    /// The wire protocol supports N concurrent subscriptions per connection
+    /// (keyed by client-generated `subscriptionID`) — prove two live
+    /// subscriptions on ONE transport each independently receive the same
+    /// engine-side publish, with no cross-talk (PR #245 review: nothing
+    /// structurally prevents a diagnostics overlay and `EngineStateStore`
+    /// both calling `openEvents()` on the same client).
+    func testTwoConcurrentSubscriptionsBothReceiveTheSameEvent() async throws {
+        let service = Service()
+        defer { service.invalidate() }
+        let client = service.makeClient()
+        try await client.connect()
+
+        let streamA = try await client.openEvents()
+        let streamB = try await client.openEvents()
+
+        let body = try JSONEncoder().encode(
+            TouchUpSetModelRequest(id: "yooz-quality-v2", preload: false)
+        )
+        _ = try await client.transport.post("/v1/touchup/model", body: body)
+
+        // Sequential scans are safe: each client-side AsyncStream buffers
+        // (unbounded default), so B's frame waits while A is drained.
+        let matchedA = try await Self.firstMatchingEvent(streamA, timeoutSeconds: 5) {
+            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+        }
+        let matchedB = try await Self.firstMatchingEvent(streamB, timeoutSeconds: 5) {
+            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+        }
+        XCTAssertNotNil(matchedA, "the first concurrent subscription must receive the event")
+        XCTAssertNotNil(matchedB, "the second concurrent subscription must receive the event")
+
+        // Restore the shared engine's default (same cleanup as the
+        // round-trip test above).
+        _ = try await client.transport.post(
+            "/v1/touchup/model",
+            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v2", preload: false))
+        )
+    }
+
     // MARK: - Helpers
 
     private static func firstMatchingEvent(

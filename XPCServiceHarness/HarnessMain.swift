@@ -18,12 +18,16 @@
 //     -configuration Debug -skipMacroValidation -derivedDataPath build build
 //   "build/Build/Products/Debug/YoozEngineXPCHarness.app/Contents/MacOS/YoozEngineXPCHarness"
 //
-// Exit code 0 means the harness completed its checks (health round-tripped,
-// and the streaming call either succeeded or came back as a well-formed
-// typed `YoozEngineError` — both prove the XPC plumbing works; only a
-// connection-level failure or a hang indicates a packaging problem). Exit
-// code 1 means `/v1/health` itself failed to round-trip — the packaging is
-// broken.
+// Exit code 0 means the harness completed its checks: health round-tripped,
+// the streaming call either succeeded or came back as a well-formed typed
+// `YoozEngineError` (both prove the XPC plumbing; Apple STT legitimately
+// fails typed on a machine without Speech Recognition authorization), and
+// the `/v1/events` round trip delivered a real `modelChanged` frame. Exit
+// code 1 means a genuine packaging problem: `/v1/health` failed, the
+// streaming call failed with a NON-engine error, or the events check failed
+// in ANY way (timeout, typed error, or unexpected error — unlike STT, the
+// events path has no permission/hardware excuse, so every failure there is
+// a regression).
 //
 // Forces the Apple STT backend before streaming: the default backend
 // (Parakeet, an MLX model) needs a multi-hundred-MB HuggingFace download on
@@ -84,10 +88,14 @@ struct HarnessMain {
         // so no download/MLX load is involved — same reasoning as forcing
         // Apple STT above, keep this harness fast and hermetic) and confirm
         // the resulting `modelChanged` frame arrives back over the XPC
-        // callback proxy. Unlike streaming STT this has no
-        // permission/hardware dependency, so — unlike `STREAM_TYPED_ERROR`
-        // above — a timeout here IS a packaging regression, not an
-        // environment difference; treat it as a hard failure.
+        // callback proxy. Unlike the STT check, NOTHING on this path has a
+        // legitimate environment-dependent failure mode (no permission
+        // prompt, no hardware dependency, no download), so EVERY failure —
+        // timeout, typed engine error, or unexpected error — is a packaging
+        // regression and a hard `exit(1)`. (That's also why this block
+        // bounds its wait with a timeout while the STT block awaits
+        // unbounded: STT's silence can mean "authorization dialog territory";
+        // events' silence can only mean broken plumbing.)
         do {
             let stream = try await client.openEvents()
 
@@ -107,10 +115,12 @@ struct HarnessMain {
                 log("EVENTS_TIMEOUT no modelChanged frame arrived over /v1/events within 5s")
                 exit(1)
             }
-        } catch let error as YoozEngineError {
-            log("EVENTS_TYPED_ERROR \(error)")
         } catch {
-            log("EVENTS_UNEXPECTED_ERROR \(error)")
+            // No typed-vs-unexpected split here, unlike the STT block: a
+            // typed `YoozEngineError` from openEvents/setModel has no
+            // legitimate excuse on this path, so it is just as much a hard
+            // failure as a raw connection error (PR #245 review).
+            log("EVENTS_FAIL \(error)")
             exit(1)
         }
 

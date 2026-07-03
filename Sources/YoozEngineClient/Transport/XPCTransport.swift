@@ -6,8 +6,9 @@ import Foundation
 /// loopback, Apple's sanctioned in-bundle IPC).
 ///
 /// Byte-level: `get/post/delete` funnel through the single `request` XPC method.
-/// Streaming STT is Phase 3b (it needs a bidirectional callback proxy, not a
-/// once-fired reply block) — `openSTTStream` reports `unsupportedOperation` until then.
+/// Server-push surfaces — streaming STT (epic #192 Phase 3b) and `/v1/events`
+/// (engine#244) — ride the bidirectional callback proxy instead: the client
+/// exports `XPCStreamClient` and the service pushes frames back through it.
 public final class XPCTransport: EngineTransport, @unchecked Sendable {
     /// Non-routable placeholder — XPC addresses by service name, not URL/port.
     public let baseURL = URL(string: "xpc://engine")!

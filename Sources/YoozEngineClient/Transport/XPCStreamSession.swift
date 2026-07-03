@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Client-side streaming session over XPC (epic #192 Phase 3b).
 ///
@@ -57,6 +58,7 @@ final class XPCSTTStreamSession: STTStreamSession, @unchecked Sendable {
 @available(macOS 14.0, iOS 17.0, *)
 final class XPCStreamClient: NSObject, YoozEngineXPCStreamClientProtocol, @unchecked Sendable {
     private let lock = NSLock()
+    private let logger = Logger(subsystem: "live.yooz.engine.client", category: "xpc-events")
     private var sessions: [String: XPCSTTStreamSession] = [:]
     private var eventSubscriptions: [String: XPCEventSubscription] = [:]
 
@@ -141,17 +143,35 @@ final class XPCStreamClient: NSObject, YoozEngineXPCStreamClientProtocol, @unche
         // the subscription between the decode-failure branch and delivery —
         // mirrors `streamDidProduce` above.
         guard let subscription = eventSubscription(subscriptionID) else { return }
-        guard let event = try? JSONDecoder().decode(EngineEvent.self, from: eventData) else {
+        do {
+            let event = try JSONDecoder().decode(EngineEvent.self, from: eventData)
+            subscription.deliver(event)
+        } catch {
             // A malformed frame ends the subscription rather than silently
-            // dropping it, matching `streamDidProduce`'s decode-failure handling.
+            // dropping it, matching `streamDidProduce`'s decode-failure
+            // handling. Unlike STT there is no throwing `receive()` to carry
+            // a typed error to the consumer (`AsyncStream<EngineEvent>` has
+            // no `Failure` channel), so LOG the reason here — the stream
+            // just finishing with zero diagnostic trail anywhere in the
+            // client process would be a true silent failure (PR #245 review).
+            let reason = error.localizedDescription
+            logger.error(
+                "xpc: events \(subscriptionID, privacy: .public) frame decode failed — ending subscription: \(reason, privacy: .public)"
+            )
             unregisterEvents(subscriptionID)
             subscription.finish()
-            return
         }
-        subscription.deliver(event)
     }
 
-    func eventsDidFinish(subscriptionID: String) {
+    func eventsDidFinish(subscriptionID: String, error: Error?) {
+        // `error` is log-only: the consumer's AsyncStream finishes the same
+        // way regardless (no Failure channel) — see the protocol doc. Logging
+        // it here is the entire reason the parameter crosses the wire: the
+        // service's own diagnosis (e.g. a frame encode failure) lands in the
+        // HOST app's log stream, where a developer actually looks.
+        if let error {
+            logger.error("xpc: events \(subscriptionID, privacy: .public) ended by service: \(error.localizedDescription, privacy: .public)")
+        }
         let subscription = eventSubscription(subscriptionID)
         unregisterEvents(subscriptionID)
         subscription?.finish()

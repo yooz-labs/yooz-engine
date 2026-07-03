@@ -208,6 +208,13 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
             do {
                 let stream = try await transport.openEvents()
                 guard let self else {
+                    // Handler deallocated between the request arriving and the
+                    // bus subscribing. Dropping `stream` here IS the cleanup:
+                    // a plain `AsyncStream` has no close handle (unlike STT's
+                    // `session.close()` in the analogous branch above), and
+                    // deallocating an un-iterated stream fires its
+                    // `onTermination`, which removes the `EngineEventBus`
+                    // subscriber (see `EngineEventBus.subscribe()`'s doc).
                     reply(XPCErrorBridge.toNSError(YoozEngineError.engineNotReachable))
                     return
                 }
@@ -263,6 +270,12 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
             self?.cancelAndRemoveEventSubscription(subscriptionID)
         }
         let callback = proxy as? YoozEngineXPCStreamClientProtocol
+        // Carried into `eventsDidFinish` so the service's diagnosis of an
+        // abnormal end (the encode failure below) crosses the process
+        // boundary into the host app's log stream — client-side it is
+        // log-only, never surfaced through the `AsyncStream` (PR #245
+        // review; see the protocol doc on `eventsDidFinish`).
+        var finishError: Error?
         for await event in stream {
             do {
                 let data = try encoder.encode(event)
@@ -270,8 +283,17 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
             } catch {
                 // An encode failure ends the subscription rather than
                 // silently dropping the frame — matches `drain`'s STT
-                // decode-failure handling.
+                // decode-failure handling. Wrapped in a typed
+                // `YoozEngineError` (NOT the raw `EncodingError`) because
+                // `XPCErrorBridge.toNSError` only guarantees an
+                // NSSecureCoding-safe userInfo (String/Int) for the typed
+                // cases; a bridged Swift error crashes the XPC encoder
+                // with `__SwiftValue` (caught by
+                // `testServiceEncodeFailureFinishesClientStream`).
                 logger.error("xpc: events \(subscriptionID, privacy: .public) encode failed: \(error.localizedDescription, privacy: .public)")
+                finishError = YoozEngineError.decodingError(
+                    "Event frame encode failed: \(error.localizedDescription)"
+                )
                 break
             }
         }
@@ -281,7 +303,15 @@ public final class XPCServiceHandler: NSObject, YoozEngineXPCProtocol, @unchecke
         // finishes a subscriber's stream on its own (see its doc comment).
         // Tell the client either way so a still-live connection's
         // `AsyncStream` ends deterministically rather than going quiet.
-        callback?.eventsDidFinish(subscriptionID: subscriptionID)
+        // (The callback-proxy error handler above covers the remaining
+        // failure mode — the push itself failing on a dying connection —
+        // which, like its STT `drain` counterpart, has no headless test:
+        // `NSXPCConnection` offers no public API to fail only the callback
+        // direction of an in-process anonymous-listener pair.)
+        callback?.eventsDidFinish(
+            subscriptionID: subscriptionID,
+            error: finishError.map { XPCErrorBridge.toNSError($0) }
+        )
         removeEventSubscription(subscriptionID)
     }
 

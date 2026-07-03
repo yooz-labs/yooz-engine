@@ -89,14 +89,20 @@ import Foundation
     /// One JSON-encoded `EngineEvent` for `subscriptionID`.
     func eventDidOccur(subscriptionID: String, eventData: Data)
 
-    /// The event subscription ended service-side. There is no failure mode
-    /// here — `EngineEventBus` subscriptions don't error, so this only fires
-    /// after a service-side teardown (e.g. an encode failure — see
-    /// `XPCServiceHandler.drainEvents`). A connection failure is NOT reported
-    /// through this callback; it surfaces via the connection's own
-    /// interruption/invalidation handlers, per `XPCTransport.openEvents()`'s
-    /// documented contract.
-    func eventsDidFinish(subscriptionID: String)
+    /// The event subscription ended service-side. `error == nil` is a clean
+    /// teardown (the drain task was cancelled by `closeEvents` or connection
+    /// death racing this callback out); non-nil carries the service-side
+    /// failure that ended the subscription (e.g. a frame encode failure —
+    /// see `XPCServiceHandler.drainEvents`). The error is **log-only** on
+    /// the client: `AsyncStream<EngineEvent>` has no `Failure` channel, so
+    /// the consumer's stream finishes identically either way — the
+    /// parameter exists so the reason at least crosses the process boundary
+    /// into the host app's log stream instead of dying in the sandboxed
+    /// service's. A connection failure is NOT reported through this
+    /// callback; it surfaces via the connection's own interruption/
+    /// invalidation handlers, per `XPCTransport.openEvents()`'s documented
+    /// contract.
+    func eventsDidFinish(subscriptionID: String, error: Error?)
 }
 
 /// Maps `YoozEngineError` to/from `NSError` so the SDK's typed errors survive the
