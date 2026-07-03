@@ -17,7 +17,7 @@ public enum HarnessArguments {
     /// Parse an integer-valued flag out of `arguments` (e.g. `--warm-runs
     /// 3`). Returns `nil` if the flag is absent, has no following value, or
     /// the value doesn't parse as an `Int` — the caller decides whether
-    /// "absent" and "unparseable" should be treated differently. Does NOT
+    /// "absent" and "unparsable" should be treated differently. Does NOT
     /// reject negative values; callers whose flag has a non-negative
     /// contract (e.g. `--warm-runs`, `--idle-seconds`) validate that
     /// themselves and print a usage error, since "negative" is a distinct

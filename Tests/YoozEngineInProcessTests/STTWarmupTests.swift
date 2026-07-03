@@ -44,7 +44,7 @@ final class STTWarmupTests: XCTestCase {
         XCTAssertEqual(language, EngineConfig.defaultSTTLanguage)
     }
 
-    func testResolveWarmupLanguageFallsBackOnUnparseableStoredValue() async throws {
+    func testResolveWarmupLanguageFallsBackOnUnparsableStoredValue() async throws {
         let store = try makeIsolatedSelectionStore()
         await store.setActiveId("not-a-language-code", for: "stt")
         let language = await YoozSTTEngine.resolveWarmupLanguage(selectionStore: store)
