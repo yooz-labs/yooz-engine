@@ -4,7 +4,7 @@
 #
 # Proves `YoozEngineXPC.xpc` is self-contained in RELEASE, not just Debug
 # (Debug is masked by an absolute, machine-local DerivedData LC_RPATH — see
-# scripts/embed-xpc-package-frameworks.sh's header comment). Two checks:
+# scripts/embed-xpc-package-frameworks.sh's header comment). Three checks:
 #
 #   1. Runtime: build `YoozEngineXPCHarness` in Release with an isolated
 #      -derivedDataPath, copy the built app OUTSIDE any DerivedData tree,
@@ -13,11 +13,20 @@
 #      legitimately fail without weights/permissions on a fresh machine;
 #      HEALTH_OK + a clean exit is the packaging proof per engine#248's
 #      acceptance criteria).
-#   2. Static: for every framework embedded in the `.xpc`, `otool -L` must
-#      show no @rpath dependency that isn't resolvable either inside the
-#      bundle or via an allowed system search path (/usr/lib, /System) —
-#      catches a regression back to "SPM frameworks reference @rpath but
-#      never get embedded" without needing a full runtime spawn.
+#   2. Entitlements capability check (PR #256 review, C1): a `.xpc` can be
+#      validly signed AND round-trip HEALTH_OK while carrying NO
+#      entitlements at all — `codesign --force` without `--entitlements`
+#      does not carry the previous signature's entitlements forward, so a
+#      re-sign bug can silently drop app-sandbox/network.client/
+#      application-groups without either the signature check or the health
+#      round trip ever catching it. Assert the required capability keys are
+#      actually present in the signature that ships.
+#   3. Static: for the `.xpc`'s own main executable AND every framework
+#      embedded under its `Contents/Frameworks`, `otool -L` must show no
+#      @rpath dependency that isn't resolvable either inside the bundle or
+#      via an allowed system search path (/usr/lib, /System) — catches a
+#      regression back to "SPM frameworks reference @rpath but never get
+#      embedded" without needing a full runtime spawn.
 #
 # Uses scripts/dev-adhoc-xpc.entitlements (adds
 # com.apple.security.cs.disable-library-validation on top of the real
@@ -140,7 +149,33 @@ codesign --verify --deep --strict --verbose=2 "$RELOCATED_APP" >>"$BUILD_LOG" 2>
     || { tail -40 "$BUILD_LOG" >&2; fail "codesign verify failed on relocated bundle"; }
 
 # -----------------------------------------------------------------------------
-# 3. Runtime proof: HEALTH_OK round trip through the relocated harness.
+# 3. Entitlements capability check (PR #256 review, C1) — see header comment.
+#    A valid signature says nothing about what the signature GRANTS; check
+#    the actual capability keys the embedded .xpc needs to function as a
+#    sandboxed, network-capable, app-group-sharing XPC service.
+# -----------------------------------------------------------------------------
+log "entitlements capability check"
+ENTITLEMENTS_OUT="$ROOT/.build/xpc-portability-check-entitlements.plist"
+codesign -d --entitlements :- "$RELOCATED_XPC" > "$ENTITLEMENTS_OUT" 2>>"$BUILD_LOG" \
+    || fail "could not extract entitlements from $RELOCATED_XPC"
+[[ -s "$ENTITLEMENTS_OUT" ]] \
+    || fail "embedded .xpc carries NO entitlements at all -- a re-sign step lost app-sandbox/network.client/application-groups (see resign-embedded-xpc.sh's --entitlements flag)"
+
+PLISTBUDDY="/usr/libexec/PlistBuddy"
+SANDBOX_VAL="$("$PLISTBUDDY" -c "Print :com.apple.security.app-sandbox" "$ENTITLEMENTS_OUT" 2>/dev/null || true)"
+[[ "$SANDBOX_VAL" == "true" ]] \
+    || fail "com.apple.security.app-sandbox missing or false in embedded .xpc entitlements (got: '$SANDBOX_VAL')"
+
+NETWORK_VAL="$("$PLISTBUDDY" -c "Print :com.apple.security.network.client" "$ENTITLEMENTS_OUT" 2>/dev/null || true)"
+[[ "$NETWORK_VAL" == "true" ]] \
+    || fail "com.apple.security.network.client missing or false in embedded .xpc entitlements (got: '$NETWORK_VAL')"
+
+"$PLISTBUDDY" -c "Print :com.apple.security.application-groups:0" "$ENTITLEMENTS_OUT" >/dev/null 2>&1 \
+    || fail "com.apple.security.application-groups missing or empty in embedded .xpc entitlements"
+log "  OK: app-sandbox=true, network.client=true, application-groups non-empty"
+
+# -----------------------------------------------------------------------------
+# 4. Runtime proof: HEALTH_OK round trip through the relocated harness.
 # -----------------------------------------------------------------------------
 log "running relocated harness"
 HARNESS_BIN="$RELOCATED_APP/Contents/MacOS/YoozEngineXPCHarness"
@@ -156,22 +191,33 @@ echo "$HARNESS_OUT" | grep -q '^HEALTH_OK' \
 log "HEALTH_OK confirmed from a Release build running outside DerivedData"
 
 # -----------------------------------------------------------------------------
-# 4. Static check: no unresolvable @rpath dependency in any embedded
-#    framework. Allowed resolutions: a matching framework inside the same
-#    Contents/Frameworks directory, or a declared LC_RPATH pointing at
-#    /usr/lib or /System (the Swift runtime's OS-provided location).
+# 5. Static check: no unresolvable @rpath dependency in the .xpc's own main
+#    executable OR any embedded framework (PR #256 review, S3 -- the main
+#    executable is exactly as capable of referencing a not-actually-embedded
+#    @rpath dependency as any of its frameworks, and it's the first thing
+#    dyld loads at spawn). Allowed resolutions: a matching framework inside
+#    the same Contents/Frameworks directory, or a declared LC_RPATH pointing
+#    at /usr/lib or /System (the Swift runtime's OS-provided location).
 # -----------------------------------------------------------------------------
-log "static check: otool -L on every embedded framework"
+log "static check: otool -L on the .xpc's main executable and every embedded framework"
 FRAMEWORKS_DIR="$RELOCATED_XPC/Contents/Frameworks"
 [[ -d "$FRAMEWORKS_DIR" ]] || fail "no Contents/Frameworks in relocated .xpc: $FRAMEWORKS_DIR"
 
-STATIC_FAIL=0
+MAIN_EXE="$(find "$RELOCATED_XPC/Contents/MacOS" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)"
+[[ -n "$MAIN_EXE" ]] || fail "no main executable found under $RELOCATED_XPC/Contents/MacOS"
+
+CHECK_TARGETS=("$MAIN_EXE")
 shopt -s nullglob
 for fw in "$FRAMEWORKS_DIR"/*.framework; do
     name="$(basename "$fw" .framework)"
     exe="$(find "$fw" -type f -perm -u+x \( -path '*/Versions/*' -o -path "$fw/$name" \) 2>/dev/null | head -1)"
     [[ -n "$exe" ]] || { log "  WARN: no executable found under $fw"; continue; }
+    CHECK_TARGETS+=("$exe")
+done
+shopt -u nullglob
 
+STATIC_FAIL=0
+for exe in "${CHECK_TARGETS[@]}"; do
     # LC_RPATH search paths declared by this binary, in order.
     rpaths=()
     while IFS= read -r p; do rpaths+=("$p"); done < <(
@@ -214,9 +260,8 @@ for fw in "$FRAMEWORKS_DIR"/*.framework; do
         esac
     done <<<"$deps"
 done
-shopt -u nullglob
 
-[[ $STATIC_FAIL -eq 0 ]] || fail "one or more embedded frameworks have unresolvable @rpath dependencies"
-log "static check OK: every embedded framework resolves within the bundle or via an allowed system path"
+[[ $STATIC_FAIL -eq 0 ]] || fail "the .xpc's main executable or an embedded framework has an unresolvable @rpath dependency"
+log "static check OK: the .xpc's main executable and every embedded framework resolve within the bundle or via an allowed system path"
 
 log "PASS -- YoozEngineXPC.xpc is self-contained in Release (engine#248)"
