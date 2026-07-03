@@ -29,7 +29,7 @@ Pick a transport based on how your app ships, not on which modules you need (mod
 | Transport | Use when | Status as of 2026-07 |
 |---|---|---|
 | **In-process** (`YoozEngineInProcess` SPM product, `InProcessTransport`) | You're an App Store standalone app. No socket, no separate process — the engine actors run in your sandbox. **Recommended today.** Yooz Whisper ships this (pinned by revision in its `project.yml`, engine 0.7.5 at time of writing). | Shipping. Gaps: `/v1/session/*` (per-recording reset) is not yet routed in-process (tracked engine#222); `/v1/infinite/*` is intentionally unsupported in-process — Infinite's consumer is the loopback host. |
-| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Not shippable yet.** `XPCTransport` and `XPCServiceHandler` are code-complete and unit-tested (epic #192 Phase 3), but no app packages a `.xpc` service target — tracked engine#227. Don't build on this transport until that lands. |
+| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Packaged and provable (engine#227).** This repo's own `project.yml` ships `YoozEngineXPC` (the `.xpc` target), entitlements, and a dev-only harness that round-trips health + streaming STT through it — see "XPC service embed recipe" below. No shipping consumer app has adopted it yet; Whisper's migration is a follow-up (whisper#267), in-process stays its fallback in the meantime. |
 | **Loopback** (`HTTPTransport`, this document's default) | You're the super-yooz host, or doing local dev/testing. Not valid for an App Store standalone — the unsandboxed helper `.app` under `Contents/Helpers/` fails App Store review (ITMS-90296). | Shipping, default. |
 
 In-process integration looks like this instead of the TL;DR above:
@@ -53,6 +53,183 @@ let result = await client.touchUp.touchUp(text: "um yeah", mode: .standard)
 ```
 
 Full design rationale + macOS feasibility research (sandboxing, entitlements, Metal/MLX-under-XPC): `docs/engine-app-packaging.md` in the private `yooz` ecosystem repo (sibling checkout).
+
+## XPC service embed recipe
+
+This is the "preferred long-term shape" row from the table above, spelled out.
+`YoozEngineXPC` + `YoozEngineXPCHarness` in this repo's own `project.yml` are
+the reference implementation (engine#227) — copy their shape into your own
+app's project rather than re-deriving it. Adopting this transport is a bigger
+lift than in-process (a real `.xpc` target, entitlements, an app group), so
+budget it as its own piece of work; in-process remains the recommended
+starting point.
+
+### 1. Add the XPC service target
+
+```yaml
+# your app's project.yml
+YourAppXPC:
+  type: xpc-service
+  platform: macOS
+  sources:
+    - XPCService   # a handful of lines — copy XPCService/main.swift verbatim
+  settings:
+    base:
+      PRODUCT_BUNDLE_IDENTIFIER: live.yooz.yourapp.xpc
+      PRODUCT_NAME: YourAppXPC
+      INFOPLIST_FILE: XPCService/Info.plist
+      CODE_SIGN_ENTITLEMENTS: XPCService/YourAppXPC.entitlements
+      SKIP_INSTALL: "YES"
+  dependencies:
+    - package: yooz-engine   # your existing package: block, pinned by revision
+      product: EngineCore
+    - package: yooz-engine
+      product: YoozEngineClient
+    - package: yooz-engine
+      product: YoozEngineInProcess
+```
+
+`XPCService/main.swift` forwards everything to `InProcessTransport` — the
+SAME transport your in-process build already links, so there's no second
+route table to maintain:
+
+```swift
+import EngineCore
+import Foundation
+import YoozEngineClient
+import YoozEngineInProcess
+
+// See "Weights/app-group wiring" below for what this line does.
+if let groupID = Bundle.main.object(forInfoDictionaryKey: "YoozAppGroupIdentifier") as? String {
+    AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier: groupID)
+}
+
+let delegate = XPCServiceListenerDelegate { XPCServiceHandler(transport: InProcessTransport()) }
+let listener = NSXPCListener.service()   // system-launched; resume() does not return
+listener.delegate = delegate
+listener.resume()
+```
+
+`XPCService/Info.plist` needs `CFBundlePackageType = XPC!` and an
+`XPCService` dict with `ServiceType = Application` (not `System`) —
+`Application` is what lets MLX/Metal work inside the sandboxed service with
+no GPU entitlement (proven precedent: Pico AI Server, cited in
+`../yooz/docs/engine-app-packaging.md`). See this repo's `XPCService/Info.plist`
+for the full template, including the `YoozAppGroupIdentifier` key the
+snippet above reads.
+
+### 2. Entitlements — sandboxed, never `inherit`
+
+```xml
+<key>com.apple.security.app-sandbox</key><true/>
+<key>com.apple.security.network.client</key><true/>
+<key>com.apple.security.application-groups</key>
+<array><string>$(TeamIdentifierPrefix)live.yooz.<yourapp>.shared</string></array>
+```
+
+Never `com.apple.security.inherit` — that entitlement is for child processes
+an app spawns itself. A system-launched XPC service needs its own sandbox;
+`inherit` is exactly the mechanism that made the deprecated nested-helper-`.app`
+shape (`Contents/Helpers/`) trip ITMS-90296. See this repo's
+`XPCService/YoozEngineXPC.entitlements` for the annotated original.
+
+### 3. Embed under your app's `Contents/XPCServices/`
+
+```yaml
+YourApp:
+  dependencies:
+    - target: YourAppXPC
+      embed: true
+      codeSign: true
+      link: false   # a target dependency + Copy Files phase, never linked
+```
+
+xcodegen infers the `Contents/XPCServices/` destination automatically from
+the dependency's `xpc-service` product type — no manual Copy Files phase
+needed.
+
+### 4. Talk to it from your app
+
+```swift
+import YoozEngineClient
+
+let transport = XPCTransport(serviceName: "live.yooz.yourapp.xpc")
+let client = YoozEngineClient(transport: transport)
+try await client.connect()   // GET /v1/health across XPC
+```
+
+Pin the peer's code signature once you have a real signing identity:
+`XPCTransport(serviceName:codeSigningRequirement:)` — the first-class trust
+check loopback has no equivalent for.
+
+### Weights/app-group wiring
+
+STT/LLM weights download via `network.client` into the HuggingFace (HF) hub
+cache on first use (AGENTS.md "HF model auto-download"). Left alone, a
+sandboxed process's HF cache resolves inside ITS OWN container — meaning
+your app and its XPC service would each hold a separate copy of the same
+multi-hundred-MB-to-multi-GB weights, exactly the duplication problem the
+whole packaging design exists to avoid at the process level.
+
+Fix: both your app AND its XPC service declare the SAME
+`com.apple.security.application-groups` entry, following the convention
+`<TeamID>.live.yooz.<app>.shared` (substitute your app's name for `<app>`;
+this is scoped to your app + its own XPC service — it does NOT share weights
+ACROSS different apps, e.g. Whisper and Crisp each get their own group.
+Cross-app weight sharing is super-yooz's job, via the loopback transport).
+`AppGroupWeightsLocation.redirectHuggingFaceCache(groupIdentifier:)`
+(`Sources/EngineCore/AppGroupWeightsLocation.swift`) resolves the group's
+shared container and points `HF_HUB_CACHE` at
+`<container>/Library/Application Support/YoozEngine/huggingface/hub` —
+Application Support, NOT Caches, because the OS purges container Caches
+under disk pressure and would force a multi-GB re-download.
+
+Two details worth knowing:
+
+- The group id template lives in `XPCService/Info.plist`
+  (`YoozAppGroupIdentifier` = `$(TeamIdentifierPrefix)live.yooz.<app>.shared`)
+  rather than being computed at runtime — Xcode substitutes
+  `$(TeamIdentifierPrefix)` at build/sign time, so the service reads back the
+  fully-resolved string via `Bundle.main.object(forInfoDictionaryKey:)`
+  without ever needing to look up its own team id in code.
+- `redirectHuggingFaceCache` is a documented no-op (returns `false`, never
+  crashes) when the group can't be resolved — no `application-groups`
+  entitlement, no provisioning profile, or an unsandboxed dev run. The
+  engine still works in that case, just without cross-process cache sharing;
+  it falls through to `EngineConfig.huggingFaceCacheDirectory`'s own
+  sandboxed-container fallback.
+
+Known gap: `EngineConfig.modelsDirectory` (a handful of smaller LLM/STT
+artifacts, distinct from the HF hub cache) is NOT yet app-group-aware — it
+still resolves to each sandboxed process's own container. Tracked as a
+follow-up; the HF hub cache above is where the large downloads land, so this
+gap is small in practice.
+
+### Verifying the round trip
+
+This repo's `YoozEngineXPCHarness` target is a dev-only, non-shipped proof:
+it embeds `YoozEngineXPC.xpc` under its own `Contents/XPCServices/` and
+round-trips `GET /v1/health` plus an `openSTTStream`/`sendAudio`/`receive`/
+`close` cycle through `XPCTransport`. It's a plain executable, not an XCTest
+target — XPC services are launchd-managed with no GUI test runner involved,
+so there's nothing for XCTest to attach to. Build and run it directly:
+
+```bash
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngineXPCHarness \
+  -configuration Debug -skipMacroValidation -derivedDataPath build build
+"build/Build/Products/Debug/YoozEngineXPCHarness.app/Contents/MacOS/YoozEngineXPCHarness"
+```
+
+The harness forces the Apple STT backend before streaming (no download —
+Parakeet, the default, needs a multi-hundred-MB HF pull the harness has no
+business triggering just to prove wiring). On a machine where Speech
+Recognition authorization for the harness/service hasn't been granted yet,
+the streaming leg comes back as a typed `YoozEngineError` rather than
+transcribing anything — that still proves the round trip (the request
+crossed the XPC boundary, the service dispatched it, and a structured
+failure returned instead of a hang), it just isn't a transcription. Grant
+Speech Recognition access in System Settings first if you want the streaming
+leg to actually transcribe.
 
 ## Variant selection
 
@@ -437,7 +614,8 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 | Infinite `generate` returns 501 (loopback) | The active model has no runnable Swift MLX backend (only retrieval today); session state is preserved | Switch to a Swift-runtime-supported model (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B or E4B), or branch on the stable `generation_unavailable` code. Create/append/checkpoint/delete keep working regardless. |
 | Infinite models are visible but disabled | Host RAM tier cannot run that row | Use `loadState == .unavailable`, `ramTier`, and `maxContextTokens` from `/v1/infinite/models` to explain the requirement. |
 | Infinite session creation starts failing after repeated tests | Sessions are engine-owned and capped at 16 | Delete sessions explicitly with `client.infinite.deleteSession(id:)`; `/v1/session/begin` does not clean them up. |
-| Building against `XPCTransport` produces no bundle to test | No `.xpc` service target exists yet in any variant's `project.yml` | Not a bug — packaging is tracked in engine#227 and not shippable yet. Use in-process instead. |
+| Building against `XPCTransport` produces no bundle to test | Your own app hasn't packaged a `.xpc` service target yet | Not a gap in the engine — `YoozEngineXPC` in this repo is the reference implementation (engine#227). Copy its shape ("XPC service embed recipe" above) into your app's `project.yml`. |
+| XPC service builds but weights re-download per process | App and XPC service don't share an `application-groups` entitlement, or `AppGroupWeightsLocation.redirectHuggingFaceCache` wasn't called before the first HF fetch | See "Weights/app-group wiring" above. Both processes must declare the SAME group id; call the redirect at the very top of `main.swift`. |
 
 ---
 
