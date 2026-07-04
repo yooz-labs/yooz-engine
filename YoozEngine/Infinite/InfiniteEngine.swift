@@ -277,6 +277,7 @@ public actor InfiniteEngine {
         guard isModelSelectable(selection) else {
             throw InfiniteError.modelUnavailable(selection.rawValue)
         }
+        let turnPolicy = try sessionTurnPolicy(request.turnPolicy)
         let now = Self.timestamp()
         let id = UUID().uuidString
         let record = SessionRecord(
@@ -284,10 +285,24 @@ public actor InfiniteEngine {
             selection: selection,
             label: request.label,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            turnPolicy: turnPolicy
         )
         sessions[id] = record
         return sessionInfo(record)
+    }
+
+    /// Validates `raw` (from `InfiniteCreateSessionRequest.turnPolicy`)
+    /// against `SessionKnobs.turnPolicy`'s two known wire strings; `nil`/
+    /// empty defaults to `"turn_commit"` (engine#267).
+    private func sessionTurnPolicy(_ raw: String?) throws -> String {
+        guard let raw, !raw.isEmpty else {
+            return InfiniteTurnPolicy.turnCommit.rawValue
+        }
+        guard InfiniteTurnPolicy(rawValue: raw) != nil else {
+            throw InfiniteError.invalidSessionInput("unknown turnPolicy '\(raw)'")
+        }
+        return raw
     }
 
     public func append(
@@ -299,6 +314,16 @@ public actor InfiniteEngine {
         // generate()'s ordering).
         let (record0, wasParked) = try beginBusyOperation(sessionID: sessionID)
         var record = record0
+        // Tracks whether `ensureLiveBackendState` completed for THIS call.
+        // `record.hasLiveBackendState` alone can't be trusted on the failure
+        // path below: it's a ratchet that, once set true, is never reset
+        // false again (not even by parking), so a session parked in an
+        // earlier call already reads `true` here before this call has done
+        // anything — indistinguishable from "this call just made it live".
+        // Restoring `wasParked ? .parked : .open` (this call's own prior
+        // state) on failure is only wrong when this call itself is what
+        // made the session live, which is exactly what `becameLive` tracks.
+        var becameLive = false
         do {
             guard !request.text.isEmpty else {
                 throw InfiniteError.invalidSessionInput("append text must not be empty")
@@ -314,6 +339,7 @@ public actor InfiniteEngine {
             // pre-#265 bookkeeping-only append.
             let backend = try await loadBackend(for: selection)
             record = try await ensureLiveBackendState(record: record, wasParked: wasParked, backend: backend)
+            becameLive = true
 
             let outcome: SessionAppendOutcome
             do {
@@ -350,7 +376,7 @@ public actor InfiniteEngine {
                 estimatedAppendedTokens: outcome.appendedTokenCount
             )
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
+            endBusyOperation(sessionID: sessionID, finalState: becameLive ? .open : (wasParked ? .parked : .open))
             throw error
         }
     }
@@ -361,6 +387,8 @@ public actor InfiniteEngine {
     ) async throws -> InfiniteGenerateSessionResponse {
         let (record0, wasParked) = try beginBusyOperation(sessionID: sessionID)
         var record = record0
+        // See `append`'s identical `becameLive` doc comment.
+        var becameLive = false
         do {
             if let maxTokens = request.maxTokens, maxTokens <= 0 {
                 throw InfiniteError.invalidSessionInput("maxTokens must be greater than zero")
@@ -377,20 +405,23 @@ public actor InfiniteEngine {
             // Lazily load the real backend on first generate for this model.
             let backend = try await loadBackend(for: selection)
             record = try await ensureLiveBackendState(record: record, wasParked: wasParked, backend: backend)
+            becameLive = true
 
             // Map any MLX/tokenizer runtime fault to a typed error so the route
             // returns a structured `generation_failed` 500, not a bare 500 the SDK
             // can only see as a transport error. Typed InfiniteErrors (e.g. the
             // native-window bound) pass through unchanged.
-            let outcome: SessionGenerateOutcome
+            let policy = InfiniteTurnPolicy(rawValue: record.turnPolicy) ?? .turnCommit
+            let outcome: SessionTurnOutcome
             do {
-                outcome = try await backend.generateSession(
+                outcome = try await backend.generateTurn(
                     id: sessionID,
                     prompt: request.prompt ?? "",
                     maxTokens: request.maxTokens ?? 256,
                     // Production sampling defaults to 0.7; `temperature` lets a
                     // caller (the live parity test) request greedy (0.0) decoding.
-                    temperature: request.temperature ?? 0.7
+                    temperature: request.temperature ?? 0.7,
+                    policy: policy
                 )
             } catch let error as InfiniteError {
                 infiniteEngineLogger.error(
@@ -436,10 +467,13 @@ public actor InfiniteEngine {
                 sessionId: sessionID,
                 text: outcome.text,
                 finishReason: outcome.finishReason,
-                resources: metrics
+                resources: metrics,
+                thinkingTokens: outcome.thinkingTokens,
+                committedTokens: outcome.committedTokens,
+                commitSeconds: outcome.commitSeconds
             )
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
+            endBusyOperation(sessionID: sessionID, finalState: becameLive ? .open : (wasParked ? .parked : .open))
             throw error
         }
     }
@@ -454,6 +488,8 @@ public actor InfiniteEngine {
     ) async throws -> InfiniteCheckpointSessionResponse {
         let (record0, wasParked) = try beginBusyOperation(sessionID: sessionID)
         var record = record0
+        // See `append`'s identical `becameLive` doc comment.
+        var becameLive = false
         do {
             let selection = record.selection
             guard isModelSelectable(selection) else {
@@ -463,6 +499,7 @@ public actor InfiniteEngine {
 
             let backend = try await loadBackend(for: selection)
             record = try await ensureLiveBackendState(record: record, wasParked: wasParked, backend: backend)
+            becameLive = true
 
             let parentCheckpointId = record.lastCheckpointId
             let outcome = try await performCheckpoint(
@@ -481,7 +518,7 @@ public actor InfiniteEngine {
                 parentCheckpointId: parentCheckpointId
             )
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
+            endBusyOperation(sessionID: sessionID, finalState: becameLive ? .open : (wasParked ? .parked : .open))
             throw error
         }
     }
@@ -620,7 +657,8 @@ public actor InfiniteEngine {
             checkpoints: [checkpointInfo],
             state: .parked,
             lastCheckpointId: newCheckpointID,
-            hasLiveBackendState: false
+            hasLiveBackendState: false,
+            turnPolicy: forkedManifest.cacheConfig.turnPolicy
         )
         sessions[newSessionID] = newRecord
         return sessionInfo(newRecord)
@@ -827,22 +865,6 @@ public actor InfiniteEngine {
         sessions[sessionID] = record
     }
 
-    /// The state a failed operation should revert a session to: `.open`
-    /// once real backend state exists (`record.hasLiveBackendState` — a
-    /// resume completed, or the session was never parked to begin with),
-    /// `.parked` only when it started parked (`wasParked`) and the resume
-    /// step never got far enough to install live state. NOT simply
-    /// `record.hasLiveBackendState ? .open : .parked` — that mislabels a
-    /// freshly-created, never-touched session (`wasParked == false`,
-    /// `hasLiveBackendState == false`) as `.parked` when its very first
-    /// operation fails for an unrelated reason (e.g. a different session's
-    /// model-switch `sessionBusy` refusal), implying a checkpoint exists to
-    /// resume from later when none was ever written — the next touch would
-    /// 404 with `checkpointNotFound` instead of just reopening cleanly.
-    private func revertState(wasParked: Bool, record: SessionRecord) -> SessionState {
-        record.hasLiveBackendState || !wasParked ? .open : .parked
-    }
-
     // MARK: - Hot-session lifecycle (engine#266)
 
     /// Ensures `record`'s session has real backend-resident state before the
@@ -1000,7 +1022,7 @@ public actor InfiniteEngine {
             tokenCount: snapshot.tokenRecord.count,
             pendingTokenId: snapshot.pendingToken,
             tokenIdsSHA256: InfiniteSessionStore.sha256Hex(tokensData),
-            cacheConfig: SessionKnobs(),
+            cacheConfig: SessionKnobs(turnPolicy: record.turnPolicy),
             parentCheckpointId: record.lastCheckpointId,
             label: label
         )
@@ -1133,7 +1155,8 @@ public actor InfiniteEngine {
             },
             state: .parked,
             lastCheckpointId: checkpointId,
-            hasLiveBackendState: false
+            hasLiveBackendState: false,
+            turnPolicy: manifest.cacheConfig.turnPolicy
         )
     }
 
@@ -1158,6 +1181,8 @@ public actor InfiniteEngine {
 
         let (record0, wasParked) = try beginBusyOperation(sessionID: sessionID)
         var record = record0
+        // See `append`'s identical `becameLive` doc comment.
+        var becameLive = false
         do {
             let selection = record.selection
             guard isModelSelectable(selection) else {
@@ -1166,12 +1191,13 @@ public actor InfiniteEngine {
             try requireSwiftRuntimeSupport(selection)
             let backend = try await loadBackend(for: selection)
             record = try await ensureLiveBackendState(record: record, wasParked: wasParked, backend: backend)
+            becameLive = true
             let outcome = try await performCheckpoint(
                 sessionID: sessionID, record: record, backend: backend, label: nil, park: false
             )
             return outcome.result.checkpointId
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
+            endBusyOperation(sessionID: sessionID, finalState: becameLive ? .open : (wasParked ? .parked : .open))
             throw error
         }
     }
@@ -1285,4 +1311,9 @@ private struct SessionRecord: Sendable {
     /// sense, so it must not count against `maxHotSessions` or force an
     /// eviction (see `ensureLiveBackendState`/`enforceHotBudget`).
     var hasLiveBackendState: Bool = false
+    /// `"turn_commit"` (default) or `"thinking_in_session"` — see
+    /// `InfiniteTurnPolicy`/`SessionKnobs.turnPolicy` (engine#267). Set at
+    /// creation, persisted into `SessionKnobs.turnPolicy` at checkpoint time,
+    /// and restored from `manifest.cacheConfig.turnPolicy` on rehydration/fork.
+    var turnPolicy: String = InfiniteTurnPolicy.turnCommit.rawValue
 }

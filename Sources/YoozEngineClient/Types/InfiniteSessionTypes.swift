@@ -82,10 +82,14 @@ public struct InfiniteSessionsResponse: Codable, Sendable, Equatable {
 public struct InfiniteCreateSessionRequest: Codable, Sendable, Equatable {
     public let modelId: String?
     public let label: String?
+    /// `"turn_commit"` (default) or `"thinking_in_session"` (engine#267).
+    /// `nil`/empty defaults to `"turn_commit"`; any other value is rejected.
+    public let turnPolicy: String?
 
-    public init(modelId: String? = nil, label: String? = nil) {
+    public init(modelId: String? = nil, label: String? = nil, turnPolicy: String? = nil) {
         self.modelId = modelId
         self.label = label
+        self.turnPolicy = turnPolicy
     }
 }
 
@@ -132,17 +136,28 @@ public struct InfiniteGenerateSessionResponse: Codable, Sendable, Equatable {
     public let text: String
     public let finishReason: String
     public let resources: InfiniteResourceMetrics
+    /// Turn-commit (engine#267) stats — `nil` for `"thinking_in_session"`
+    /// sessions, where there is no separate reasoning/commit bucket.
+    public let thinkingTokens: Int?
+    public let committedTokens: Int?
+    public let commitSeconds: Double?
 
     public init(
         sessionId: String,
         text: String,
         finishReason: String,
-        resources: InfiniteResourceMetrics
+        resources: InfiniteResourceMetrics,
+        thinkingTokens: Int? = nil,
+        committedTokens: Int? = nil,
+        commitSeconds: Double? = nil
     ) {
         self.sessionId = sessionId
         self.text = text
         self.finishReason = finishReason
         self.resources = resources
+        self.thinkingTokens = thinkingTokens
+        self.committedTokens = committedTokens
+        self.commitSeconds = commitSeconds
     }
 }
 

@@ -101,6 +101,84 @@ public struct SessionGenerateOutcome: Sendable, Equatable {
     }
 }
 
+/// Turn-commit policy for one session (engine#267, epic#263 phase 4):
+/// mirrors `SessionKnobs.turnPolicy`'s wire strings 1:1.
+public enum InfiniteTurnPolicy: String, Sendable {
+    /// Decode the whole turn (reasoning + answer) on a disposable branch of
+    /// the durable cache, discard the branch, and commit only the user turn
+    /// plus the stable-framed answer to the durable session — reasoning
+    /// tokens never enter durable KV.
+    case turnCommit = "turn_commit"
+    /// Decode directly on the durable cache — reasoning tokens (if any)
+    /// become a permanent part of the session's history, same as any other
+    /// generated token.
+    case thinkingInSession = "thinking_in_session"
+}
+
+/// Outcome of one live-session `generateTurn` call (engine#267).
+public struct SessionTurnOutcome: Sendable, Equatable {
+    /// The committed answer text — never includes reasoning, even for
+    /// `.thinkingInSession` (the raw decoded text there has no reasoning
+    /// markers to begin with unless the composer's `generationPrompt`
+    /// actually opened one, and this is still the same decoded text
+    /// `generateSession` would have returned).
+    public let text: String
+    /// `"stop"`, `"length"`, `"cancelled"`, or (turnCommit only)
+    /// `"length_in_think"` — the branch hit `maxTokens` before ever closing
+    /// its think block, so the reasoning is quarantined as usual but the
+    /// committed answer is forced empty rather than trusting unclosed
+    /// reasoning as prose.
+    public let finishReason: String
+    /// Reasoning-side token count, approximated by re-encoding the
+    /// `reasoning` half of `composer.splitThinking`. `nil` for
+    /// `.thinkingInSession` (nothing is split out; there is no separate
+    /// "reasoning" bucket in that policy).
+    public let thinkingTokens: Int?
+    /// `(U + S).count` — the exact token count committed to the durable
+    /// cache this call (user turn plus the stable-framed answer). `nil` for
+    /// `.thinkingInSession` (nothing is separately "committed" beyond the
+    /// ordinary session-append accounting).
+    public let committedTokens: Int?
+    /// Wall-clock seconds spent chunk-prefilling the commit onto the
+    /// durable cache. `nil` for `.thinkingInSession` (no separate commit
+    /// step — the durable cache IS what was just decoded).
+    public let commitSeconds: Double?
+    /// This call's own prefill length (pending token, if any, plus the new
+    /// prompt/generation-prompt tokens) — see `SessionDecodeOutcome
+    /// .prefillTokenCount`. For `.turnCommit` this is the BRANCH's prefill,
+    /// not the durable commit's.
+    public let prefillTokenCount: Int
+    public let prefillTokensPerSecond: Double
+    /// For `.turnCommit`, the branch's own decode throughput (thinking +
+    /// answer together) — the durable commit step is a plain chunked
+    /// prefill with no decode, so it has no tokens/s of its own.
+    public let decodeTokensPerSecond: Double
+    /// `tokenRecord.count` after this call.
+    public let totalTokenCount: Int
+
+    public init(
+        text: String,
+        finishReason: String,
+        thinkingTokens: Int?,
+        committedTokens: Int?,
+        commitSeconds: Double?,
+        prefillTokenCount: Int,
+        prefillTokensPerSecond: Double,
+        decodeTokensPerSecond: Double,
+        totalTokenCount: Int
+    ) {
+        self.text = text
+        self.finishReason = finishReason
+        self.thinkingTokens = thinkingTokens
+        self.committedTokens = committedTokens
+        self.commitSeconds = commitSeconds
+        self.prefillTokenCount = prefillTokenCount
+        self.prefillTokensPerSecond = prefillTokensPerSecond
+        self.decodeTokensPerSecond = decodeTokensPerSecond
+        self.totalTokenCount = totalTokenCount
+    }
+}
+
 #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
 /// Wraps a freshly-created `[any KVCache]` so it can cross out of
 /// `ModelContainer.perform`'s isolation as a `Sendable` return value.
@@ -437,6 +515,243 @@ public actor MLXInfiniteBackend {
         #endif
     }
 
+    // MARK: - Turn-commit (engine#267)
+
+    /// Groups a turn's chat-template framing inputs so
+    /// `generateTurnThinkingInSession`/`generateTurnCommit` stay under the
+    /// parameter-count lint limit (mirrors `SessionDecodeParameters`'
+    /// identical purpose).
+    #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+    private struct TurnFraming {
+        let composer: any InfiniteTurnComposer
+        let tokenizer: any MLXLMCommon.Tokenizer
+        /// `encode(userOpen + trimmedPrompt + userClose)` — computed once in
+        /// `generateTurn` since it is identical across both policies.
+        let userTokens: [Int]
+    }
+    #endif
+
+    /// Generates one conversational turn from session `id`, framed by
+    /// `selection.turnComposer` (Qwen3.5 ChatML or Gemma4 `<|turn>`), under
+    /// `policy`. Opens the session first if it isn't already open. See
+    /// `InfiniteTurnPolicy`'s doc for what each policy actually does to the
+    /// durable cache.
+    #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+    public func generateTurn(
+        id: String,
+        prompt: String,
+        maxTokens: Int,
+        temperature: Double,
+        policy: InfiniteTurnPolicy = .turnCommit
+    ) async throws -> SessionTurnOutcome {
+        try InfiniteSessionRuntime.requireNonEmpty(prompt, operation: "generate")
+        await openSession(id: id)
+        guard var session = sessions[id] else {
+            throw InfiniteError.sessionNotFound(id)
+        }
+
+        let composer = selection.turnComposer
+        let tokenizer = await container.tokenizer
+        // Mirrors the chat template's own content trimming (verified against
+        // both pinned templates — Qwen's `render_content(...)|trim`, Gemma4's
+        // `content | trim` / `strip_thinking`'s final `|trim`) so composed
+        // fragments stay token-identical to `apply_chat_template`.
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userTokens = tokenizer.encode(
+            text: composer.userOpen + trimmedPrompt + composer.userClose, addSpecialTokens: false
+        )
+        guard !userTokens.isEmpty else {
+            throw InfiniteError.invalidSessionInput("generate prompt tokenized to zero tokens")
+        }
+
+        let framing = TurnFraming(composer: composer, tokenizer: tokenizer, userTokens: userTokens)
+        let parameters = SessionDecodeParameters(maxTokens: maxTokens, temperature: temperature)
+        switch policy {
+        case .thinkingInSession:
+            return try await generateTurnThinkingInSession(
+                id: id, session: session, framing: framing, parameters: parameters
+            )
+        case .turnCommit:
+            return try await generateTurnCommit(
+                id: id, session: session, framing: framing, parameters: parameters
+            )
+        }
+    }
+
+    /// `.thinkingInSession`: decodes `[pending] + U + G` directly on the
+    /// durable cache via the same `runSessionDecodeLoop` `generateSession`
+    /// uses — nothing is branched or quarantined. `G` requests thinking
+    /// OFF: this policy's whole point is "whatever the model does, keep
+    /// it," not "make it think" — a plain chat turn under the template's own
+    /// default (absent an explicit override) is thinking off. `.turnCommit`
+    /// forces thinking ON regardless of the template default specifically
+    /// because it needs a `<think>` block to quarantine.
+    private func generateTurnThinkingInSession(
+        id: String,
+        session: LiveSessionState,
+        framing: TurnFraming,
+        parameters: SessionDecodeParameters
+    ) async throws -> SessionTurnOutcome {
+        var session = session
+        let genTokens = framing.tokenizer.encode(
+            text: framing.composer.generationPrompt(thinking: false), addSpecialTokens: false
+        )
+        let seedIds = (session.pendingToken.map { [$0] } ?? []) + framing.userTokens + genTokens
+
+        let admissionWorkStart = ContinuousClock.now
+        try await MLXAdmissionGate.shared.checkpoint(workStartedAt: admissionWorkStart)
+        let outcome = try await container.perform(nonSendable: session.caches) { ctx, caches in
+            try await runSessionDecodeLoop(
+                seedIds: seedIds, caches: caches, context: ctx,
+                parameters: parameters,
+                admissionWorkStart: admissionWorkStart
+            )
+        }
+
+        // Every id in seedIds/outcome.fedIds was durably fed regardless of a
+        // clean finish or mid-decode cancellation — see generateSession's
+        // identical commit-before-rethrow reasoning.
+        session.tokenRecord += framing.userTokens + genTokens + outcome.fedIds
+        session.pendingToken = nil
+        sessions[id] = session
+
+        if outcome.finishReason == "cancelled" {
+            throw CancellationError()
+        }
+
+        return SessionTurnOutcome(
+            text: outcome.text,
+            finishReason: outcome.finishReason,
+            thinkingTokens: nil,
+            committedTokens: nil,
+            commitSeconds: nil,
+            prefillTokenCount: outcome.prefillTokenCount,
+            prefillTokensPerSecond: outcome.prefillTokensPerSecond,
+            decodeTokensPerSecond: outcome.decodeTokensPerSecond,
+            totalTokenCount: session.tokenRecord.count
+        )
+    }
+
+    /// `.turnCommit`: branches the durable cache (`branchCaches`), decodes
+    /// `[pending] + U + G` (thinking forced ON) entirely on the branch,
+    /// discards the branch, splits the branch's raw text into
+    /// (reasoning, answer) via `composer.splitThinking`, then commits
+    /// `U + stableAssistantWrap(answer)` to the DURABLE cache via the same
+    /// chunked-prefill primitive `appendTokens` uses — maintaining the
+    /// identical pending-token invariant (the commit's own last token is
+    /// held back as pending, never the branch's).
+    private func generateTurnCommit(
+        id: String,
+        session: LiveSessionState,
+        framing: TurnFraming,
+        parameters: SessionDecodeParameters
+    ) async throws -> SessionTurnOutcome {
+        var session = session
+        let composer = framing.composer
+        let tokenizer = framing.tokenizer
+        let userTokens = framing.userTokens
+        let genTokens = tokenizer.encode(
+            text: composer.generationPrompt(thinking: true), addSpecialTokens: false
+        )
+        let seedIds = (session.pendingToken.map { [$0] } ?? []) + userTokens + genTokens
+
+        let branch = try branchCaches(session.caches)
+        let admissionWorkStart = ContinuousClock.now
+        try await MLXAdmissionGate.shared.checkpoint(workStartedAt: admissionWorkStart)
+        let branchOutcome = try await container.perform(nonSendable: branch) { ctx, caches in
+            try await runSessionDecodeLoop(
+                seedIds: seedIds, caches: caches, context: ctx,
+                parameters: parameters,
+                admissionWorkStart: admissionWorkStart
+            )
+        }
+        // `branch` is discarded here — it is never written back to
+        // `sessions`, so the durable cache above is untouched by everything
+        // the branch just decoded (its own copy-on-write arrays simply go
+        // out of scope with this function).
+
+        if branchOutcome.finishReason == "cancelled" {
+            // Nothing was ever committed to the durable cache (the commit
+            // step below never ran), so the session is exactly as it was.
+            throw CancellationError()
+        }
+
+        let rawText = branchOutcome.text
+        // Generic "does this composer support thinking at all" probe: a
+        // composer whose generationPrompt ignores `thinking` (Gemma4) never
+        // opens a think block to begin with, so "unclosed think" cannot
+        // apply to it.
+        let opensThinking = composer.generationPrompt(thinking: true) != composer.generationPrompt(thinking: false)
+        let unclosedThink = opensThinking && !rawText.contains("</think>")
+        let (splitReasoning, splitAnswer) = composer.splitThinking(rawText)
+        // When thinking never closed, the ENTIRE branch output was reasoning
+        // that never reached a trustworthy conclusion — count all of it as
+        // quarantined, not the empty string `splitThinking`'s "no </think>"
+        // contract would otherwise report.
+        let reasoningForStats = unclosedThink ? rawText : splitReasoning
+        let answer = unclosedThink ? "" : splitAnswer
+        let finishReason = unclosedThink ? "length_in_think" : branchOutcome.finishReason
+
+        let stableTokens = tokenizer.encode(
+            text: composer.stableAssistantWrap(answer: answer), addSpecialTokens: false
+        )
+        let toCommit = userTokens + stableTokens
+        let toFeed = (session.pendingToken.map { [$0] } ?? []) + toCommit.dropLast()
+
+        let commitAdmissionStart = ContinuousClock.now
+        let commitStartTime = Date.timeIntervalSinceReferenceDate
+        let commitOutcome = await container.perform(nonSendable: session.caches) { ctx, caches in
+            await chunkedPrefill(
+                tokens: toFeed, caches: caches, model: ctx.model,
+                chunkSize: Self.appendChunkSize, admissionWorkStart: commitAdmissionStart
+            )
+        }
+        let commitSeconds = Date.timeIntervalSinceReferenceDate - commitStartTime
+
+        if commitOutcome.cancelled {
+            let (tokenRecord, pendingToken) = InfiniteSessionRuntime.truncatedAppendState(
+                priorTokenRecord: session.tokenRecord,
+                priorPendingToken: session.pendingToken,
+                toFeed: toFeed,
+                chunkSize: Self.appendChunkSize,
+                chunksCompleted: commitOutcome.chunksCompleted
+            )
+            session.tokenRecord = tokenRecord
+            session.pendingToken = pendingToken
+            sessions[id] = session
+            throw CancellationError()
+        }
+
+        session.tokenRecord += toCommit
+        session.pendingToken = toCommit.last
+        sessions[id] = session
+
+        let thinkingTokenCount = tokenizer.encode(text: reasoningForStats, addSpecialTokens: false).count
+
+        return SessionTurnOutcome(
+            text: answer,
+            finishReason: finishReason,
+            thinkingTokens: thinkingTokenCount,
+            committedTokens: toCommit.count,
+            commitSeconds: commitSeconds,
+            prefillTokenCount: branchOutcome.prefillTokenCount,
+            prefillTokensPerSecond: branchOutcome.prefillTokensPerSecond,
+            decodeTokensPerSecond: branchOutcome.decodeTokensPerSecond,
+            totalTokenCount: session.tokenRecord.count
+        )
+    }
+    #else
+    public func generateTurn(
+        id: String,
+        prompt: String,
+        maxTokens: Int,
+        temperature: Double,
+        policy: InfiniteTurnPolicy = .turnCommit
+    ) async throws -> SessionTurnOutcome {
+        throw InfiniteError.generationUnavailable("MLX runtime is not linked into this build")
+    }
+    #endif
+
     // MARK: - Checkpoint / resume (engine#266)
 
     #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
@@ -561,6 +876,53 @@ public actor MLXInfiniteBackend {
         return session.caches.map { cache in
             (String(describing: type(of: cache)), cache.state.map(\.dtype))
         }
+    }
+
+    /// `tokenRecord`/`pendingToken` for session `id`'s live state — lets the
+    /// turn-commit live gate (`InfiniteTurnCommitLiveTests`) assert exactly
+    /// which tokens landed in the durable cache after a `generateTurn` call,
+    /// and reconstruct a "cold restart" continuation seed from it. Internal,
+    /// not public API.
+    func tokenRecordForTesting(id: String) -> (tokenRecord: [Int], pendingToken: Int?) {
+        guard let session = sessions[id] else { return ([], nil) }
+        return (session.tokenRecord, session.pendingToken)
+    }
+
+    /// Byte-exact comparison of two sessions' live KV cache state arrays
+    /// (offset, layer count, per-layer state shapes and values via
+    /// `MLXArray.arrayEqual`) — the turn-commit live bit-exactness gate
+    /// (`testBranchDecodeLeavesDurableBitExact`) compares a session that went
+    /// through a `.turnCommit` branch decode against a control session built
+    /// by directly appending the same committed text with no branch
+    /// involved; the raw `MLXArray`s never leave the actor (mirrors
+    /// `SessionCheckpointSnapshot`'s "only `[Int]`/`Int?` leave the actor"
+    /// convention) — only the `Bool` verdict crosses. Internal, not public API.
+    func liveCacheStateEqualsForTesting(id: String, matches otherID: String) -> Bool {
+        guard let a = sessions[id], let b = sessions[otherID] else { return false }
+        guard a.caches.count == b.caches.count else { return false }
+        for (cacheA, cacheB) in zip(a.caches, b.caches) {
+            guard cacheA.offset == cacheB.offset else { return false }
+            let stateA = cacheA.state
+            let stateB = cacheB.state
+            guard stateA.count == stateB.count else { return false }
+            for (arrA, arrB) in zip(stateA, stateB) {
+                guard arrA.shape == arrB.shape else { return false }
+                guard arrA.arrayEqual(arrB).item(Bool.self) else { return false }
+            }
+        }
+        return true
+    }
+
+    /// `tokenizer.applyChatTemplate(messages:)` (always `addGenerationPrompt:
+    /// true` — that overload's fixed default on the `MLXLMCommon.Tokenizer`
+    /// bridge) — the template-parity live gate
+    /// (`testTemplateParityTwoTurns`) compares this against composer
+    /// fragments encoded the same way `generateTurn` itself tokenizes each
+    /// turn (separate `encode` calls per turn, concatenated — never one
+    /// `encode` of the whole joined string). Internal, not public API.
+    func applyChatTemplateForTesting(messages: [[String: any Sendable]]) async throws -> [Int] {
+        let tokenizer = await container.tokenizer
+        return try tokenizer.applyChatTemplate(messages: messages)
     }
     #endif
 }

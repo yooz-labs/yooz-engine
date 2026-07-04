@@ -191,6 +191,24 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    /// Turn-commit's chat-template composer for this model family (engine#267):
+    /// Qwen's ChatML `<think>` framing vs Gemma4's `<|turn>`/`<turn|>` framing
+    /// with no per-turn think toggle. `.s3Retrieval` never actually reaches a
+    /// loaded `MLXInfiniteBackend` (`swiftRuntimeSupported == false`, and its
+    /// `descriptor.repository == nil` makes `MLXInfiniteBackend.load` throw
+    /// first), so that arm is unreachable in practice — Qwen's composer is
+    /// returned there only to keep this switch exhaustive.
+    public var turnComposer: any InfiniteTurnComposer {
+        switch self {
+        case .qwen35B1M:
+            return Qwen35ChatMLComposer()
+        case .gemma4E4B1M, .gemma4_26B_A4B1M, .gemma4_12B1M:
+            return Gemma4Composer()
+        case .s3Retrieval:
+            return Qwen35ChatMLComposer()
+        }
+    }
+
     public var descriptor: InfiniteBackendDescriptor {
         switch self {
         case .gemma4E4B1M:

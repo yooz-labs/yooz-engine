@@ -35,12 +35,14 @@ public struct InfiniteClient: Sendable {
         return try JSONDecoder().decode(InfiniteSessionsResponse.self, from: data)
     }
 
-    /// Create an engine-owned Infinite long-context session.
+    /// Create an engine-owned Infinite long-context session. `turnPolicy` is
+    /// `"turn_commit"` (default) or `"thinking_in_session"` (engine#267).
     public func createSession(
         modelId: String? = nil,
-        label: String? = nil
+        label: String? = nil,
+        turnPolicy: String? = nil
     ) async throws -> InfiniteSessionInfo {
-        let request = InfiniteCreateSessionRequest(modelId: modelId, label: label)
+        let request = InfiniteCreateSessionRequest(modelId: modelId, label: label, turnPolicy: turnPolicy)
         let body = try JSONEncoder().encode(request)
         let data = try await engine.post("/v1/infinite/sessions", body: body)
         return try JSONDecoder().decode(InfiniteSessionInfo.self, from: data)
