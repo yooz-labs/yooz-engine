@@ -40,21 +40,97 @@ public struct InfiniteGenerationResult: Sendable {
     }
 }
 
+/// Outcome of one live-session `appendTokens` call.
+public struct SessionAppendOutcome: Sendable, Equatable {
+    /// `tokenizer.encode(text)`'s token count for just this call's text.
+    public let appendedTokenCount: Int
+    /// `tokenRecord.count` after this append (durable tokens plus the new
+    /// pending token).
+    public let totalTokenCount: Int
+
+    public init(appendedTokenCount: Int, totalTokenCount: Int) {
+        self.appendedTokenCount = appendedTokenCount
+        self.totalTokenCount = totalTokenCount
+    }
+}
+
+/// Outcome of one live-session `generateSession` call.
+public struct SessionGenerateOutcome: Sendable, Equatable {
+    public let text: String
+    public let tokenIds: [Int]
+    public let finishReason: String
+    /// This call's own prefill length (pending token, if any, plus the new
+    /// prompt) — NOT the whole session history. See `SessionDecodeOutcome
+    /// .prefillTokenCount`.
+    public let prefillTokenCount: Int
+    public let prefillTokensPerSecond: Double
+    public let decodeTokensPerSecond: Double
+    /// `tokenRecord.count` after this generate call.
+    public let totalTokenCount: Int
+
+    public init(
+        text: String,
+        tokenIds: [Int],
+        finishReason: String,
+        prefillTokenCount: Int,
+        prefillTokensPerSecond: Double,
+        decodeTokensPerSecond: Double,
+        totalTokenCount: Int
+    ) {
+        self.text = text
+        self.tokenIds = tokenIds
+        self.finishReason = finishReason
+        self.prefillTokenCount = prefillTokenCount
+        self.prefillTokensPerSecond = prefillTokensPerSecond
+        self.decodeTokensPerSecond = decodeTokensPerSecond
+        self.totalTokenCount = totalTokenCount
+    }
+}
+
+#if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+/// Wraps a freshly-created `[any KVCache]` so it can cross out of
+/// `ModelContainer.perform`'s isolation as a `Sendable` return value.
+/// `KVCache` does not declare `: Sendable` (its concrete classes hold
+/// non-Sendable `MLXArray` state), so the array itself cannot satisfy a
+/// generic `R: Sendable` return constraint directly. Safe here because the
+/// box is unwrapped immediately after the single `perform` call that
+/// creates it, with no other live reference in the meantime.
+private final class KVCacheBox: @unchecked Sendable {
+    let caches: [any KVCache]
+    init(_ caches: [any KVCache]) {
+        self.caches = caches
+    }
+}
+#endif
+
 /// Real MLX-Swift backend for the InfiniteModule native-context path.
 ///
 /// Loads a model whose architecture the `mlx-swift-lm` fork supports
 /// (`qwen3_5_moe` and both Gemma4 rows — 26B-A4B #184 and the E4B OptiQ-4bit
 /// build #186 — verified vs Python mlx-lm) and runs generation with a fresh
 /// per-call KV cache.
-/// Per-session KV reuse
-/// (append-prefill / generate-decode) is a follow-up optimization within #182;
-/// rebuilding the prefill per call is correct, just not the long-context
-/// optimum. Reuses the proven load/generate pattern from `MLXLLMBackend`.
+///
+/// Two call surfaces coexist:
+/// - `generate(context:prompt:...)` — the original sessionless one-shot
+///   path, unchanged: re-prefills `context + prompt` from a fresh cache
+///   every call.
+/// - `openSession`/`appendTokens`/`generateSession`/`releaseSession` — the
+///   live-session path (engine#265/epic#263 phase 2): each session keeps
+///   its own durable `[any KVCache]` in `sessions`, appended to
+///   incrementally instead of re-prefilled from scratch. See
+///   `InfiniteSessionRuntime.swift` for the `tokenRecord`/`pendingToken`
+///   invariant both operations maintain.
 public actor MLXInfiniteBackend {
     public nonisolated let selection: InfiniteModelSelection
 
     #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
     private let container: ModelContainer
+    private var sessions: [String: LiveSessionState] = [:]
+    /// 2048-token chunks for the `appendTokens` chunked prefill — larger
+    /// than mlx-swift-lm's own 512-token default prefill step size since
+    /// append has no decode interleaved and can afford bigger batches
+    /// between admission-gate checkpoints.
+    private static let appendChunkSize = 2048
 
     private init(selection: InfiniteModelSelection, container: ModelContainer) {
         self.selection = selection
@@ -192,4 +268,194 @@ public actor MLXInfiniteBackend {
         throw InfiniteError.generationUnavailable("MLX runtime is not linked into this build")
         #endif
     }
+
+    // MARK: - Live sessions (engine#265)
+
+    /// Opens a fresh, empty live session — idempotent, so a caller that
+    /// isn't sure whether a session was already opened for `id` can call
+    /// this unconditionally before `appendTokens`/`generateSession`.
+    public func openSession(id: String) async {
+        #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+        guard sessions[id] == nil else { return }
+        let box: KVCacheBox = await container.perform { ctx in
+            KVCacheBox(ctx.model.newCache(parameters: nil))
+        }
+        sessions[id] = LiveSessionState(caches: box.caches)
+        #endif
+    }
+
+    /// Drops a live session's durable KV cache. A no-op (not an error) if
+    /// `id` has no open session — mirrors `InfiniteSessionStore.deleteSession`'s
+    /// own no-op-on-missing convention.
+    public func releaseSession(id: String) async {
+        #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+        sessions[id] = nil
+        #endif
+    }
+
+    /// Chunk-prefills `text`'s tokens onto session `id`'s durable cache,
+    /// raw (no chat template — the session path is plain text continuation
+    /// in this phase; chat framing arrives with the turn composers in a
+    /// later phase). Opens the session first if it isn't already open.
+    ///
+    /// Withholds the last new token from the prefill (feeds
+    /// `[pendingToken] + newTokens.dropLast()`), so `pendingToken` is
+    /// always set afterward — see `InfiniteSessionRuntime`'s invariant doc.
+    public func appendTokens(id: String, text: String) async throws -> SessionAppendOutcome {
+        try InfiniteSessionRuntime.requireNonEmpty(text, operation: "append")
+        #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+        await openSession(id: id)
+        guard var session = sessions[id] else {
+            throw InfiniteError.sessionNotFound(id)
+        }
+
+        let tokenizer = await container.tokenizer
+        let newTokens = tokenizer.encode(text: text, addSpecialTokens: false)
+        guard !newTokens.isEmpty else {
+            throw InfiniteError.invalidSessionInput("append text tokenized to zero tokens")
+        }
+
+        let toFeed = (session.pendingToken.map { [$0] } ?? []) + newTokens.dropLast()
+        let admissionWorkStart = ContinuousClock.now
+        let outcome = await container.perform(nonSendable: session.caches) { ctx, caches in
+            await chunkedPrefill(
+                tokens: toFeed,
+                caches: caches,
+                model: ctx.model,
+                chunkSize: Self.appendChunkSize,
+                admissionWorkStart: admissionWorkStart
+            )
+        }
+
+        if outcome.cancelled {
+            let (tokenRecord, pendingToken) = InfiniteSessionRuntime.truncatedAppendState(
+                priorTokenRecord: session.tokenRecord,
+                priorPendingToken: session.pendingToken,
+                toFeed: toFeed,
+                chunkSize: Self.appendChunkSize,
+                chunksCompleted: outcome.chunksCompleted
+            )
+            session.tokenRecord = tokenRecord
+            session.pendingToken = pendingToken
+            sessions[id] = session
+            throw CancellationError()
+        }
+
+        session.tokenRecord += newTokens
+        session.pendingToken = newTokens.last
+        sessions[id] = session
+
+        return SessionAppendOutcome(
+            appendedTokenCount: newTokens.count,
+            totalTokenCount: session.tokenRecord.count
+        )
+        #else
+        throw InfiniteError.generationUnavailable("MLX runtime is not linked into this build")
+        #endif
+    }
+
+    /// Generates from session `id`'s durable cache continued by `prompt`,
+    /// raw (no chat template — see `appendTokens`'s doc). Greedy decode
+    /// when `temperature == 0`. Opens the session first if it isn't
+    /// already open.
+    ///
+    /// Never withholds a pending token: every token `TokenIterator.next()`
+    /// returns has already been fed to the cache by the time it returns it
+    /// (verified against `Evaluate.swift`; see `InfiniteSessionRuntime`'s
+    /// invariant doc), so `pendingToken` is always `nil` afterward.
+    public func generateSession(
+        id: String,
+        prompt: String,
+        maxTokens: Int,
+        temperature: Double
+    ) async throws -> SessionGenerateOutcome {
+        try InfiniteSessionRuntime.requireNonEmpty(prompt, operation: "generate")
+        #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+        await openSession(id: id)
+        guard var session = sessions[id] else {
+            throw InfiniteError.sessionNotFound(id)
+        }
+
+        let tokenizer = await container.tokenizer
+        let promptTokens = tokenizer.encode(text: prompt, addSpecialTokens: false)
+        guard !promptTokens.isEmpty else {
+            throw InfiniteError.invalidSessionInput("generate prompt tokenized to zero tokens")
+        }
+
+        let seedIds = (session.pendingToken.map { [$0] } ?? []) + promptTokens
+        let admissionWorkStart = ContinuousClock.now
+        try await MLXAdmissionGate.shared.checkpoint(workStartedAt: admissionWorkStart)
+
+        let outcome = try await container.perform(nonSendable: session.caches) { ctx, caches in
+            try await runSessionDecodeLoop(
+                seedIds: seedIds,
+                caches: caches,
+                context: ctx,
+                parameters: SessionDecodeParameters(maxTokens: maxTokens, temperature: temperature),
+                admissionWorkStart: admissionWorkStart
+            )
+        }
+
+        // Every id in outcome.fedIds (and all of promptTokens, fed inside
+        // TokenIterator's own `prepare()` before the loop even starts) was
+        // durably fed regardless of whether the loop finished cleanly or
+        // was cancelled mid-decode — see the invariant doc — so this
+        // commit always happens before rethrowing.
+        session.tokenRecord += promptTokens + outcome.fedIds
+        session.pendingToken = nil
+        sessions[id] = session
+
+        if outcome.finishReason == "cancelled" {
+            throw CancellationError()
+        }
+
+        return SessionGenerateOutcome(
+            text: outcome.text,
+            tokenIds: outcome.emittedIds,
+            finishReason: outcome.finishReason,
+            prefillTokenCount: outcome.prefillTokenCount,
+            prefillTokensPerSecond: outcome.prefillTokensPerSecond,
+            decodeTokensPerSecond: outcome.decodeTokensPerSecond,
+            totalTokenCount: session.tokenRecord.count
+        )
+        #else
+        throw InfiniteError.generationUnavailable("MLX runtime is not linked into this build")
+        #endif
+    }
+
+    // MARK: - Test-only escape hatches (engine#265 live equivalence gate)
+
+    #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+    /// Raw-tokenizes `text` exactly like `appendTokens`/`generateSession`
+    /// do (no chat template). Internal, not public API — lets
+    /// `InfiniteSessionRuntimeTests`'s live equivalence gate build a
+    /// "cold restart" reference token sequence the same way the session
+    /// path itself tokenizes, without reaching into `container` (private).
+    func encodeForTesting(_ text: String) async -> [Int] {
+        let tokenizer = await container.tokenizer
+        return tokenizer.encode(text: text, addSpecialTokens: false)
+    }
+
+    /// Decodes `seedIds` from a brand-new cache with no session state and
+    /// no pending token — the "cold restart" reference the live
+    /// equivalence gate compares the live session path against. Internal,
+    /// not public API.
+    func coldDecodeForTesting(
+        seedIds: [Int],
+        maxTokens: Int,
+        temperature: Double
+    ) async throws -> SessionDecodeOutcome {
+        let admissionWorkStart = ContinuousClock.now
+        return try await container.perform { ctx in
+            let cache = ctx.model.newCache(parameters: nil)
+            return try await runSessionDecodeLoop(
+                seedIds: seedIds,
+                caches: cache,
+                context: ctx,
+                parameters: SessionDecodeParameters(maxTokens: maxTokens, temperature: temperature),
+                admissionWorkStart: admissionWorkStart
+            )
+        }
+    }
+    #endif
 }

@@ -229,7 +229,7 @@ public actor InfiniteEngine {
     public func append(
         sessionID: String,
         request: InfiniteAppendSessionRequest
-    ) throws -> InfiniteAppendSessionResponse {
+    ) async throws -> InfiniteAppendSessionResponse {
         // Session existence is checked first so a bad id maps to 404
         // session_not_found rather than 400 invalid_session_input (matches
         // generate()'s ordering).
@@ -239,14 +239,40 @@ public actor InfiniteEngine {
         guard !request.text.isEmpty else {
             throw InfiniteError.invalidSessionInput("append text must not be empty")
         }
+        let selection = record.selection
+        guard isModelSelectable(selection) else {
+            throw InfiniteError.modelUnavailable(selection.rawValue)
+        }
+        try requireSwiftRuntimeSupport(selection)
+
+        // Loads the real backend lazily — appendTokens does real GPU work
+        // (chunked prefill onto the session's durable KV cache), unlike the
+        // pre-#265 bookkeeping-only append.
+        let backend = try await loadBackend(for: selection)
+        let outcome: SessionAppendOutcome
+        do {
+            outcome = try await backend.appendTokens(id: sessionID, text: request.text)
+        } catch is CancellationError {
+            infiniteEngineLogger.debug(
+                "Infinite append cancelled for session \(sessionID, privacy: .public)"
+            )
+            throw CancellationError()
+        } catch let error as InfiniteError {
+            throw error
+        } catch {
+            infiniteEngineLogger.error(
+                "Infinite append failed for session \(sessionID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+            throw InfiniteError.generationFailed(error.localizedDescription)
+        }
+
         record.inputCharacters += request.text.count
-        record.estimatedInputTokens += Self.estimatedTokens(for: request.text)
-        record.accumulatedText += request.text
+        record.tokenCount = outcome.totalTokenCount
         record.updatedAt = Self.timestamp()
         sessions[sessionID] = record
         let contextWindow = record.selection.maxContextTokens
-        if record.estimatedInputTokens > contextWindow {
-            let detail = "~\(record.estimatedInputTokens) tokens vs \(contextWindow)-token native window for \(record.selection.rawValue)"
+        if record.tokenCount > contextWindow {
+            let detail = "\(record.tokenCount) tokens vs \(contextWindow)-token native window for \(record.selection.rawValue)"
             infiniteEngineLogger.warning(
                 "Infinite session \(sessionID, privacy: .public) over context: \(detail, privacy: .public); excess truncated at prefill (#180)."
             )
@@ -254,7 +280,7 @@ public actor InfiniteEngine {
         return InfiniteAppendSessionResponse(
             session: sessionInfo(record),
             appendedCharacters: request.text.count,
-            estimatedAppendedTokens: Self.estimatedTokens(for: request.text)
+            estimatedAppendedTokens: outcome.appendedTokenCount
         )
     }
 
@@ -275,11 +301,7 @@ public actor InfiniteEngine {
         // All three MLX rows run (Qwen #184, Gemma4 26B #184, Gemma4 E4B #186);
         // only retrieval mode has no MLX backend wired. Fail clearly here rather
         // than advertise a capability we can't run.
-        guard selection.swiftRuntimeSupported else {
-            throw InfiniteError.generationUnavailable(
-                "model \(selection.rawValue) (\(selection.backendKind)) is not yet runnable by the Swift MLX runtime; the retrieval backend is not yet wired"
-            )
-        }
+        try requireSwiftRuntimeSupport(selection)
 
         // Lazily load the real backend on first generate for this model.
         let backend = try await loadBackend(for: selection)
@@ -288,17 +310,15 @@ public actor InfiniteEngine {
         // returns a structured `generation_failed` 500, not a bare 500 the SDK
         // can only see as a transport error. Typed InfiniteErrors (e.g. the
         // native-window bound) pass through unchanged.
-        let result: InfiniteGenerationResult
+        let outcome: SessionGenerateOutcome
         do {
-            result = try await backend.generate(
-                context: record.accumulatedText,
+            outcome = try await backend.generateSession(
+                id: sessionID,
                 prompt: request.prompt ?? "",
                 maxTokens: request.maxTokens ?? 256,
-                nativeContextTokens: selection.nativeContextTokens,
-                // Production sampling is fixed at 0.7; the `temperature` arg
-                // exists so the parity test can request greedy (0.0) decoding.
-                // `InfiniteGenerateSessionRequest` has no temperature field yet.
-                temperature: 0.7
+                // Production sampling defaults to 0.7; `temperature` lets a
+                // caller (the live parity test) request greedy (0.0) decoding.
+                temperature: request.temperature ?? 0.7
             )
         } catch let error as InfiniteError {
             infiniteEngineLogger.error(
@@ -326,6 +346,7 @@ public actor InfiniteEngine {
         }
 
         if var updated = sessions[sessionID] {
+            updated.tokenCount = outcome.totalTokenCount
             updated.updatedAt = Self.timestamp()
             sessions[sessionID] = updated
         }
@@ -336,14 +357,14 @@ public actor InfiniteEngine {
             wiredMemoryLimitBytes: base.wiredMemoryLimitBytes,
             requiredRAMTier: base.requiredRAMTier,
             peakMemoryBytes: nil,
-            prefillTokensPerSecond: nil,
-            decodeTokensPerSecond: result.decodeTokensPerSecond,
+            prefillTokensPerSecond: outcome.prefillTokensPerSecond,
+            decodeTokensPerSecond: outcome.decodeTokensPerSecond,
             draftAcceptanceRate: nil
         )
         return InfiniteGenerateSessionResponse(
             sessionId: sessionID,
-            text: result.text,
-            finishReason: result.finishReason,
+            text: outcome.text,
+            finishReason: outcome.finishReason,
             resources: metrics
         )
     }
@@ -360,7 +381,7 @@ public actor InfiniteEngine {
             label: request.label,
             createdAt: Self.timestamp(),
             inputCharacters: record.inputCharacters,
-            estimatedInputTokens: record.estimatedInputTokens,
+            estimatedInputTokens: record.tokenCount,
             resources: resourceMetrics(for: record.selection)
         )
         record.checkpoints.append(checkpoint)
@@ -372,9 +393,17 @@ public actor InfiniteEngine {
         )
     }
 
-    public func deleteSession(id: String) throws -> InfiniteDeleteSessionResponse {
-        guard sessions.removeValue(forKey: id) != nil else {
+    public func deleteSession(id: String) async throws -> InfiniteDeleteSessionResponse {
+        guard let record = sessions.removeValue(forKey: id) else {
             throw InfiniteError.sessionNotFound(id)
+        }
+        // Release the backend's live KV cache for this session, but only
+        // when the resident backend still matches the session's own model
+        // — if a different model has since been loaded (loadBackend's
+        // "last write wins" eviction), that session's live state is already
+        // gone with the evicted backend and there is nothing to release.
+        if let backend = loadedBackend, loadedModel == record.selection {
+            await backend.releaseSession(id: id)
         }
         return InfiniteDeleteSessionResponse(sessionId: id, deleted: true)
     }
@@ -426,6 +455,18 @@ public actor InfiniteEngine {
         #endif
     }
 
+    /// Shared by `append` and `generate`: both do real backend work now
+    /// (engine#265), so both need the same "can the Swift MLX runtime
+    /// actually run this model" guard before calling `loadBackend`.
+    private func requireSwiftRuntimeSupport(_ selection: InfiniteModelSelection) throws {
+        guard selection.swiftRuntimeSupported else {
+            throw InfiniteError.generationUnavailable(
+                "model \(selection.rawValue) (\(selection.backendKind)) is not yet runnable " +
+                    "by the Swift MLX runtime; the retrieval backend is not yet wired"
+            )
+        }
+    }
+
     private var state: String {
         if isLoaded {
             return "ready"
@@ -463,7 +504,7 @@ public actor InfiniteEngine {
             updatedAt: record.updatedAt,
             contextWindowTokens: record.selection.maxContextTokens,
             inputCharacters: record.inputCharacters,
-            estimatedInputTokens: record.estimatedInputTokens,
+            estimatedInputTokens: record.tokenCount,
             checkpointCount: record.checkpoints.count,
             cleanupPolicy: Self.cleanupPolicy,
             resources: resourceMetrics(for: record.selection)
@@ -493,10 +534,6 @@ public actor InfiniteEngine {
         isoTimestampFormatter.string(from: Date())
     }
 
-    private static func estimatedTokens(for text: String) -> Int {
-        max(1, Int((Double(text.count) / 4.0).rounded(.up)))
-    }
-
     /// Saturates (does not wrap) to `Int64.max`. Physical memory is never
     /// large enough to fire on real hardware; the clamp is defensive.
     private static func int64Clamping(_ value: UInt64) -> Int64 {
@@ -513,10 +550,15 @@ private struct SessionRecord: Sendable {
     let label: String?
     let createdAt: String
     var updatedAt: String
+    /// Running total of appended characters. Cheap bookkeeping, kept
+    /// independent of the backend (unlike `tokenCount`, this never needs a
+    /// model loaded to report).
     var inputCharacters: Int = 0
-    var estimatedInputTokens: Int = 0
+    /// Real token count from the backend's live session (`tokenRecord.count`
+    /// — durable cache tokens plus the one pending token, if any). `0`
+    /// until the first `append`/`generate` call opens a backend session;
+    /// the wire field name stays `estimatedInputTokens` for API stability
+    /// even though the value is now exact, not estimated (engine#265).
+    var tokenCount: Int = 0
     var checkpoints: [InfiniteSessionCheckpoint] = []
-    /// Raw appended context, fed to the backend at generate time. (Phase 7
-    /// rebuilds the prefill per call; per-session KV reuse is a #182 follow-up.)
-    var accumulatedText: String = ""
 }
