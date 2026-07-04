@@ -357,9 +357,10 @@ final class InfiniteCheckpointResumeLiveTests: XCTestCase {
         XCTAssertNil(status.lastError)
         // The refused switcher session reverts to `.open` (its true
         // pre-operation state — it was freshly created, never parked, so
-        // `.open` is correct here, not `.parked`; see `revertState`'s doc
-        // for the bug this specifically guards against), and the
-        // mid-generate session is untouched by the refusal.
+        // `.open` is correct here, not `.parked`; see the `becameLive`
+        // doc comment on `append` for the bug this specifically guards
+        // against), and the mid-generate session is untouched by the
+        // refusal.
         let switcher = try await engine.session(id: other.id)
         XCTAssertEqual(switcher.state, "open")
         let untouched = try await engine.session(id: generating.id)
