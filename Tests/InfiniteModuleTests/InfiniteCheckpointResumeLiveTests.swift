@@ -303,4 +303,63 @@ final class InfiniteCheckpointResumeLiveTests: XCTestCase {
         let status = try await engine.session(id: session.id)
         XCTAssertEqual(status.state, "parked")
     }
+
+    // MARK: - 4. Model switch refused while a session is generating
+
+    /// A model switch that would orphan the loaded backend while one of its
+    /// sessions is mid-generate must REFUSE with `sessionBusy` (engine#266
+    /// review): the orphaned instance would deallocate after the in-flight
+    /// call and take the session's live KV state with it. The refusal fires
+    /// in `loadBackend` BEFORE any weights for the requested model are
+    /// touched, so this test never downloads the other catalog row.
+    func testModelSwitchRefusedWhileGenerating() async throws {
+        try Self.skipUnlessLive()
+
+        let backend = try await MLXInfiniteBackend.load(Self.descriptor)
+        let engine = InfiniteEngine(store: store)
+        await engine.installBackendForTesting(backend, as: .qwen35B1M)
+
+        let generating = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: Self.engineModelId, label: "mid-generate")
+        )
+        _ = try await engine.append(
+            sessionID: generating.id, request: InfiniteAppendSessionRequest(text: "warm me up")
+        )
+        await engine.setGeneratingForTesting(id: generating.id)
+
+        // A session on a DIFFERENT catalog row: its append must load that
+        // row's backend, which would orphan the qwen backend mid-generate.
+        let other = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(
+                modelId: InfiniteModelSelection.gemma4E4B1M.rawValue, label: "switcher"
+            )
+        )
+        do {
+            _ = try await engine.append(
+                sessionID: other.id, request: InfiniteAppendSessionRequest(text: "hello")
+            )
+            XCTFail("model switch while a session is generating must throw sessionBusy")
+        } catch let error as InfiniteError {
+            guard case .sessionBusy(let id) = error else {
+                XCTFail("expected sessionBusy, got \(error)")
+                return
+            }
+            XCTAssertEqual(id, generating.id, "the refusal must name the generating session")
+        }
+
+        // The refusal is backpressure, not a load failure: status must not
+        // report a lastError. (status.modelId reflects the PICKER's active
+        // row, which createSession(modelId:) legitimately moved to the
+        // gemma row — it says nothing about which backend is resident, so
+        // it is not asserted here. Residency is evidenced by the refusal
+        // itself: sessionBusy fired before any gemma weights were touched.)
+        let status = await engine.status()
+        XCTAssertNil(status.lastError)
+        // The refused switcher session must not be left stuck `.generating`,
+        // and the mid-generate session must be untouched by the refusal.
+        let switcher = try await engine.session(id: other.id)
+        XCTAssertNotEqual(switcher.state, "generating")
+        let untouched = try await engine.session(id: generating.id)
+        XCTAssertEqual(untouched.state, "generating")
+    }
 }

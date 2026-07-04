@@ -98,6 +98,44 @@ final class InfiniteCheckpointLifecycleTests: XCTestCase {
         }
     }
 
+    /// engine#266 review: `setActiveModel` must refuse a switch away from
+    /// the resident model while one of its sessions is `.generating` —
+    /// evicting that backend would silently discard the session's live KV
+    /// cache the next time something (a different session's append, or a
+    /// resume) actually triggers the swap. No real backend is needed here:
+    /// the refusal only reads `sessions`/`loadedModel` bookkeeping, wired up
+    /// via the test-only `setLoadedModelForTesting` seam (mirrors the real
+    /// path a live `loadBackend` call would hit — see
+    /// `InfiniteCheckpointResumeLiveTests.testModelSwitchRefusedWhileGenerating`
+    /// for the full live proof, including the backend-eviction-parking
+    /// half once the busy session clears).
+    func testSetActiveModelRefusesWhileOutgoingSessionGenerating() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        let residentSelection = InfiniteModelSelection.gemma4E4B1M
+        let otherSelection = InfiniteModelSelection.gemma4_12B1M
+
+        let busySession = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: residentSelection.rawValue, label: "resident")
+        )
+        await engine.setLoadedModelForTesting(residentSelection)
+        await engine.setGeneratingForTesting(id: busySession.id)
+
+        let activeBefore = await engine.status().modelId
+        await assertThrowsSessionBusy(busySession.id) {
+            _ = try await engine.setActiveModel(otherSelection, preload: false)
+        }
+        let statusWhileBusy = await engine.status()
+        XCTAssertEqual(statusWhileBusy.modelId, activeBefore, "a refused switch must not mutate activeModel")
+        XCTAssertNil(statusWhileBusy.lastError, "a busy refusal is backpressure, not a load failure")
+
+        // Clear busy; the identical switch must now succeed.
+        await engine.setOpenForTesting(id: busySession.id)
+        let active = try await engine.setActiveModel(otherSelection, preload: false)
+        XCTAssertEqual(active.id, otherSelection.rawValue)
+        XCTAssertEqual(await engine.status().modelId, otherSelection.rawValue)
+    }
+
     // MARK: - Resume no-op
 
     /// Resuming an already-`.open` session with no explicit `checkpointId`

@@ -145,6 +145,11 @@ public actor InfiniteEngine {
         if let loaded = loadedBackend, loaded.selection == selection {
             return loaded
         }
+        // Fast-fail before paying for a multi-GB load the swap below would
+        // refuse anyway (see the authoritative re-check pre-swap).
+        if let previous = loadedBackend, previous.selection != selection {
+            try requireNoGeneratingSessions(under: previous.selection)
+        }
         if let inFlight = loadTasks[selection] {
             return try await inFlight.value
         }
@@ -155,12 +160,14 @@ public actor InfiniteEngine {
             let backend = try await task.value
             // Backend eviction parking (engine#266): the previous backend
             // (if any, and if it's actually a different model) is about to
-            // be orphaned by the reassignment below. Checkpoint + release
-            // every session still hot under it first, so their KV state
-            // survives on disk instead of silently vanishing — narrowing
-            // the "last write wins" gap `deleteSession`'s doc comment used
-            // to describe as unconditional.
+            // be orphaned by the reassignment below. A session mid-generate
+            // on it would lose its live KV state when it deallocates, so
+            // the switch REFUSES (`session_busy`; re-checked here because a
+            // generate may have started during the load above) — then every
+            // remaining hot session is checkpointed + released so its KV
+            // state survives on disk instead of silently vanishing.
             if let previous = loadedBackend, previous.selection != selection {
+                try requireNoGeneratingSessions(under: previous.selection)
                 await parkHotSessions(usingSelection: previous.selection, backend: previous)
             }
             loadedBackend = backend
@@ -173,6 +180,11 @@ public actor InfiniteEngine {
             // also disagree with the CancellationError a concurrent joiner sees).
             throw CancellationError()
         } catch let error as InfiniteError {
+            if case .sessionBusy = error {
+                // A busy refusal is backpressure, not a load failure; do
+                // not surface it through `lastLoadError`/status.
+                throw error
+            }
             lastLoadError = error.localizedDescription
             throw error
         } catch {
@@ -200,6 +212,14 @@ public actor InfiniteEngine {
     ) async throws -> InfiniteModelInfo {
         guard isModelSelectable(selection) else {
             throw InfiniteError.modelUnavailable(selection.rawValue)
+        }
+        // engine#266 review: refuse the picker switch itself, not just the
+        // lazy `loadBackend` swap a later append/generate would trigger —
+        // a user clicking a different model row must get an immediate,
+        // clear `session_busy` rather than an apparently-successful switch
+        // that only fails (or silently evicts) on the next unrelated call.
+        if let residentSelection = loadedModel, residentSelection != selection {
+            try requireNoGeneratingSessions(under: residentSelection)
         }
 
         let nextPreparedBackend: InfiniteBackendHandle?
@@ -769,6 +789,19 @@ public actor InfiniteEngine {
     /// call's own awaits, e.g. a client racing two requests — observes
     /// `sessionBusy` instead of interleaving with the backend actor's own
     /// in-flight work. Callers MUST call `endBusyOperation` on every exit path.
+    /// Refuses a model switch that would orphan a backend while one of its
+    /// sessions is mid-generate (engine#266 review): the orphaned instance
+    /// deallocates after the in-flight call and takes the session's live
+    /// KV state with it, the exact silent-loss class this epic removes.
+    /// The caller retries once generation completes.
+    private func requireNoGeneratingSessions(under selection: InfiniteModelSelection) throws {
+        if let busy = sessions.values.first(
+            where: { $0.selection == selection && $0.state == .generating }
+        ) {
+            throw InfiniteError.sessionBusy(busy.id)
+        }
+    }
+
     private func beginBusyOperation(sessionID: String) throws -> (record: SessionRecord, wasParked: Bool) {
         guard var record = sessions[sessionID] else {
             throw InfiniteError.sessionNotFound(sessionID)
@@ -850,16 +883,13 @@ public actor InfiniteEngine {
     /// Backend eviction parking (engine#266): checkpoints + releases every
     /// session still `.open` under `selection` before its backend instance
     /// (`backend`) is orphaned by `loadBackend` switching to a different
-    /// model. Skips `.generating` sessions — one mid-flight on `backend`
-    /// holds its own reference to it directly (captured before the swap),
-    /// so it keeps running to completion against the now-orphaned instance;
-    /// parking it here would race that in-flight call. That is a narrow,
-    /// documented residual gap (not solved by this phase): a session
-    /// evicted-from-hot-tracking while genuinely mid-generate loses its
-    /// state once the orphaned backend deallocates, exactly as before this
-    /// phase's "last write wins" eviction. Best-effort: a single session's
-    /// checkpoint failure is logged and does not block parking the rest or
-    /// throw into the caller's own unrelated model load.
+    /// model. `.generating` sessions cannot occur here: `loadBackend`
+    /// refuses the switch outright (`sessionBusy`, re-checked immediately
+    /// before the swap) while any session under the outgoing selection is
+    /// mid-generate, so by the time this runs every hot session is safely
+    /// parkable. Best-effort: a single session's checkpoint failure is
+    /// logged and does not block parking the rest or throw into the
+    /// caller's own unrelated model load.
     private func parkHotSessions(usingSelection selection: InfiniteModelSelection, backend: MLXInfiniteBackend) async {
         let victims = sessions.values.filter { $0.selection == selection && $0.state == .open }
         for victim in victims {
@@ -1148,6 +1178,24 @@ public actor InfiniteEngine {
         guard var record = sessions[id] else { return }
         record.state = .parked
         sessions[id] = record
+    }
+
+    /// Directly marks `id`'s session `.open`, so a unit test can clear the
+    /// `.generating` flag `setGeneratingForTesting` set without a real
+    /// generate call completing. Internal, not public API.
+    func setOpenForTesting(id: String) {
+        guard var record = sessions[id] else { return }
+        record.state = .open
+        sessions[id] = record
+    }
+
+    /// Directly sets `loadedModel` (engine bookkeeping only, no backend
+    /// attached), so a unit test can exercise `setActiveModel`'s
+    /// `requireNoGeneratingSessions` refusal — which only reads
+    /// `loadedModel`, never `loadedBackend` — without loading a real MLX
+    /// backend. Internal, not public API.
+    func setLoadedModelForTesting(_ selection: InfiniteModelSelection) {
+        loadedModel = selection
     }
 
     /// Installs `backend` directly as the resident backend for `selection`,
