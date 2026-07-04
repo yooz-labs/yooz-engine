@@ -382,4 +382,58 @@ final class InfiniteCheckpointResumeLiveTests: XCTestCase {
             "once no longer busy, the model switch must proceed and park the outgoing session"
         )
     }
+
+    // MARK: - 5. Failed resume keeps the session parked and retries
+
+    /// Regression for the becameLive rollback fix: when a parked session's
+    /// resume fails partway (here: its checkpoint's `cache.safetensors`
+    /// deleted out from under it), the session must stay `parked` — the old
+    /// `hasLiveBackendState`-ratchet formula flipped it to `open`, after
+    /// which the next touch's `ensureLiveBackendState` guard trusted the
+    /// stale ratchet, skipped the resume entirely, and pointed the engine at
+    /// backend state that did not exist. The second touch below proves the
+    /// resume is genuinely retried (same failure again), not skipped.
+    func testFailedResumeStaysParkedAndRetries() async throws {
+        try Self.skipUnlessLive()
+
+        let backend = try await MLXInfiniteBackend.load(Self.descriptor)
+        let engine = InfiniteEngine(store: store)
+        await engine.installBackendForTesting(backend, as: .qwen35B1M)
+
+        let session = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: Self.engineModelId, label: "broken-resume")
+        )
+        _ = try await engine.append(
+            sessionID: session.id, request: InfiniteAppendSessionRequest(text: "remember this")
+        )
+        let checkpointed = try await engine.checkpoint(
+            sessionID: session.id, request: InfiniteCheckpointSessionRequest(label: nil, park: true)
+        )
+
+        // Break the checkpoint: remove cache.safetensors so the resume's
+        // loadPromptCache step fails after the integrity gate passes.
+        let cacheURL = tempRoot
+            .appendingPathComponent(session.id, isDirectory: true)
+            .appendingPathComponent(checkpointed.checkpoint.id, isDirectory: true)
+            .appendingPathComponent("cache.safetensors")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
+        try FileManager.default.removeItem(at: cacheURL)
+
+        for attempt in 1...2 {
+            do {
+                _ = try await engine.append(
+                    sessionID: session.id, request: InfiniteAppendSessionRequest(text: "more")
+                )
+                XCTFail("attempt \(attempt): resume from a broken checkpoint must throw")
+            } catch {
+                // Any thrown error is acceptable; the state contract is what
+                // this test pins down.
+            }
+            let after = try await engine.session(id: session.id)
+            XCTAssertEqual(
+                after.state, "parked",
+                "attempt \(attempt): a failed resume must leave the session parked, not open"
+            )
+        }
+    }
 }
