@@ -174,6 +174,125 @@ final class InfiniteCheckpointLifecycleTests: XCTestCase {
         XCTAssertEqual(thinkingInSession.state, "open")
     }
 
+    // MARK: - Quantized KV knob validation (engine#268)
+
+    /// `kvBits` outside `{4, 8}` 400s regardless of model family — the bit
+    /// check runs before the Qwen-only gate, so this needs no full-tier
+    /// model to exercise.
+    func testCreateSessionRejectsInvalidKvBitsValue() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        do {
+            _ = try await engine.createSession(request: InfiniteCreateSessionRequest(kvBits: 5))
+            XCTFail("expected invalidSessionInput for an out-of-range kvBits")
+        } catch InfiniteError.invalidSessionInput(let reason) {
+            XCTAssertTrue(reason.contains("kvBits"))
+        }
+    }
+
+    /// Quantized KV is Qwen-only in v1 (`InfiniteModelSelection
+    /// .supportsQuantizedKVCache`): a session on the default (Gemma4)
+    /// model with `kvBits` set must be rejected at create time with a
+    /// clear message — never allowed to reach a loaded backend, let alone
+    /// `QuantizedKVCache.update()`'s `fatalError` on Gemma4Text's
+    /// direct-`cache.update()` attention path.
+    func testCreateSessionRejectsKvBitsOnGemmaSession() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        do {
+            _ = try await engine.createSession(
+                request: InfiniteCreateSessionRequest(
+                    modelId: InfiniteModelSelection.gemma4E4B1M.rawValue, kvBits: 4
+                )
+            )
+            XCTFail("expected invalidSessionInput for kvBits on a Gemma4 session")
+        } catch InfiniteError.invalidSessionInput(let reason) {
+            XCTAssertTrue(reason.contains("Qwen-only"))
+            XCTAssertTrue(reason.contains(InfiniteModelSelection.gemma4E4B1M.rawValue))
+        }
+    }
+
+    /// `kvScheme` and `kvBits` naming contradicting bit widths 400s before
+    /// any model-family check.
+    func testCreateSessionRejectsContradictingSchemeAndBits() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        do {
+            _ = try await engine.createSession(
+                request: InfiniteCreateSessionRequest(kvBits: 4, kvScheme: "affine8")
+            )
+            XCTFail("expected invalidSessionInput for a kvScheme/kvBits contradiction")
+        } catch InfiniteError.invalidSessionInput(let reason) {
+            XCTAssertTrue(reason.contains("affine8"))
+            XCTAssertTrue(reason.contains("kvBits=4"))
+        }
+    }
+
+    /// An unrecognized `kvScheme` 400s rather than silently ignoring it.
+    func testCreateSessionRejectsUnknownKvScheme() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        do {
+            _ = try await engine.createSession(
+                request: InfiniteCreateSessionRequest(kvScheme: "not-a-scheme")
+            )
+            XCTFail("expected invalidSessionInput for an unknown kvScheme")
+        } catch InfiniteError.invalidSessionInput(let reason) {
+            XCTAssertTrue(reason.contains("kvScheme"))
+        }
+    }
+
+    /// `kvGroupSize` with neither `kvBits` nor `kvScheme` is meaningless —
+    /// there is nothing to group.
+    func testCreateSessionRejectsGroupSizeWithoutBitsOrScheme() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        do {
+            _ = try await engine.createSession(request: InfiniteCreateSessionRequest(kvGroupSize: 64))
+            XCTFail("expected invalidSessionInput for a bare kvGroupSize")
+        } catch InfiniteError.invalidSessionInput(let reason) {
+            XCTAssertTrue(reason.contains("kvGroupSize"))
+        }
+    }
+
+    /// Valid combinations on a Qwen session all succeed: bare `kvBits`
+    /// (4 or 8), a matching `kvScheme`, `kvScheme` alone (resolving to its
+    /// implied bits), and `kvGroupSize` alongside `kvBits`. `qwen3-35b-1m`
+    /// is a full-tier row, so this needs 64 GiB to even be selectable.
+    func testCreateSessionAcceptsValidQuantizedKVCombosOnQwenSession() async throws {
+        try XCTSkipUnless(
+            InfiniteRAMTier.current == .full,
+            "qwen3-35b-1m is full-tier; needs 64 GB to test the Qwen-only accept path"
+        )
+        let engine = InfiniteEngine()
+        let qwen = InfiniteModelSelection.qwen35B1M.rawValue
+
+        let bits4 = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: qwen, kvBits: 4)
+        )
+        XCTAssertEqual(bits4.state, "open")
+
+        let bits8 = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: qwen, kvBits: 8)
+        )
+        XCTAssertEqual(bits8.state, "open")
+
+        let schemeOnly = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: qwen, kvScheme: "affine4")
+        )
+        XCTAssertEqual(schemeOnly.state, "open")
+
+        let matchingSchemeAndBits = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: qwen, kvBits: 8, kvScheme: "affine8")
+        )
+        XCTAssertEqual(matchingSchemeAndBits.state, "open")
+
+        let withGroupSize = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(modelId: qwen, kvBits: 4, kvGroupSize: 32)
+        )
+        XCTAssertEqual(withGroupSize.state, "open")
+    }
+
     // MARK: - Resume no-op
 
     /// Resuming an already-`.open` session with no explicit `checkpointId`

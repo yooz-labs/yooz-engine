@@ -278,6 +278,7 @@ public actor InfiniteEngine {
             throw InfiniteError.modelUnavailable(selection.rawValue)
         }
         let turnPolicy = try sessionTurnPolicy(request.turnPolicy)
+        let kvKnobs = try resolvedKVKnobs(request: request, selection: selection)
         let now = Self.timestamp()
         let id = UUID().uuidString
         let record = SessionRecord(
@@ -286,7 +287,10 @@ public actor InfiniteEngine {
             label: request.label,
             createdAt: now,
             updatedAt: now,
-            turnPolicy: turnPolicy
+            turnPolicy: turnPolicy,
+            kvBits: kvKnobs.kvBits,
+            kvGroupSize: kvKnobs.kvGroupSize,
+            kvScheme: kvKnobs.kvScheme
         )
         sessions[id] = record
         return sessionInfo(record)
@@ -303,6 +307,59 @@ public actor InfiniteEngine {
             throw InfiniteError.invalidSessionInput("unknown turnPolicy '\(raw)'")
         }
         return raw
+    }
+
+    /// `kvBits`/`kvGroupSize`/`kvScheme` resolved and validated at session
+    /// creation (engine#268) — the sole enforcement point for the
+    /// Qwen-only quantized-KV rule, so a Gemma4 request is rejected here,
+    /// before a session (let alone a backend) ever exists, and never
+    /// reaches `QuantizedKVCache.update()`'s `fatalError` on Gemma4Text's
+    /// direct-`cache.update()` attention path.
+    private struct ResolvedKVKnobs {
+        let kvBits: Int?
+        let kvGroupSize: Int?
+        let kvScheme: String?
+    }
+
+    private static let affineSchemeBits: [String: Int] = ["affine4": 4, "affine8": 8]
+
+    private func resolvedKVKnobs(
+        request: InfiniteCreateSessionRequest,
+        selection: InfiniteModelSelection
+    ) throws -> ResolvedKVKnobs {
+        var bits = request.kvBits
+        if let scheme = request.kvScheme {
+            guard let schemeBits = Self.affineSchemeBits[scheme] else {
+                throw InfiniteError.invalidSessionInput(
+                    "unknown kvScheme '\(scheme)'; expected 'affine4' or 'affine8'"
+                )
+            }
+            if let requestedBits = request.kvBits, requestedBits != schemeBits {
+                throw InfiniteError.invalidSessionInput(
+                    "kvScheme '\(scheme)' implies \(schemeBits)-bit KV quantization, "
+                        + "contradicting kvBits=\(requestedBits)"
+                )
+            }
+            bits = schemeBits
+        }
+
+        guard let bits else {
+            guard request.kvGroupSize == nil else {
+                throw InfiniteError.invalidSessionInput("kvGroupSize requires kvBits or kvScheme")
+            }
+            return ResolvedKVKnobs(kvBits: nil, kvGroupSize: nil, kvScheme: nil)
+        }
+
+        guard bits == 4 || bits == 8 else {
+            throw InfiniteError.invalidSessionInput("kvBits must be 4 or 8, got \(bits)")
+        }
+        guard selection.supportsQuantizedKVCache else {
+            throw InfiniteError.invalidSessionInput(
+                "quantized KV cache is Qwen-only in v1; \(selection.rawValue) does not support kvBits"
+            )
+        }
+
+        return ResolvedKVKnobs(kvBits: bits, kvGroupSize: request.kvGroupSize, kvScheme: request.kvScheme)
     }
 
     public func append(
@@ -658,7 +715,10 @@ public actor InfiniteEngine {
             state: .parked,
             lastCheckpointId: newCheckpointID,
             hasLiveBackendState: false,
-            turnPolicy: forkedManifest.cacheConfig.turnPolicy
+            turnPolicy: forkedManifest.cacheConfig.turnPolicy,
+            kvBits: forkedManifest.cacheConfig.kvBits,
+            kvGroupSize: forkedManifest.cacheConfig.kvGroupSize,
+            kvScheme: forkedManifest.cacheConfig.kvScheme
         )
         sessions[newSessionID] = newRecord
         return sessionInfo(newRecord)
@@ -890,7 +950,7 @@ public actor InfiniteEngine {
         }
         guard !record.hasLiveBackendState else { return record }
         try await enforceHotBudget(admitting: record.id)
-        await backend.openSession(id: record.id)
+        await backend.openSession(id: record.id, kvBits: record.kvBits, kvGroupSize: record.kvGroupSize)
         var updated = record
         updated.hasLiveBackendState = true
         return updated
@@ -1022,7 +1082,12 @@ public actor InfiniteEngine {
             tokenCount: snapshot.tokenRecord.count,
             pendingTokenId: snapshot.pendingToken,
             tokenIdsSHA256: InfiniteSessionStore.sha256Hex(tokensData),
-            cacheConfig: SessionKnobs(turnPolicy: record.turnPolicy),
+            cacheConfig: SessionKnobs(
+                kvBits: record.kvBits,
+                kvGroupSize: record.kvGroupSize,
+                kvScheme: record.kvScheme,
+                turnPolicy: record.turnPolicy
+            ),
             parentCheckpointId: record.lastCheckpointId,
             label: label
         )
@@ -1156,7 +1221,10 @@ public actor InfiniteEngine {
             state: .parked,
             lastCheckpointId: checkpointId,
             hasLiveBackendState: false,
-            turnPolicy: manifest.cacheConfig.turnPolicy
+            turnPolicy: manifest.cacheConfig.turnPolicy,
+            kvBits: manifest.cacheConfig.kvBits,
+            kvGroupSize: manifest.cacheConfig.kvGroupSize,
+            kvScheme: manifest.cacheConfig.kvScheme
         )
     }
 
@@ -1316,4 +1384,12 @@ private struct SessionRecord: Sendable {
     /// creation, persisted into `SessionKnobs.turnPolicy` at checkpoint time,
     /// and restored from `manifest.cacheConfig.turnPolicy` on rehydration/fork.
     var turnPolicy: String = InfiniteTurnPolicy.turnCommit.rawValue
+    /// Quantized-KV knobs (engine#268), validated once at creation
+    /// (`resolvedKVKnobs`) and immutable afterward. `nil` means an
+    /// unquantized (plain `KVCacheSimple`) session — the common case.
+    /// Persisted into `SessionKnobs` at checkpoint time and restored from
+    /// `manifest.cacheConfig` on rehydration/fork, same as `turnPolicy`.
+    var kvBits: Int?
+    var kvGroupSize: Int?
+    var kvScheme: String?
 }
