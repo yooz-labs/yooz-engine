@@ -86,18 +86,55 @@ public struct InfiniteClient: Sendable {
         return try JSONDecoder().decode(InfiniteGenerateSessionResponse.self, from: data)
     }
 
-    /// Checkpoint an Infinite session for later lifecycle inspection.
+    /// Checkpoint an Infinite session for later lifecycle inspection. Set
+    /// `park: true` to also release the session's live KV cache from RAM
+    /// (`state` becomes `"parked"`); the session survives on disk either way.
     public func checkpoint(
         sessionId: String,
-        label: String? = nil
+        label: String? = nil,
+        park: Bool? = nil
     ) async throws -> InfiniteCheckpointSessionResponse {
-        let request = InfiniteCheckpointSessionRequest(label: label)
+        let request = InfiniteCheckpointSessionRequest(label: label, park: park)
         let body = try JSONEncoder().encode(request)
         let data = try await engine.post(
             "/v1/infinite/sessions/\(sessionId)/checkpoint",
             body: body
         )
         return try JSONDecoder().decode(InfiniteCheckpointSessionResponse.self, from: data)
+    }
+
+    /// Resume a session from a checkpoint (defaults to the latest). A no-op
+    /// success on an already-open session when `checkpointId` is omitted.
+    @discardableResult
+    public func resumeSession(
+        sessionId: String,
+        checkpointId: String? = nil
+    ) async throws -> InfiniteSessionInfo {
+        let request = InfiniteResumeSessionRequest(checkpointId: checkpointId)
+        let body = try JSONEncoder().encode(request)
+        let data = try await engine.post(
+            "/v1/infinite/sessions/\(sessionId)/resume",
+            body: body
+        )
+        return try JSONDecoder().decode(InfiniteSessionInfo.self, from: data)
+    }
+
+    /// Fork a checkpoint (defaults to the source session's latest) into a
+    /// new, independent session. The new session is created `"parked"` —
+    /// fork does not auto-resume it.
+    @discardableResult
+    public func forkSession(
+        sessionId: String,
+        checkpointId: String? = nil,
+        label: String? = nil
+    ) async throws -> InfiniteSessionInfo {
+        let request = InfiniteForkSessionRequest(checkpointId: checkpointId, label: label)
+        let body = try JSONEncoder().encode(request)
+        let data = try await engine.post(
+            "/v1/infinite/sessions/\(sessionId)/fork",
+            body: body
+        )
+        return try JSONDecoder().decode(InfiniteSessionInfo.self, from: data)
     }
 
     /// Delete an Infinite session and release its engine-owned context.

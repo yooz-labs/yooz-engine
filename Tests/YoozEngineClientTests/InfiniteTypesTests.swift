@@ -151,12 +151,36 @@ final class InfiniteTypesTests: XCTestCase {
         )
         let response = InfiniteCheckpointSessionResponse(
             session: session,
-            checkpoint: checkpoint
+            checkpoint: checkpoint,
+            sizeBytes: 4_096,
+            tokenCount: 32,
+            durationSeconds: 0.042,
+            parentCheckpointId: "checkpoint-0"
         )
 
         let data = try JSONEncoder().encode(response)
         let decoded = try JSONDecoder().decode(InfiniteCheckpointSessionResponse.self, from: data)
         XCTAssertEqual(decoded, response)
+    }
+
+    func testInfiniteResumeAndForkRequestsRoundTrip() throws {
+        let resumeWithId = InfiniteResumeSessionRequest(checkpointId: "checkpoint-1")
+        let resumeData = try JSONEncoder().encode(resumeWithId)
+        let decodedResume = try JSONDecoder().decode(InfiniteResumeSessionRequest.self, from: resumeData)
+        XCTAssertEqual(decodedResume, resumeWithId)
+
+        let resumeLatest = InfiniteResumeSessionRequest()
+        XCTAssertNil(resumeLatest.checkpointId)
+
+        let fork = InfiniteForkSessionRequest(checkpointId: "checkpoint-1", label: "branch")
+        let forkData = try JSONEncoder().encode(fork)
+        let decodedFork = try JSONDecoder().decode(InfiniteForkSessionRequest.self, from: forkData)
+        XCTAssertEqual(decodedFork, fork)
+
+        let checkpointWithPark = InfiniteCheckpointSessionRequest(label: "before-park", park: true)
+        let parkData = try JSONEncoder().encode(checkpointWithPark)
+        let parkJSON = try JSONSerialization.jsonObject(with: parkData) as! [String: Any]
+        XCTAssertEqual(parkJSON["park"] as? Bool, true)
     }
 
     func testInfiniteSessionRequestEncoding() throws {
