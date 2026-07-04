@@ -116,10 +116,14 @@ public struct InfiniteAppendSessionResponse: Codable, Sendable, Equatable {
 public struct InfiniteGenerateSessionRequest: Codable, Sendable, Equatable {
     public let prompt: String?
     public let maxTokens: Int?
+    /// Sampling temperature; `nil` preserves the production default (0.7).
+    /// `0` selects greedy decoding (engine#265).
+    public let temperature: Double?
 
-    public init(prompt: String? = nil, maxTokens: Int? = nil) {
+    public init(prompt: String? = nil, maxTokens: Int? = nil, temperature: Double? = nil) {
         self.prompt = prompt
         self.maxTokens = maxTokens
+        self.temperature = temperature
     }
 }
 

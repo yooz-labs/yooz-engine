@@ -70,9 +70,14 @@ public struct InfiniteClient: Sendable {
     public func generate(
         sessionId: String,
         prompt: String? = nil,
-        maxTokens: Int? = nil
+        maxTokens: Int? = nil,
+        temperature: Double? = nil
     ) async throws -> InfiniteGenerateSessionResponse {
-        let request = InfiniteGenerateSessionRequest(prompt: prompt, maxTokens: maxTokens)
+        let request = InfiniteGenerateSessionRequest(
+            prompt: prompt,
+            maxTokens: maxTokens,
+            temperature: temperature
+        )
         let body = try JSONEncoder().encode(request)
         let data = try await engine.post(
             "/v1/infinite/sessions/\(sessionId)/generate",
