@@ -40,9 +40,11 @@ The canonical catalogue is `InfiniteModelSelection` in the engine. Consumer apps
 | `POST` | `/v1/infinite/sessions` | `InfiniteSessionInfo` | Body: `{ "modelId": String?, "label": String? }`. |
 | `GET` | `/v1/infinite/sessions/:id` | `InfiniteSessionInfo` | Returns `404` when the session is gone. |
 | `POST` | `/v1/infinite/sessions/:id/append` | `InfiniteAppendSessionResponse` | Body: `{ "text": String }`; empty text is invalid. |
-| `POST` | `/v1/infinite/sessions/:id/checkpoint` | `InfiniteCheckpointSessionResponse` | Body: `{ "label": String? }`. |
-| `POST` | `/v1/infinite/sessions/:id/generate` | `InfiniteGenerateSessionResponse` | Generates from the session's accumulated context on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B, and Gemma4 E4B — #184/#186), bounded to the model's native window (≤262K; 1M paging tracked in #180). Only retrieval mode returns `501 generation_unavailable`. Session state is preserved either way. |
-| `DELETE` | `/v1/infinite/sessions/:id` | `InfiniteDeleteSessionResponse` | Releases the engine-owned session. |
+| `POST` | `/v1/infinite/sessions/:id/checkpoint` | `InfiniteCheckpointSessionResponse` | Body: `{ "label": String?, "park": Bool? }`. Persists the session's KV cache to disk (`InfiniteSessionStore`); `park: true` also releases it from RAM (`state` becomes `"parked"`). Response adds `sizeBytes`, `tokenCount`, `durationSeconds`, and `parentCheckpointId` alongside `session`/`checkpoint`. |
+| `POST` | `/v1/infinite/sessions/:id/resume` | `InfiniteSessionInfo` | Body: `{ "checkpointId": String? }` (defaults to the latest checkpoint). Integrity-verifies the checkpoint and reloads its KV cache. A no-op success on an already-`"open"` session when `checkpointId` is omitted. Works even after a process restart — the checkpoint's own manifest is enough to rehydrate a minimal session record. |
+| `POST` | `/v1/infinite/sessions/:id/fork` | `InfiniteSessionInfo` | Body: `{ "checkpointId": String?, "label": String? }` (defaults to the source session's latest checkpoint). Clones the checkpoint into a **new** session id (respects the 16-session cap) and does **not** auto-resume it — the fork starts `"parked"`. A hot, never-checkpointed source takes one implicit checkpoint first. |
+| `POST` | `/v1/infinite/sessions/:id/generate` | `InfiniteGenerateSessionResponse` | Generates from the session's accumulated context on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B, and Gemma4 E4B — #184/#186), bounded to the model's native window (≤262K; 1M paging tracked in #180). Only retrieval mode returns `501 generation_unavailable`. Session state is preserved either way. Transparently resumes a `"parked"` session first. |
+| `DELETE` | `/v1/infinite/sessions/:id` | `InfiniteDeleteSessionResponse` | Releases the engine-owned session and deletes its on-disk checkpoint tree. |
 
 The cleanup policy is:
 
@@ -51,6 +53,30 @@ explicit_delete_or_process_exit;max_active_sessions=16
 ```
 
 `/v1/session/begin` is a recording boundary for STT-style work and does not delete Infinite sessions. Consumers must call `DELETE /v1/infinite/sessions/:id` when finished.
+
+## Session Lifecycle (engine#266)
+
+`InfiniteSessionInfo.state` is one of:
+
+| State | Meaning |
+|---|---|
+| `open` | Backend-resident (or never yet touched) and idle — the normal target for append/generate/checkpoint. |
+| `parked` | Checkpointed to disk with its live KV cache released from RAM. `append`/`generate`/`checkpoint` transparently resume it first — callers do not need to call `resume` themselves except to target a specific (non-latest) checkpoint. |
+| `generating` | A call is in flight for this session; any other op on it returns `409 session_busy` rather than racing the backend. |
+
+At most **2 sessions stay hot** (hold a live KV cache) at once, independent of the 16-session tracked-record cap: opening or resuming a 3rd hot session automatically checkpoints + parks the least-recently-touched other hot session first. Switching the active model (a different session's append/generate loading a different backend) parks every session hot under the outgoing model the same way. Both eviction paths skip a session that is currently `generating` (never safe to park mid-flight); if every other hot session is busy, the request returns `409 session_busy` instead of proceeding.
+
+Checkpoints are durable across process exit, not just RAM eviction: `resume`/`fork` read a checkpoint's own on-disk manifest, so they work even against a session id the current engine process has never seen (e.g. after a restart), as long as its checkpoint directory still exists.
+
+### Error codes
+
+Alongside the existing `invalid_model` (400), `model_unavailable` (501), `model_set_failed` (500), `session_not_found` (404), `invalid_session_input` (400), `session_limit_exceeded` (409), `generation_unavailable` (501), and `generation_failed` (500):
+
+| Code | Status | Meaning |
+|---|---|---|
+| `checkpoint_not_found` | 404 | The requested (or implied) checkpoint id does not exist for this session. |
+| `checkpoint_integrity` | 409 | The checkpoint's on-disk contents failed the schema/model/tokenizer/token-hash integrity gate (`InfiniteSessionStore.verify`) — e.g. a tampered `tokens.bin`, or a resume against a different model/tokenizer than the checkpoint was written with. The session is left untouched; no live state is installed from a failed integrity check. |
+| `session_busy` | 409 | The session is currently `generating`; retry once the in-flight call completes. |
 
 ## SDK Usage
 
@@ -77,6 +103,28 @@ try await client.infinite.append(
     text: longDocumentText
 )
 try await client.infinite.checkpoint(sessionId: session.id, label: "loaded")
+```
+
+Park a session to free RAM, then resume it later — `append`/`generate` do this
+transparently, but an explicit `resume` is also available (e.g. to target a
+non-latest checkpoint):
+
+```swift
+let checkpoint = try await client.infinite.checkpoint(
+    sessionId: session.id, label: "before-park", park: true
+)
+// session.state is now "parked"; append/generate would resume it
+// automatically, or resume explicitly:
+try await client.infinite.resumeSession(sessionId: session.id)
+
+// Fork a checkpoint into a brand-new, independent session — the fork
+// starts "parked" (it does not auto-resume):
+let forked = try await client.infinite.forkSession(
+    sessionId: session.id,
+    checkpointId: checkpoint.checkpoint.id,
+    label: "exploration-branch"
+)
+try await client.infinite.resumeSession(sessionId: forked.id)
 ```
 
 Generation runs on Swift-runtime-supported models (Qwen3.6 `qwen3_5_moe`, Gemma4 26B-A4B and E4B — #184/#186). Only retrieval mode throws `generation_unavailable`:
@@ -144,3 +192,16 @@ scripts/run-integration.sh
 ```
 
 The integration suite starts a served engine and drives Infinite through `YoozEngineClient`, including `/v1/modules`, model picker, status, create, append, fetch, checkpoint, generation (real text from the default Gemma4 E4B model now that #186 landed; retrieval still returns `501 generation_unavailable`), delete, and deleted-session `404`.
+
+Live checkpoint/park/resume/fork gate (`Tests/InfiniteModuleTests/InfiniteCheckpointResumeLiveTests.swift`, engine#266): token-exact greedy equivalence across checkpoint(park)+resume, fork divergence with parent-checkpoint immutability, and the integrity gate rejecting a tampered `tokens.bin`, against the pinned `mlx-community/Qwen3.5-0.8B-MLX-4bit` (hybrid `MambaCache`/`KVCacheSimple` — the hardest KV-cache-shape case). Needs the `.full` (64 GiB) RAM tier — `installBackendForTesting`'s test-only label must match the injected backend's own `.selection` (`.qwen35B1M`), since `loadBackend`'s cache-hit check keys off that identity, not a separately-tracked label:
+
+```bash
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
+  -configuration Debug -skipMacroValidation -derivedDataPath build \
+  -destination 'platform=macOS' build-for-testing -only-testing:InfiniteModuleTests
+DYLD_FRAMEWORK_PATH=build/Build/Products/Debug YOOZ_INFINITE_LIVE=1 \
+  xcrun xctest -XCTest InfiniteModuleTests.InfiniteCheckpointResumeLiveTests \
+  build/Build/Products/Debug/InfiniteModuleTests.xctest
+```
+
+A fourth live gate, `testGemma4RotatingCacheCheckpointResume` (`Tests/YoozEngineTests/InfiniteGemma4ParityTests.swift`), covers the same round trip for Gemma4 E4B's `RotatingKVCache` sliding-window layers (512-token window) once genuinely rotated — that suite is app-hosted (`YoozEngineTests`) and needs a desktop GUI session (`INFINITE_LIVE=1` + weights cached, via the `InfiniteLive` scheme), not a headless shell.
