@@ -71,7 +71,16 @@ public struct InfiniteSessionManifest: Codable, Sendable, Equatable {
     /// `InfiniteSessionStore.verify(manifest:against:session:checkpoint:)`.
     public let tokenIdsSHA256: String
     public let cacheConfig: SessionKnobs
-    public let createdAt: Date
+    /// Creation time as whole milliseconds since the Unix epoch. Stored as
+    /// an integer so a written manifest always compares equal to its own
+    /// read-back: round-tripping a `Date` through JSON is not bit-exact
+    /// (reference-date conversion plus decimal text), which made the
+    /// round-trip test flake roughly 1-in-3 before this.
+    public let createdAtMs: Int64
+
+    public var createdAt: Date {
+        Date(timeIntervalSince1970: Double(createdAtMs) / 1000)
+    }
     /// Checkpoint this one was forked/derived from; nil for a session's
     /// root checkpoint.
     public let parentCheckpointId: String?
@@ -96,7 +105,7 @@ public struct InfiniteSessionManifest: Codable, Sendable, Equatable {
         self.pendingTokenId = pendingTokenId
         self.tokenIdsSHA256 = tokenIdsSHA256
         self.cacheConfig = cacheConfig
-        self.createdAt = createdAt
+        self.createdAtMs = Int64((createdAt.timeIntervalSince1970 * 1000).rounded())
         self.parentCheckpointId = parentCheckpointId
         self.label = label
     }

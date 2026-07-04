@@ -147,10 +147,9 @@ public struct InfiniteSessionStore: Sendable {
     ) throws {
         try checkpointDirectory(session: session, checkpoint: checkpoint)
         let encoder = JSONEncoder()
-        // `.iso8601` truncates to whole seconds, which is lossy for a
-        // manifest round trip (`createdAt` wouldn't compare equal to what
-        // was written). `.secondsSince1970` round-trips a `Date` exactly.
-        encoder.dateEncodingStrategy = .secondsSince1970
+        // Timestamps are integer milliseconds in the schema itself
+        // (`createdAtMs`); no Date coding strategy is involved, so the
+        // round trip is deterministic by construction.
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(manifest)
         try data.write(to: manifestURL(session: session, checkpoint: checkpoint), options: .atomic)
@@ -159,7 +158,6 @@ public struct InfiniteSessionStore: Sendable {
     public func readManifest(session: String, checkpoint: String) throws -> InfiniteSessionManifest {
         let data = try Data(contentsOf: manifestURL(session: session, checkpoint: checkpoint))
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .secondsSince1970
         return try decoder.decode(InfiniteSessionManifest.self, from: data)
     }
 
@@ -234,7 +232,7 @@ public struct InfiniteSessionStore: Sendable {
                 return (id, try readManifest(session: session, checkpoint: id))
             }
 
-        return checkpoints.sorted { $0.manifest.createdAt < $1.manifest.createdAt }
+        return checkpoints.sorted { $0.manifest.createdAtMs < $1.manifest.createdAtMs }
     }
 
     /// The most recently created checkpoint under `session`, or `nil` if
