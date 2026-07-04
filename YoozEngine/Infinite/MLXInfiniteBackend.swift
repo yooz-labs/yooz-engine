@@ -517,6 +517,20 @@ public actor MLXInfiniteBackend {
 
     // MARK: - Turn-commit (engine#267)
 
+    /// Groups a turn's chat-template framing inputs so
+    /// `generateTurnThinkingInSession`/`generateTurnCommit` stay under the
+    /// parameter-count lint limit (mirrors `SessionDecodeParameters`'
+    /// identical purpose).
+    #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+    private struct TurnFraming {
+        let composer: any InfiniteTurnComposer
+        let tokenizer: any MLXLMCommon.Tokenizer
+        /// `encode(userOpen + trimmedPrompt + userClose)` — computed once in
+        /// `generateTurn` since it is identical across both policies.
+        let userTokens: [Int]
+    }
+    #endif
+
     /// Generates one conversational turn from session `id`, framed by
     /// `selection.turnComposer` (Qwen3.5 ChatML or Gemma4 `<|turn>`), under
     /// `policy`. Opens the session first if it isn't already open. See
@@ -550,16 +564,16 @@ public actor MLXInfiniteBackend {
             throw InfiniteError.invalidSessionInput("generate prompt tokenized to zero tokens")
         }
 
+        let framing = TurnFraming(composer: composer, tokenizer: tokenizer, userTokens: userTokens)
+        let parameters = SessionDecodeParameters(maxTokens: maxTokens, temperature: temperature)
         switch policy {
         case .thinkingInSession:
             return try await generateTurnThinkingInSession(
-                id: id, session: session, composer: composer, tokenizer: tokenizer,
-                userTokens: userTokens, maxTokens: maxTokens, temperature: temperature
+                id: id, session: session, framing: framing, parameters: parameters
             )
         case .turnCommit:
             return try await generateTurnCommit(
-                id: id, session: session, composer: composer, tokenizer: tokenizer,
-                userTokens: userTokens, maxTokens: maxTokens, temperature: temperature
+                id: id, session: session, framing: framing, parameters: parameters
             )
         }
     }
@@ -575,24 +589,21 @@ public actor MLXInfiniteBackend {
     private func generateTurnThinkingInSession(
         id: String,
         session: LiveSessionState,
-        composer: any InfiniteTurnComposer,
-        tokenizer: any MLXLMCommon.Tokenizer,
-        userTokens: [Int],
-        maxTokens: Int,
-        temperature: Double
+        framing: TurnFraming,
+        parameters: SessionDecodeParameters
     ) async throws -> SessionTurnOutcome {
         var session = session
-        let genTokens = tokenizer.encode(
-            text: composer.generationPrompt(thinking: false), addSpecialTokens: false
+        let genTokens = framing.tokenizer.encode(
+            text: framing.composer.generationPrompt(thinking: false), addSpecialTokens: false
         )
-        let seedIds = (session.pendingToken.map { [$0] } ?? []) + userTokens + genTokens
+        let seedIds = (session.pendingToken.map { [$0] } ?? []) + framing.userTokens + genTokens
 
         let admissionWorkStart = ContinuousClock.now
         try await MLXAdmissionGate.shared.checkpoint(workStartedAt: admissionWorkStart)
         let outcome = try await container.perform(nonSendable: session.caches) { ctx, caches in
             try await runSessionDecodeLoop(
                 seedIds: seedIds, caches: caches, context: ctx,
-                parameters: SessionDecodeParameters(maxTokens: maxTokens, temperature: temperature),
+                parameters: parameters,
                 admissionWorkStart: admissionWorkStart
             )
         }
@@ -600,7 +611,7 @@ public actor MLXInfiniteBackend {
         // Every id in seedIds/outcome.fedIds was durably fed regardless of a
         // clean finish or mid-decode cancellation — see generateSession's
         // identical commit-before-rethrow reasoning.
-        session.tokenRecord += userTokens + genTokens + outcome.fedIds
+        session.tokenRecord += framing.userTokens + genTokens + outcome.fedIds
         session.pendingToken = nil
         sessions[id] = session
 
@@ -632,13 +643,13 @@ public actor MLXInfiniteBackend {
     private func generateTurnCommit(
         id: String,
         session: LiveSessionState,
-        composer: any InfiniteTurnComposer,
-        tokenizer: any MLXLMCommon.Tokenizer,
-        userTokens: [Int],
-        maxTokens: Int,
-        temperature: Double
+        framing: TurnFraming,
+        parameters: SessionDecodeParameters
     ) async throws -> SessionTurnOutcome {
         var session = session
+        let composer = framing.composer
+        let tokenizer = framing.tokenizer
+        let userTokens = framing.userTokens
         let genTokens = tokenizer.encode(
             text: composer.generationPrompt(thinking: true), addSpecialTokens: false
         )
@@ -650,7 +661,7 @@ public actor MLXInfiniteBackend {
         let branchOutcome = try await container.perform(nonSendable: branch) { ctx, caches in
             try await runSessionDecodeLoop(
                 seedIds: seedIds, caches: caches, context: ctx,
-                parameters: SessionDecodeParameters(maxTokens: maxTokens, temperature: temperature),
+                parameters: parameters,
                 admissionWorkStart: admissionWorkStart
             )
         }
@@ -865,6 +876,53 @@ public actor MLXInfiniteBackend {
         return session.caches.map { cache in
             (String(describing: type(of: cache)), cache.state.map(\.dtype))
         }
+    }
+
+    /// `tokenRecord`/`pendingToken` for session `id`'s live state — lets the
+    /// turn-commit live gate (`InfiniteTurnCommitLiveTests`) assert exactly
+    /// which tokens landed in the durable cache after a `generateTurn` call,
+    /// and reconstruct a "cold restart" continuation seed from it. Internal,
+    /// not public API.
+    func tokenRecordForTesting(id: String) -> (tokenRecord: [Int], pendingToken: Int?) {
+        guard let session = sessions[id] else { return ([], nil) }
+        return (session.tokenRecord, session.pendingToken)
+    }
+
+    /// Byte-exact comparison of two sessions' live KV cache state arrays
+    /// (offset, layer count, per-layer state shapes and values via
+    /// `MLXArray.arrayEqual`) — the turn-commit live bit-exactness gate
+    /// (`testBranchDecodeLeavesDurableBitExact`) compares a session that went
+    /// through a `.turnCommit` branch decode against a control session built
+    /// by directly appending the same committed text with no branch
+    /// involved; the raw `MLXArray`s never leave the actor (mirrors
+    /// `SessionCheckpointSnapshot`'s "only `[Int]`/`Int?` leave the actor"
+    /// convention) — only the `Bool` verdict crosses. Internal, not public API.
+    func liveCacheStateEqualsForTesting(id: String, matches otherID: String) -> Bool {
+        guard let a = sessions[id], let b = sessions[otherID] else { return false }
+        guard a.caches.count == b.caches.count else { return false }
+        for (cacheA, cacheB) in zip(a.caches, b.caches) {
+            guard cacheA.offset == cacheB.offset else { return false }
+            let stateA = cacheA.state
+            let stateB = cacheB.state
+            guard stateA.count == stateB.count else { return false }
+            for (arrA, arrB) in zip(stateA, stateB) {
+                guard arrA.shape == arrB.shape else { return false }
+                guard arrA.arrayEqual(arrB).item(Bool.self) else { return false }
+            }
+        }
+        return true
+    }
+
+    /// `tokenizer.applyChatTemplate(messages:)` (always `addGenerationPrompt:
+    /// true` — that overload's fixed default on the `MLXLMCommon.Tokenizer`
+    /// bridge) — the template-parity live gate
+    /// (`testTemplateParityTwoTurns`) compares this against composer
+    /// fragments encoded the same way `generateTurn` itself tokenizes each
+    /// turn (separate `encode` calls per turn, concatenated — never one
+    /// `encode` of the whole joined string). Internal, not public API.
+    func applyChatTemplateForTesting(messages: [[String: any Sendable]]) async throws -> [Int] {
+        let tokenizer = await container.tokenizer
+        return try tokenizer.applyChatTemplate(messages: messages)
     }
     #endif
 }
