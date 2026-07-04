@@ -549,6 +549,24 @@ final class APIServer: ObservableObject {
                 message: error.localizedDescription,
                 code: "generation_failed"
             )
+        case .checkpointNotFound:
+            return errorResponse(
+                status: .notFound,
+                message: error.localizedDescription,
+                code: "checkpoint_not_found"
+            )
+        case .checkpointIntegrity:
+            return errorResponse(
+                status: .conflict,
+                message: error.localizedDescription,
+                code: "checkpoint_integrity"
+            )
+        case .sessionBusy:
+            return errorResponse(
+                status: .conflict,
+                message: error.localizedDescription,
+                code: "session_busy"
+            )
         }
     }
     #endif
@@ -1811,6 +1829,66 @@ final class APIServer: ObservableObject {
                     sessionID: sessionID,
                     request: body
                 )
+                return try jsonResponse(response)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
+        }
+
+        // Infinite: Resume a session from a checkpoint (defaults to the
+        // latest); a no-op success on an already-open session with no
+        // explicit checkpointId (engine#266).
+        router.post("/v1/infinite/sessions/:sessionID/resume") { [self] request, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let body: InfiniteResumeSessionRequest
+            do {
+                body = try await request.decode(
+                    as: InfiniteResumeSessionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            do {
+                let sessionID = try context.parameters.require("sessionID")
+                let response = try await InfiniteEngine.shared.resume(sessionID: sessionID, request: body)
+                return try jsonResponse(response)
+            } catch let error as InfiniteError {
+                return infiniteErrorResponse(error)
+            }
+        }
+
+        // Infinite: Fork a checkpoint (defaults to the source session's
+        // latest) into a brand-new, independent session. Does not
+        // auto-resume the fork (engine#266).
+        router.post("/v1/infinite/sessions/:sessionID/fork") { [self] request, context -> Response in
+            guard await ModuleRegistry.shared.isBundled("infinite") else {
+                return moduleNotBundled("infinite")
+            }
+            let body: InfiniteForkSessionRequest
+            do {
+                body = try await request.decode(
+                    as: InfiniteForkSessionRequest.self,
+                    context: context
+                )
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+
+            do {
+                let sessionID = try context.parameters.require("sessionID")
+                let response = try await InfiniteEngine.shared.fork(sessionID: sessionID, request: body)
                 return try jsonResponse(response)
             } catch let error as InfiniteError {
                 return infiniteErrorResponse(error)

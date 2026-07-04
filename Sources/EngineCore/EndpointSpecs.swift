@@ -76,6 +76,8 @@ public enum EndpointSpecs {
         EndpointSpec(.post, "/v1/infinite/sessions/:sessionID/append"),
         EndpointSpec(.post, "/v1/infinite/sessions/:sessionID/generate"),
         EndpointSpec(.post, "/v1/infinite/sessions/:sessionID/checkpoint"),
+        EndpointSpec(.post, "/v1/infinite/sessions/:sessionID/resume"),
+        EndpointSpec(.post, "/v1/infinite/sessions/:sessionID/fork"),
         EndpointSpec(.delete, "/v1/infinite/sessions/:sessionID"),
 
         EndpointSpec(.post, "/v1/touchup"),
