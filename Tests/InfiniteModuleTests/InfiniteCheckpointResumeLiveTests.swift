@@ -30,7 +30,7 @@ import XCTest
 /// think it's a cache miss and silently kick off a REAL reload of that
 /// label's actual (multi-GB) weights in the background, racing the test
 /// against a wrong model. `.qwen35B1M` requires the `.full` RAM tier, so
-/// these three tests skip on a `.reduced`-tier machine.
+/// these tests skip on a `.reduced`-tier machine.
 final class InfiniteCheckpointResumeLiveTests: XCTestCase {
 
     private static let descriptor = InfiniteBackendDescriptor(
@@ -355,11 +355,30 @@ final class InfiniteCheckpointResumeLiveTests: XCTestCase {
         // itself: sessionBusy fired before any gemma weights were touched.)
         let status = await engine.status()
         XCTAssertNil(status.lastError)
-        // The refused switcher session must not be left stuck `.generating`,
-        // and the mid-generate session must be untouched by the refusal.
+        // The refused switcher session reverts to `.open` (its true
+        // pre-operation state — it was freshly created, never parked, so
+        // `.open` is correct here, not `.parked`; see `revertState`'s doc
+        // for the bug this specifically guards against), and the
+        // mid-generate session is untouched by the refusal.
         let switcher = try await engine.session(id: other.id)
-        XCTAssertNotEqual(switcher.state, "generating")
+        XCTAssertEqual(switcher.state, "open")
         let untouched = try await engine.session(id: generating.id)
         XCTAssertEqual(untouched.state, "generating")
+
+        // Once the busy session clears, the identical switch must succeed
+        // and park it — the existing (unchanged) backend-eviction-parking
+        // behavior, now reachable because the refusal above no longer
+        // silently skips it. This loads the real (cached) gemma4-e4b
+        // weights, evicting the qwen backend.
+        await engine.setOpenForTesting(id: generating.id)
+
+        _ = try await engine.append(
+            sessionID: other.id, request: InfiniteAppendSessionRequest(text: "hello again")
+        )
+        let parkedAfterSwitch = try await engine.session(id: generating.id)
+        XCTAssertEqual(
+            parkedAfterSwitch.state, "parked",
+            "once no longer busy, the model switch must proceed and park the outgoing session"
+        )
     }
 }

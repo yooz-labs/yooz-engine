@@ -350,7 +350,7 @@ public actor InfiniteEngine {
                 estimatedAppendedTokens: outcome.appendedTokenCount
             )
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: record.hasLiveBackendState ? .open : .parked)
+            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
             throw error
         }
     }
@@ -439,7 +439,7 @@ public actor InfiniteEngine {
                 resources: metrics
             )
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: record.hasLiveBackendState ? .open : .parked)
+            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
             throw error
         }
     }
@@ -481,7 +481,7 @@ public actor InfiniteEngine {
                 parentCheckpointId: parentCheckpointId
             )
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: record.hasLiveBackendState ? .open : .parked)
+            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
             throw error
         }
     }
@@ -827,6 +827,22 @@ public actor InfiniteEngine {
         sessions[sessionID] = record
     }
 
+    /// The state a failed operation should revert a session to: `.open`
+    /// once real backend state exists (`record.hasLiveBackendState` — a
+    /// resume completed, or the session was never parked to begin with),
+    /// `.parked` only when it started parked (`wasParked`) and the resume
+    /// step never got far enough to install live state. NOT simply
+    /// `record.hasLiveBackendState ? .open : .parked` — that mislabels a
+    /// freshly-created, never-touched session (`wasParked == false`,
+    /// `hasLiveBackendState == false`) as `.parked` when its very first
+    /// operation fails for an unrelated reason (e.g. a different session's
+    /// model-switch `sessionBusy` refusal), implying a checkpoint exists to
+    /// resume from later when none was ever written — the next touch would
+    /// 404 with `checkpointNotFound` instead of just reopening cleanly.
+    private func revertState(wasParked: Bool, record: SessionRecord) -> SessionState {
+        record.hasLiveBackendState || !wasParked ? .open : .parked
+    }
+
     // MARK: - Hot-session lifecycle (engine#266)
 
     /// Ensures `record`'s session has real backend-resident state before the
@@ -1155,7 +1171,7 @@ public actor InfiniteEngine {
             )
             return outcome.result.checkpointId
         } catch {
-            endBusyOperation(sessionID: sessionID, finalState: record.hasLiveBackendState ? .open : .parked)
+            endBusyOperation(sessionID: sessionID, finalState: revertState(wasParked: wasParked, record: record))
             throw error
         }
     }

@@ -133,7 +133,8 @@ final class InfiniteCheckpointLifecycleTests: XCTestCase {
         await engine.setOpenForTesting(id: busySession.id)
         let active = try await engine.setActiveModel(otherSelection, preload: false)
         XCTAssertEqual(active.id, otherSelection.rawValue)
-        XCTAssertEqual(await engine.status().modelId, otherSelection.rawValue)
+        let statusAfter = await engine.status()
+        XCTAssertEqual(statusAfter.modelId, otherSelection.rawValue)
     }
 
     // MARK: - Resume no-op
