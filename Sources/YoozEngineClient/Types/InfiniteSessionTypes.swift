@@ -148,9 +148,14 @@ public struct InfiniteGenerateSessionResponse: Codable, Sendable, Equatable {
 
 public struct InfiniteCheckpointSessionRequest: Codable, Sendable, Equatable {
     public let label: String?
+    /// When `true`, the engine releases the session's live KV cache from
+    /// RAM after checkpointing (session `state` becomes `"parked"`).
+    /// `false`/`nil` leaves the session hot.
+    public let park: Bool?
 
-    public init(label: String? = nil) {
+    public init(label: String? = nil, park: Bool? = nil) {
         self.label = label
+        self.park = park
     }
 }
 
@@ -182,13 +187,56 @@ public struct InfiniteSessionCheckpoint: Codable, Sendable, Equatable {
 public struct InfiniteCheckpointSessionResponse: Codable, Sendable, Equatable {
     public let session: InfiniteSessionInfo
     public let checkpoint: InfiniteSessionCheckpoint
+    /// Bytes written to `cache.safetensors` for this checkpoint.
+    public let sizeBytes: Int64
+    /// `tokenRecord.count` at checkpoint time (durable tokens plus the one
+    /// pending token, if any).
+    public let tokenCount: Int
+    /// Wall-clock seconds spent branching the live KV cache and writing
+    /// `cache.safetensors`.
+    public let durationSeconds: Double
+    /// The checkpoint this one supersedes for the same session, if any.
+    public let parentCheckpointId: String?
 
     public init(
         session: InfiniteSessionInfo,
-        checkpoint: InfiniteSessionCheckpoint
+        checkpoint: InfiniteSessionCheckpoint,
+        sizeBytes: Int64,
+        tokenCount: Int,
+        durationSeconds: Double,
+        parentCheckpointId: String? = nil
     ) {
         self.session = session
         self.checkpoint = checkpoint
+        self.sizeBytes = sizeBytes
+        self.tokenCount = tokenCount
+        self.durationSeconds = durationSeconds
+        self.parentCheckpointId = parentCheckpointId
+    }
+}
+
+/// Body for `POST /v1/infinite/sessions/:id/resume`.
+public struct InfiniteResumeSessionRequest: Codable, Sendable, Equatable {
+    /// Checkpoint to resume from; defaults to the session's latest
+    /// checkpoint when omitted.
+    public let checkpointId: String?
+
+    public init(checkpointId: String? = nil) {
+        self.checkpointId = checkpointId
+    }
+}
+
+/// Body for `POST /v1/infinite/sessions/:id/fork`.
+public struct InfiniteForkSessionRequest: Codable, Sendable, Equatable {
+    /// Checkpoint to fork from; defaults to the source session's latest
+    /// checkpoint when omitted (a hot, never-checkpointed source takes an
+    /// implicit checkpoint first).
+    public let checkpointId: String?
+    public let label: String?
+
+    public init(checkpointId: String? = nil, label: String? = nil) {
+        self.checkpointId = checkpointId
+        self.label = label
     }
 }
 

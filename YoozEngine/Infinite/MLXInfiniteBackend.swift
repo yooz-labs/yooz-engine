@@ -54,6 +54,20 @@ public struct SessionAppendOutcome: Sendable, Equatable {
     }
 }
 
+/// Sendable facts about one just-written checkpoint's live-session token
+/// state, handed back to `InfiniteEngine` so it can write `tokens.bin` +
+/// `manifest.json` — only `[Int]`/`Int?` leave the actor here, never an
+/// `MLXArray`/`KVCache`.
+public struct SessionCheckpointSnapshot: Sendable, Equatable {
+    public let tokenRecord: [Int]
+    public let pendingToken: Int?
+
+    public init(tokenRecord: [Int], pendingToken: Int?) {
+        self.tokenRecord = tokenRecord
+        self.pendingToken = pendingToken
+    }
+}
+
 /// Outcome of one live-session `generateSession` call.
 public struct SessionGenerateOutcome: Sendable, Equatable {
     public let text: String
@@ -423,6 +437,82 @@ public actor MLXInfiniteBackend {
         #endif
     }
 
+    // MARK: - Checkpoint / resume (engine#266)
+
+    #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
+    /// Branches session `id`'s live KV caches (`branchCaches` — parity-guarded
+    /// independent copies, see `KVCacheBranching.swift`), evaluates +
+    /// synchronizes them, and writes `cache.safetensors` to `cacheURL` via
+    /// mlx-swift-lm's `savePromptCache`. The live session itself is left
+    /// untouched — safe to call while the session stays hot; releasing it
+    /// from RAM ("park") is a separate `releaseSession` call the caller
+    /// makes afterward if it wants that.
+    public func checkpointSession(id: String, cacheURL: URL) async throws -> SessionCheckpointSnapshot {
+        guard let session = sessions[id] else {
+            throw InfiniteError.sessionNotFound(id)
+        }
+        let branched = try branchCaches(session.caches)
+        eval(branched)
+        Stream().synchronize()
+        try savePromptCache(url: cacheURL, cache: branched)
+        return SessionCheckpointSnapshot(tokenRecord: session.tokenRecord, pendingToken: session.pendingToken)
+    }
+
+    /// Loads `cacheURL` (written by `checkpointSession`) via mlx-swift-lm's
+    /// `loadPromptCache` and installs it as session `id`'s live state,
+    /// paired with the caller-supplied `tokenRecord`/`pendingToken` (read
+    /// from the checkpoint's `tokens.bin`/manifest by
+    /// `InfiniteSessionStore` — plain `[Int]`/`Int?` data, so no MLX/
+    /// tokenizer round-trip is needed for those here). Overwrites any
+    /// existing live state for `id` unconditionally; the caller
+    /// (`InfiniteEngine`) decides whether a resume should be a no-op (an
+    /// already-open session with no explicit checkpoint id).
+    public func resumeSession(
+        id: String,
+        cacheURL: URL,
+        tokenRecord: [Int],
+        pendingToken: Int?
+    ) async throws {
+        let (caches, _) = try loadPromptCache(url: cacheURL)
+        var state = LiveSessionState(caches: caches)
+        state.tokenRecord = tokenRecord
+        state.pendingToken = pendingToken
+        sessions[id] = state
+    }
+
+    /// Hex sha256 of the tokenizer actually in use by this loaded model —
+    /// pinned into `InfiniteSessionManifest.tokenizerHash` at checkpoint
+    /// time and re-derived at resume time for
+    /// `InfiniteSessionStore.verify`'s integrity gate. Reads
+    /// `tokenizer.json` from `ModelContainer.tokenizerDirectory` (the
+    /// resolved local directory for this container's tokenizer) rather
+    /// than trusting the model selection label, so a resume genuinely
+    /// checks the tokenizer bytes in use, not just a repo id string.
+    public func tokenizerHash() async throws -> String {
+        let tokenizerDirectory = try await container.tokenizerDirectory
+        let tokenizerJSONURL = tokenizerDirectory.appendingPathComponent("tokenizer.json", isDirectory: false)
+        let data = try Data(contentsOf: tokenizerJSONURL)
+        return InfiniteSessionStore.sha256Hex(data)
+    }
+    #else
+    public func checkpointSession(id: String, cacheURL: URL) async throws -> SessionCheckpointSnapshot {
+        throw InfiniteError.generationUnavailable("MLX runtime is not linked into this build")
+    }
+
+    public func resumeSession(
+        id: String,
+        cacheURL: URL,
+        tokenRecord: [Int],
+        pendingToken: Int?
+    ) async throws {
+        throw InfiniteError.generationUnavailable("MLX runtime is not linked into this build")
+    }
+
+    public func tokenizerHash() async throws -> String {
+        throw InfiniteError.generationUnavailable("MLX runtime is not linked into this build")
+    }
+    #endif
+
     // MARK: - Test-only escape hatches (engine#265 live equivalence gate)
 
     #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
@@ -455,6 +545,21 @@ public actor MLXInfiniteBackend {
                 parameters: SessionDecodeParameters(maxTokens: maxTokens, temperature: temperature),
                 admissionWorkStart: admissionWorkStart
             )
+        }
+    }
+
+    /// Per-cache-layer runtime class name + state-array dtypes for session
+    /// `id`'s live KV cache, in layer order. Lets the engine#266 checkpoint/
+    /// resume live test assert a hybrid model's `MambaCache` (GDN) layers
+    /// keep their `.float32` recurrent state across a save/load round trip
+    /// through `savePromptCache`/`loadPromptCache` (see `GatedDelta.swift`'s
+    /// "state kept in fp32 to match Python mlx-lm" invariant) — not
+    /// observable any other way, since `LiveSessionState` is private to
+    /// this actor. Internal, not public API.
+    func liveCacheLayerDTypesForTesting(id: String) -> [(className: String, dtypes: [DType])] {
+        guard let session = sessions[id] else { return [] }
+        return session.caches.map { cache in
+            (String(describing: type(of: cache)), cache.state.map(\.dtype))
         }
     }
     #endif
