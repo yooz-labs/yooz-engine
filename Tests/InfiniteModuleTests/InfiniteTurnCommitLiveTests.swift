@@ -145,7 +145,7 @@ final class InfiniteTurnCommitLiveTests: XCTestCase {
     /// `testThreeTurnConversationReportsThinkingVsCommittedTokens`) this
     /// pinned 0.8B never closes `<think>` for simple factual QA within any
     /// tested budget up to 2048 tokens, so the initial turn's committed
-    /// answer is the honest forced-empty `length_in_think` form. A raw-text
+    /// answer is the honest forced-empty unclosed-think form. A raw-text
     /// continuation right after that empty, untagged-role turn is enough
     /// out-of-distribution context to make the model emit an immediate stop
     /// token (observed directly). A properly role-framed follow-up turn
@@ -163,7 +163,7 @@ final class InfiniteTurnCommitLiveTests: XCTestCase {
         )
         // A small think budget keeps this fast: the equivalence property
         // under test holds regardless of whether the committed answer is
-        // real text or the forced-empty length_in_think form.
+        // real text or the forced-empty unclosed-think form.
         let turnOutcome = try await backend.generateTurn(
             id: sessionID,
             prompt: "Name one of the two capitals mentioned above in one word.",
@@ -240,7 +240,7 @@ final class InfiniteTurnCommitLiveTests: XCTestCase {
             let outcome = try await backend.generateTurn(
                 id: sessionID, prompt: question, maxTokens: 128, temperature: 0, policy: .turnCommit
             )
-            if outcome.finishReason == "length_in_think" {
+            if outcome.finishReason == "length_in_think" || outcome.finishReason == "stop_in_think" {
                 unclosedTurns += 1
             }
             let thinkingTokens = try XCTUnwrap(outcome.thinkingTokens, "turnCommit always reports thinkingTokens")

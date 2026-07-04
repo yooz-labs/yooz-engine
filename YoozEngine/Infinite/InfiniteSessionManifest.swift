@@ -49,8 +49,9 @@ public struct SessionKnobs: Codable, Sendable, Equatable {
 /// On-disk manifest for one Infinite session checkpoint.
 ///
 /// `InfiniteSessionStore` writes/reads this as `manifest.json` alongside
-/// `cache.safetensors` (written and read by the MLX backend, added in a
-/// later PR) and `tokens.bin` (this PR) inside one checkpoint directory.
+/// `cache.safetensors` (written/read by `MLXInfiniteBackend`'s
+/// checkpoint/resume operations) and `tokens.bin` inside one checkpoint
+/// directory.
 /// No MLX imports here: the manifest is plain `Codable` data so the store
 /// stays usable from contexts that don't link MLX.
 public struct InfiniteSessionManifest: Codable, Sendable, Equatable {

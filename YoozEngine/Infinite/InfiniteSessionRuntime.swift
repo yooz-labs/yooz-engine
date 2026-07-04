@@ -265,8 +265,9 @@ func runSessionDecodeLoop(
         // session's `caches` array (this function's parameter) keeps
         // pointing at the original, now-stale, unquantized objects —
         // silently detaching the session from the cache the iterator
-        // actually advanced. Quantized-KV sessions are a documented
-        // follow-up (PR5); this phase never sets these fields.
+        // actually advanced. Quantized-KV sessions instead convert ONCE at
+        // session open (`MLXInfiniteBackend.openSession` via
+        // `toQuantized`); the decode loop never sets these fields.
         temperature: Float(temperature),
         topP: temperature == 0 ? 1.0 : 0.95
     )

@@ -26,6 +26,7 @@ The canonical catalogue is `InfiniteModelSelection` in the engine. Consumer apps
 |---|---|---|---|---|---:|---:|---|---|
 | `gemma4-e4b-1m` | Gemma4 E4B 1M | `light` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 131,072 | 1,000,000 | `reduced` | `infinite:research/18-gemma-support-matrix.md` |
 | `gemma4-26b-a4b-1m` | Gemma4 26B-A4B 1M | `quality` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 262,144 | 1,000,000 | `full` | `infinite:research/18-gemma-support-matrix.md` |
+| `gemma4-12b-1m` | Gemma4 12B 1M | `quality` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 262,144 | 1,000,000 | `reduced` | `infinite:research/18-gemma-support-matrix.md` |
 | `qwen3-35b-1m` | Qwen3.6 35B-A3B 1M | `premium` | `paged-kv` | `infinite-paged-kv-mlx-v1` | 262,144 | 1,000,000 | `full` | `infinite:research/26-flagship-1m.md` |
 | `s3-retrieval` | S3 Retrieval | `quality` | `retrieval` | `infinite-retrieval-index-v1` | n/a | 10,000,000 (index) | `full` | `infinite:research/24-dense-retrieval.md` |
 
@@ -86,9 +87,9 @@ Why quarantine reasoning at all: Infinite sessions are **append-only** (ADR 0007
 | `thinkingTokens` | Reasoning-side token count (re-encoding the split-out reasoning text). `nil` for `"thinking_in_session"` — there is no separate reasoning bucket in that policy. |
 | `committedTokens` | Exact token count committed to the durable cache this call (user turn plus the stable-framed answer). `nil` for `"thinking_in_session"`. |
 | `commitSeconds` | Wall-clock seconds spent chunk-prefilling the commit onto the durable cache. `nil` for `"thinking_in_session"` (no separate commit step — the durable cache IS what was just decoded). |
-| `finishReason` | `"stop"`, `"length"`, `"cancelled"`, or (turn-commit only) `"length_in_think"`. |
+| `finishReason` | `"stop"`, `"length"`, `"cancelled"`, or (turn-commit only) `"length_in_think"` / `"stop_in_think"`. |
 
-**The `length_in_think` caveat on small models:** if the branch hits `maxTokens` before ever closing its `<think>` block, the reasoning is still quarantined as usual, but the committed answer is forced **empty** rather than trusting unclosed reasoning as prose — `finishReason` reports `"length_in_think"` so the caller can distinguish this from an ordinary length cutoff. Empirically, small pinned models (e.g. the 0.8B reference used in the engine's own live tests) can fail to close `<think>` for simple factual QA within budgets up to several thousand tokens — this is a real, observed model behavior, not a bug in the quarantine logic. Callers targeting small models should budget `maxTokens` generously and treat a `length_in_think` result as "the model needs more room to think," not as an engine defect.
+**The unclosed-think caveat on small models:** whenever the branch ends without closing its `<think>` block, the reasoning is still quarantined as usual, but the committed answer is forced **empty** rather than trusting unclosed reasoning as prose. `finishReason` names the cause: `"length_in_think"` when the `maxTokens` budget ran out mid-think (more budget may help), `"stop_in_think"` when the model emitted a stop token inside the think block (more budget will not help). Empirically, small pinned models (e.g. the 0.8B reference used in the engine's own live tests) can fail to close `<think>` for simple factual QA within budgets up to several thousand tokens — this is a real, observed model behavior, not a bug in the quarantine logic. Callers targeting small models should budget `maxTokens` generously and treat `length_in_think` as "the model needs more room to think," not as an engine defect.
 
 ### Quantized KV cache knob (engine#268)
 

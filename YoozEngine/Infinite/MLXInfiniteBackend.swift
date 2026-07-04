@@ -407,9 +407,10 @@ public actor MLXInfiniteBackend {
     }
 
     /// Chunk-prefills `text`'s tokens onto session `id`'s durable cache,
-    /// raw (no chat template — the session path is plain text continuation
-    /// in this phase; chat framing arrives with the turn composers in a
-    /// later phase). Opens the session first if it isn't already open.
+    /// raw (no chat template — appended text is plain continuation
+    /// context; chat framing is handled separately by
+    /// `generateTurn`/`InfiniteTurnComposer`). Opens the session first if
+    /// it isn't already open.
     ///
     /// Withholds the last new token from the prefill (feeds
     /// `[pendingToken] + newTokens.dropLast()`), so `pendingToken` is
@@ -711,7 +712,18 @@ public actor MLXInfiniteBackend {
         // contract would otherwise report.
         let reasoningForStats = unclosedThink ? rawText : splitReasoning
         let answer = unclosedThink ? "" : splitAnswer
-        let finishReason = unclosedThink ? "length_in_think" : branchOutcome.finishReason
+        // The empty-answer commit above is cause-agnostic (any unclosed
+        // think block is untrustworthy as prose), but the LABEL names the
+        // actual cause: "length_in_think" only when the budget genuinely ran
+        // out; an early stop token inside the think block is
+        // "stop_in_think" (a different failure mode — more maxTokens will
+        // not help that caller).
+        let finishReason: String
+        if unclosedThink {
+            finishReason = branchOutcome.finishReason == "length" ? "length_in_think" : "stop_in_think"
+        } else {
+            finishReason = branchOutcome.finishReason
+        }
 
         let stableTokens = tokenizer.encode(
             text: composer.stableAssistantWrap(answer: answer), addSpecialTokens: false

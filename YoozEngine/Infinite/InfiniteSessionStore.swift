@@ -77,10 +77,10 @@ public struct LiveSessionFacts: Sendable, Equatable {
 /// Filesystem-backed store for durable Infinite session checkpoints.
 ///
 /// Layout: `<root>/<sessionID>/<checkpointID>/{cache.safetensors,
-/// manifest.json, tokens.bin}`. `cache.safetensors` is written/read by the
-/// MLX backend (a later PR); this type only hands out the checkpoint
-/// directory URL for that file. No MLX imports — this type must stay
-/// usable from a context that hasn't loaded MLX.
+/// manifest.json, tokens.bin}`. `cache.safetensors` is written/read by
+/// `MLXInfiniteBackend.checkpointSession`/`resumeSession`; this type only
+/// hands out the checkpoint directory URL for that file. No MLX imports —
+/// this type must stay usable from a context that hasn't loaded MLX.
 public struct InfiniteSessionStore: Sendable {
     public let root: URL
 
