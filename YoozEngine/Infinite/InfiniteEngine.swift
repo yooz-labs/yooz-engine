@@ -277,6 +277,7 @@ public actor InfiniteEngine {
         guard isModelSelectable(selection) else {
             throw InfiniteError.modelUnavailable(selection.rawValue)
         }
+        let turnPolicy = try sessionTurnPolicy(request.turnPolicy)
         let now = Self.timestamp()
         let id = UUID().uuidString
         let record = SessionRecord(
@@ -284,10 +285,24 @@ public actor InfiniteEngine {
             selection: selection,
             label: request.label,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            turnPolicy: turnPolicy
         )
         sessions[id] = record
         return sessionInfo(record)
+    }
+
+    /// Validates `raw` (from `InfiniteCreateSessionRequest.turnPolicy`)
+    /// against `SessionKnobs.turnPolicy`'s two known wire strings; `nil`/
+    /// empty defaults to `"turn_commit"` (engine#267).
+    private func sessionTurnPolicy(_ raw: String?) throws -> String {
+        guard let raw, !raw.isEmpty else {
+            return InfiniteTurnPolicy.turnCommit.rawValue
+        }
+        guard InfiniteTurnPolicy(rawValue: raw) != nil else {
+            throw InfiniteError.invalidSessionInput("unknown turnPolicy '\(raw)'")
+        }
+        return raw
     }
 
     public func append(
@@ -396,15 +411,17 @@ public actor InfiniteEngine {
             // returns a structured `generation_failed` 500, not a bare 500 the SDK
             // can only see as a transport error. Typed InfiniteErrors (e.g. the
             // native-window bound) pass through unchanged.
-            let outcome: SessionGenerateOutcome
+            let policy = InfiniteTurnPolicy(rawValue: record.turnPolicy) ?? .turnCommit
+            let outcome: SessionTurnOutcome
             do {
-                outcome = try await backend.generateSession(
+                outcome = try await backend.generateTurn(
                     id: sessionID,
                     prompt: request.prompt ?? "",
                     maxTokens: request.maxTokens ?? 256,
                     // Production sampling defaults to 0.7; `temperature` lets a
                     // caller (the live parity test) request greedy (0.0) decoding.
-                    temperature: request.temperature ?? 0.7
+                    temperature: request.temperature ?? 0.7,
+                    policy: policy
                 )
             } catch let error as InfiniteError {
                 infiniteEngineLogger.error(
@@ -450,7 +467,10 @@ public actor InfiniteEngine {
                 sessionId: sessionID,
                 text: outcome.text,
                 finishReason: outcome.finishReason,
-                resources: metrics
+                resources: metrics,
+                thinkingTokens: outcome.thinkingTokens,
+                committedTokens: outcome.committedTokens,
+                commitSeconds: outcome.commitSeconds
             )
         } catch {
             endBusyOperation(sessionID: sessionID, finalState: becameLive ? .open : (wasParked ? .parked : .open))
@@ -637,7 +657,8 @@ public actor InfiniteEngine {
             checkpoints: [checkpointInfo],
             state: .parked,
             lastCheckpointId: newCheckpointID,
-            hasLiveBackendState: false
+            hasLiveBackendState: false,
+            turnPolicy: forkedManifest.cacheConfig.turnPolicy
         )
         sessions[newSessionID] = newRecord
         return sessionInfo(newRecord)
@@ -1001,7 +1022,7 @@ public actor InfiniteEngine {
             tokenCount: snapshot.tokenRecord.count,
             pendingTokenId: snapshot.pendingToken,
             tokenIdsSHA256: InfiniteSessionStore.sha256Hex(tokensData),
-            cacheConfig: SessionKnobs(),
+            cacheConfig: SessionKnobs(turnPolicy: record.turnPolicy),
             parentCheckpointId: record.lastCheckpointId,
             label: label
         )
@@ -1134,7 +1155,8 @@ public actor InfiniteEngine {
             },
             state: .parked,
             lastCheckpointId: checkpointId,
-            hasLiveBackendState: false
+            hasLiveBackendState: false,
+            turnPolicy: manifest.cacheConfig.turnPolicy
         )
     }
 
@@ -1289,4 +1311,9 @@ private struct SessionRecord: Sendable {
     /// sense, so it must not count against `maxHotSessions` or force an
     /// eviction (see `ensureLiveBackendState`/`enforceHotBudget`).
     var hasLiveBackendState: Bool = false
+    /// `"turn_commit"` (default) or `"thinking_in_session"` — see
+    /// `InfiniteTurnPolicy`/`SessionKnobs.turnPolicy` (engine#267). Set at
+    /// creation, persisted into `SessionKnobs.turnPolicy` at checkpoint time,
+    /// and restored from `manifest.cacheConfig.turnPolicy` on rehydration/fork.
+    var turnPolicy: String = InfiniteTurnPolicy.turnCommit.rawValue
 }

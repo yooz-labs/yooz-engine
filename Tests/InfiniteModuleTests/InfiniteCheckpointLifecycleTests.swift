@@ -137,6 +137,43 @@ final class InfiniteCheckpointLifecycleTests: XCTestCase {
         XCTAssertEqual(statusAfter.modelId, otherSelection.rawValue)
     }
 
+    // MARK: - Turn-commit policy validation (engine#267)
+
+    /// `createSession` accepts only the two known `turnPolicy` wire strings;
+    /// anything else 400s as `invalid_session_input` before a session is
+    /// ever created — no model needed, this is pure request validation.
+    func testCreateSessionRejectsUnknownTurnPolicy() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        do {
+            _ = try await engine.createSession(
+                request: InfiniteCreateSessionRequest(turnPolicy: "not-a-real-policy")
+            )
+            XCTFail("expected invalidSessionInput for an unknown turnPolicy")
+        } catch InfiniteError.invalidSessionInput(let reason) {
+            XCTAssertTrue(reason.contains("turnPolicy"))
+        }
+    }
+
+    /// `nil`/omitted `turnPolicy` and the explicit `"turn_commit"` default
+    /// both create successfully (no observable difference on the session
+    /// wire shape — `turnPolicy` only affects `generate`'s internal
+    /// routing, proven live in `InfiniteCheckpointResumeLiveTests`).
+    func testCreateSessionAcceptsExplicitTurnCommitAndThinkingInSession() async throws {
+        try requireSupportedTier()
+        let engine = InfiniteEngine()
+        let defaulted = try await engine.createSession(request: InfiniteCreateSessionRequest())
+        XCTAssertEqual(defaulted.state, "open")
+        let explicitTurnCommit = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(turnPolicy: "turn_commit")
+        )
+        XCTAssertEqual(explicitTurnCommit.state, "open")
+        let thinkingInSession = try await engine.createSession(
+            request: InfiniteCreateSessionRequest(turnPolicy: "thinking_in_session")
+        )
+        XCTAssertEqual(thinkingInSession.state, "open")
+    }
+
     // MARK: - Resume no-op
 
     /// Resuming an already-`.open` session with no explicit `checkpointId`
