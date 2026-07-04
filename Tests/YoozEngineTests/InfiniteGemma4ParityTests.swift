@@ -106,6 +106,79 @@ final class InfiniteGemma4ParityTests: XCTestCase {
         )
     }
 
+    /// engine#266: checkpoint/resume a session whose `RotatingKVCache`
+    /// sliding-window layers have genuinely rotated (evicted their oldest
+    /// entries), not merely grown under the cap. Gemma4 E4B's sliding
+    /// window is 512 tokens (`config.json`'s `sliding_window`,
+    /// `Gemma4.swift.newCache`'s `RotatingKVCache(maxSize: slidingWindow,
+    /// keep: 0)`); this appends ~2K tokens — several multiples past 512 —
+    /// before checkpointing, so the saved/reloaded cache is a real rotated
+    /// window, the harder case `KVCacheBranching`'s allowlist covers but
+    /// the smaller live gates (`InfiniteCheckpointResumeLiveTests`, Qwen3.5
+    /// hybrid MambaCache/KVCacheSimple, no rotation) don't exercise.
+    ///
+    /// WRITTEN but not run headlessly in this environment: this file's
+    /// target (`YoozEngineTests`) is an app-hosted XCTest suite that needs
+    /// a desktop GUI session to attach (see AGENTS.md's testing policy) —
+    /// it compiles and is gated identically to the other tests in this
+    /// file (`INFINITE_LIVE=1` + weights cached), but must be run
+    /// interactively via the `InfiniteLive` scheme, not from a headless
+    /// agent shell. This is a documented constraint, not a skipped step.
+    func testGemma4RotatingCacheCheckpointResume() async throws {
+        try Self.skipUnlessLive()
+        try Self.skipUnlessModelCached(InfiniteModelSelection.gemma4E4B1M.huggingFaceID ?? "")
+
+        let selection = InfiniteModelSelection.gemma4E4B1M
+        let backend = try await MLXInfiniteBackend.load(selection.descriptor)
+
+        // ~200 short sentences comfortably clears several multiples of the
+        // 512-token sliding window, forcing `RotatingKVCache` to actually
+        // evict its oldest entries before this checkpoint.
+        let longText = (0..<200)
+            .map { "Sentence number \($0) describes fact \($0) about the topic. " }
+            .joined()
+        let prompt = "Summarize the discussion in one word."
+        let maxTokens = 32
+
+        let sessionID = "gemma4-rotating-\(UUID().uuidString)"
+        await backend.openSession(id: sessionID)
+        _ = try await backend.appendTokens(id: sessionID, text: longText)
+
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Gemma4RotatingCacheTest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let store = InfiniteSessionStore(root: tempDir)
+        let cacheURL = try store.checkpointDirectory(session: sessionID, checkpoint: "c1")
+            .appendingPathComponent("cache.safetensors", isDirectory: false)
+
+        let snapshot = try await backend.checkpointSession(id: sessionID, cacheURL: cacheURL)
+        // "Park": release the live state so resume must load entirely from disk.
+        await backend.releaseSession(id: sessionID)
+        try await backend.resumeSession(
+            id: sessionID,
+            cacheURL: cacheURL,
+            tokenRecord: snapshot.tokenRecord,
+            pendingToken: snapshot.pendingToken
+        )
+
+        let resumed = try await backend.generateSession(
+            id: sessionID, prompt: prompt, maxTokens: maxTokens, temperature: 0
+        )
+
+        let idsText = await backend.encodeForTesting(longText)
+        let idsPrompt = await backend.encodeForTesting(prompt)
+        let cold = try await backend.coldDecodeForTesting(
+            seedIds: idsText + idsPrompt, maxTokens: maxTokens, temperature: 0
+        )
+
+        XCTAssertFalse(resumed.tokenIds.isEmpty, "resumed generation should produce real tokens")
+        XCTAssertEqual(
+            resumed.tokenIds, cold.emittedIds,
+            "RotatingKVCache checkpoint+resume past its 512-token window must match a cold restart token-for-token"
+        )
+    }
+
     private func runGenerate(
         _ selection: InfiniteModelSelection,
         referenceFile: String,
