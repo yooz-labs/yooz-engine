@@ -111,6 +111,27 @@ KVCOMPRESSION_LIVE=1 xcodebuild -project YoozEngine.xcodeproj \
   -destination 'platform=macOS' test
 ```
 
+**Infinite live suites** (`Tests/InfiniteModuleTests/*LiveTests.swift`, engine#265-268):
+gated behind `YOOZ_INFINITE_LIVE=1`, run headless via direct `xcrun xctest`
+(the `swift test`/`xcodebuild test` runners don't reliably forward
+`DYLD_FRAMEWORK_PATH` to a bundle-hosted `.xctest`, hence the workaround):
+
+```bash
+xcodebuild -project YoozEngine.xcodeproj -scheme YoozEngine \
+  -configuration Debug -skipMacroValidation -derivedDataPath build \
+  -destination 'platform=macOS' build-for-testing -only-testing:InfiniteModuleTests
+DYLD_FRAMEWORK_PATH=build/Build/Products/Debug YOOZ_INFINITE_LIVE=1 \
+  xcrun xctest -XCTest InfiniteModuleTests.InfiniteQuantizedKVLiveTests \
+  build/Build/Products/Debug/InfiniteModuleTests.xctest
+```
+
+Swap the `-XCTest` target for any other live class in that directory
+(`InfiniteCheckpointResumeLiveTests`, `InfiniteTurnCommitLiveTests`, ...).
+The Gemma4-hosted counterpart (`Tests/YoozEngineTests/InfiniteGemma4ParityTests.swift`)
+needs `INFINITE_LIVE=1` plus a desktop GUI session (app-hosted XCTest, see
+below) — it cannot run from this headless path. Full field/error reference:
+`docs/INFINITE_MODULE.md` → "Verification".
+
 ### Build verification policy (merge gate) — RULE
 
 **Builds and tests are verified LOCALLY in a sandboxed environment; GitHub CI

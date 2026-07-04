@@ -91,11 +91,33 @@ public struct InfiniteCreateSessionRequest: Codable, Sendable, Equatable {
     /// `SessionKnobs.turnPolicy`/`InfiniteTurnPolicy` (engine#267). `nil`/
     /// empty defaults to `"turn_commit"`; any other value is rejected.
     public let turnPolicy: String?
+    /// Quantized-KV session opt-in (engine#268). `nil` (the default) keeps
+    /// the session's KV cache unquantized. When set, `kvBits` must be `4`
+    /// or `8`, and only Qwen-family sessions may set it — see
+    /// `InfiniteModelSelection.supportsQuantizedKVCache`.
+    public let kvBits: Int?
+    /// Quantization group size; `nil` resolves to `64` at session-open time.
+    public let kvGroupSize: Int?
+    /// `"affine4"`/`"affine8"` — an alternate spelling of `kvBits` that
+    /// resolves to the matching bit width when `kvBits` is unset. Setting
+    /// both to contradicting values (e.g. `kvScheme: "affine8"` with
+    /// `kvBits: 4`) is rejected.
+    public let kvScheme: String?
 
-    public init(modelId: String? = nil, label: String? = nil, turnPolicy: String? = nil) {
+    public init(
+        modelId: String? = nil,
+        label: String? = nil,
+        turnPolicy: String? = nil,
+        kvBits: Int? = nil,
+        kvGroupSize: Int? = nil,
+        kvScheme: String? = nil
+    ) {
         self.modelId = modelId
         self.label = label
         self.turnPolicy = turnPolicy
+        self.kvBits = kvBits
+        self.kvGroupSize = kvGroupSize
+        self.kvScheme = kvScheme
     }
 }
 

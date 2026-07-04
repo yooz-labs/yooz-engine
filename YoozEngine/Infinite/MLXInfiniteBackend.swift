@@ -366,11 +366,32 @@ public actor MLXInfiniteBackend {
     /// Opens a fresh, empty live session — idempotent, so a caller that
     /// isn't sure whether a session was already opened for `id` can call
     /// this unconditionally before `appendTokens`/`generateSession`.
-    public func openSession(id: String) async {
+    ///
+    /// `kvBits` opts the session into a quantized KV cache (engine#268):
+    /// each fresh `KVCacheSimple` layer is converted to `QuantizedKVCache`
+    /// via `toQuantized(groupSize:bits:)` — free at this point since the
+    /// cache is still empty (offset 0). Any other cache class (`MambaCache`
+    /// GDN layers, `RotatingKVCache`, ...) is left untouched. Quantization
+    /// happens ONLY here, once, at session open — never by threading
+    /// `kvBits`/`kvScheme` into `GenerateParameters` for the decode loop
+    /// (see `runSessionDecodeLoop`'s doc comment on
+    /// `maybeQuantizeKVCache`'s entry-replacement hazard). The caller
+    /// (`InfiniteEngine`) is responsible for only ever passing `kvBits` for
+    /// a model whose attention path is quantization-safe
+    /// (`InfiniteModelSelection.supportsQuantizedKVCache`) — this function
+    /// has no model-family awareness of its own and applies the conversion
+    /// mechanically.
+    public func openSession(id: String, kvBits: Int? = nil, kvGroupSize: Int? = nil) async {
         #if canImport(MLXLMCommon) && canImport(MLXHuggingFace)
         guard sessions[id] == nil else { return }
+        let groupSize = kvGroupSize ?? 64
         let box: KVCacheBox = await container.perform { ctx in
-            KVCacheBox(ctx.model.newCache(parameters: nil))
+            let caches = ctx.model.newCache(parameters: nil)
+            guard let kvBits else { return KVCacheBox(caches) }
+            let quantized: [any KVCache] = caches.map { cache in
+                (cache as? KVCacheSimple)?.toQuantized(groupSize: groupSize, bits: kvBits) ?? cache
+            }
+            return KVCacheBox(quantized)
         }
         sessions[id] = LiveSessionState(caches: box.caches)
         #endif

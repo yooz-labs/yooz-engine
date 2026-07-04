@@ -209,6 +209,27 @@ public enum InfiniteModelSelection: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    /// Whether a session on this model may opt into a quantized KV cache
+    /// (engine#268). Qwen-only in v1: Qwen's attention path
+    /// (`attentionWithCacheUpdate`, mlx-swift-lm's `AttentionUtils.swift`)
+    /// detects `QuantizedKVCacheProtocol` and dispatches to
+    /// `updateQuantized`, but Gemma4Text's attention path
+    /// (`Gemma4Text.swift`) calls `cache.update()` directly — which
+    /// `fatalError`s on a `QuantizedKVCache` (`update` is only a stub there;
+    /// `updateQuantized` is the real entry point). Same family grouping as
+    /// `turnComposer` above, kept as its own switch since it gates a
+    /// different concern (cache class safety, not chat-template framing).
+    /// `.s3Retrieval` never reaches a loaded backend (`swiftRuntimeSupported
+    /// == false`), so `false` here is defensive, not load-bearing.
+    public var supportsQuantizedKVCache: Bool {
+        switch self {
+        case .qwen35B1M:
+            return true
+        case .gemma4E4B1M, .gemma4_26B_A4B1M, .gemma4_12B1M, .s3Retrieval:
+            return false
+        }
+    }
+
     public var descriptor: InfiniteBackendDescriptor {
         switch self {
         case .gemma4E4B1M:

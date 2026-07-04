@@ -190,6 +190,19 @@ final class InfiniteTypesTests: XCTestCase {
         XCTAssertEqual(createJSON["modelId"] as? String, "gemma4-e4b-1m")
         XCTAssertEqual(createJSON["label"] as? String, "doc")
 
+        // Quantized-KV knobs (engine#268) round-trip and are omitted
+        // entirely when nil (SDK callers that never opt in send no kv keys).
+        let quantized = InfiniteCreateSessionRequest(
+            modelId: "qwen3-35b-1m", kvBits: 8, kvGroupSize: 32, kvScheme: "affine8"
+        )
+        let quantizedData = try JSONEncoder().encode(quantized)
+        let quantizedDecoded = try JSONDecoder().decode(InfiniteCreateSessionRequest.self, from: quantizedData)
+        XCTAssertEqual(quantizedDecoded, quantized)
+        let quantizedJSON = try JSONSerialization.jsonObject(with: quantizedData) as! [String: Any]
+        XCTAssertEqual(quantizedJSON["kvBits"] as? Int, 8)
+        XCTAssertEqual(quantizedJSON["kvGroupSize"] as? Int, 32)
+        XCTAssertEqual(quantizedJSON["kvScheme"] as? String, "affine8")
+
         let append = InfiniteAppendSessionRequest(text: "real context")
         let appendData = try JSONEncoder().encode(append)
         let appendJSON = try JSONSerialization.jsonObject(with: appendData) as! [String: Any]

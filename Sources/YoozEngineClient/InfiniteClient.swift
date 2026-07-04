@@ -37,12 +37,25 @@ public struct InfiniteClient: Sendable {
 
     /// Create an engine-owned Infinite long-context session. `turnPolicy` is
     /// `"turn_commit"` (default) or `"thinking_in_session"` (engine#267).
+    /// `kvBits`/`kvGroupSize`/`kvScheme` opt into a quantized KV cache
+    /// (engine#268) — Qwen-only in v1; a Gemma4 session with `kvBits` set
+    /// is rejected with `invalid_session_input`.
     public func createSession(
         modelId: String? = nil,
         label: String? = nil,
-        turnPolicy: String? = nil
+        turnPolicy: String? = nil,
+        kvBits: Int? = nil,
+        kvGroupSize: Int? = nil,
+        kvScheme: String? = nil
     ) async throws -> InfiniteSessionInfo {
-        let request = InfiniteCreateSessionRequest(modelId: modelId, label: label, turnPolicy: turnPolicy)
+        let request = InfiniteCreateSessionRequest(
+            modelId: modelId,
+            label: label,
+            turnPolicy: turnPolicy,
+            kvBits: kvBits,
+            kvGroupSize: kvGroupSize,
+            kvScheme: kvScheme
+        )
         let body = try JSONEncoder().encode(request)
         let data = try await engine.post("/v1/infinite/sessions", body: body)
         return try JSONDecoder().decode(InfiniteSessionInfo.self, from: data)

@@ -547,6 +547,63 @@ explicit_delete_or_process_exit;max_active_sessions=16
 
 Always delete sessions when finished. Leaking sessions blocks capacity for other engine clients.
 
+### Session recipe: create → append → generate → checkpoint(park) → resume → fork
+
+```swift
+// Create — turnPolicy defaults to "turn_commit" (reasoning, if any, is
+// quarantined to a disposable branch and never enters durable KV — see
+// INFINITE_MODULE.md's "Turn-commit and the reasoning quarantine"). kvBits
+// opts into a quantized KV cache for memory headroom; Qwen-only in v1 (a
+// Gemma4 session with kvBits set 400s at creation, before a session exists).
+let session = try await client.infinite.createSession(
+    modelId: "qwen3-35b-1m",
+    label: "draft-context",
+    kvBits: 8
+)
+
+try await client.infinite.append(sessionId: session.id, text: longDocumentText)
+
+let reply = try await client.infinite.generate(
+    sessionId: session.id, prompt: "Summarize the loaded context", maxTokens: 256
+)
+// reply.thinkingTokens / .committedTokens / .commitSeconds are populated
+// for the "turn_commit" default; nil for a "thinking_in_session" session.
+
+// Checkpoint + park — persists the KV cache to disk and releases it from
+// RAM (state becomes "parked"). Checkpoints survive process exit, not just
+// RAM eviction: they live under Application Support
+// (~/Library/Application Support/YoozEngine/Infinite/Sessions/<id>/<checkpoint>/,
+// or YOOZ_INFINITE_SESSIONS_DIR when overridden), so a later resume works
+// even from a freshly-launched engine process that has never seen this
+// session id — the checkpoint's own manifest is enough to rehydrate it.
+let checkpoint = try await client.infinite.checkpoint(
+    sessionId: session.id, label: "before-park", park: true
+)
+
+// Resume — append/generate/checkpoint would do this transparently on their
+// own, but an explicit resume is available (e.g. to target a specific,
+// non-latest checkpoint by id).
+try await client.infinite.resumeSession(sessionId: session.id)
+
+// Fork — clones a checkpoint into a brand-new, independent session. The
+// fork starts "parked" (it does not auto-resume) and inherits the source's
+// turnPolicy and quantized-KV knobs from the checkpoint's manifest.
+let forked = try await client.infinite.forkSession(
+    sessionId: session.id, checkpointId: checkpoint.checkpoint.id, label: "exploration-branch"
+)
+try await client.infinite.resumeSession(sessionId: forked.id)
+```
+
+**The two-hot-sessions budget:** at most 2 sessions hold a live KV cache at once, independent of the 16-session tracked-record cap. Opening or resuming a 3rd hot session automatically checkpoints + parks the least-recently-touched other hot session first — this is transparent (the caller's own next append/generate against that session just transparently resumes it), but it means a workflow juggling more than 2 sessions concurrently will see extra checkpoint/resume latency it didn't ask for. Design multi-session workflows around this budget rather than assuming every session stays hot.
+
+**Error handling for session lifecycle calls:**
+
+| Code | Status | What it means for the caller |
+|---|---|---|
+| `session_busy` | 409 | A call is already in flight for this session (append/generate/checkpoint/resume/fork/delete all share one busy guard). Retry once the in-flight call completes; do not treat this as a transport failure. |
+| `checkpoint_not_found` | 404 | The requested (or implied) checkpoint id doesn't exist for this session. For an implied lookup (`checkpointId: nil` on resume/fork), this means the session has never been checkpointed. |
+| `checkpoint_integrity` | 409 | The checkpoint's on-disk contents failed the schema/model/tokenizer/token-hash integrity gate — e.g. a tampered `tokens.bin`, or resuming against a different model/tokenizer than the checkpoint was written with. The session is left untouched; nothing partial is installed. |
+
 The full API, model catalogue, RAM tiers, evidence references, and verification commands are documented in [`INFINITE_MODULE.md`](INFINITE_MODULE.md).
 
 ## Error handling
