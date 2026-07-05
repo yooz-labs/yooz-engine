@@ -87,10 +87,37 @@ public struct InfiniteSessionsResponse: Codable, Sendable, Equatable {
 public struct InfiniteCreateSessionRequest: Codable, Sendable, Equatable {
     public let modelId: String?
     public let label: String?
+    /// `"turn_commit"` (default) or `"thinking_in_session"` — see
+    /// `SessionKnobs.turnPolicy`/`InfiniteTurnPolicy` (engine#267). `nil`/
+    /// empty defaults to `"turn_commit"`; any other value is rejected.
+    public let turnPolicy: String?
+    /// Quantized-KV session opt-in (engine#268). `nil` (the default) keeps
+    /// the session's KV cache unquantized. When set, `kvBits` must be `4`
+    /// or `8`, and only Qwen-family sessions may set it — see
+    /// `InfiniteModelSelection.supportsQuantizedKVCache`.
+    public let kvBits: Int?
+    /// Quantization group size; `nil` resolves to `64` at session-open time.
+    public let kvGroupSize: Int?
+    /// `"affine4"`/`"affine8"` — an alternate spelling of `kvBits` that
+    /// resolves to the matching bit width when `kvBits` is unset. Setting
+    /// both to contradicting values (e.g. `kvScheme: "affine8"` with
+    /// `kvBits: 4`) is rejected.
+    public let kvScheme: String?
 
-    public init(modelId: String? = nil, label: String? = nil) {
+    public init(
+        modelId: String? = nil,
+        label: String? = nil,
+        turnPolicy: String? = nil,
+        kvBits: Int? = nil,
+        kvGroupSize: Int? = nil,
+        kvScheme: String? = nil
+    ) {
         self.modelId = modelId
         self.label = label
+        self.turnPolicy = turnPolicy
+        self.kvBits = kvBits
+        self.kvGroupSize = kvGroupSize
+        self.kvScheme = kvScheme
     }
 }
 
@@ -121,10 +148,15 @@ public struct InfiniteAppendSessionResponse: Codable, Sendable, Equatable {
 public struct InfiniteGenerateSessionRequest: Codable, Sendable, Equatable {
     public let prompt: String?
     public let maxTokens: Int?
+    /// Sampling temperature; `nil` preserves the production default (0.7).
+    /// `0` selects greedy decoding — used by the live session parity test
+    /// and any caller that needs deterministic output (engine#265).
+    public let temperature: Double?
 
-    public init(prompt: String? = nil, maxTokens: Int? = nil) {
+    public init(prompt: String? = nil, maxTokens: Int? = nil, temperature: Double? = nil) {
         self.prompt = prompt
         self.maxTokens = maxTokens
+        self.temperature = temperature
     }
 }
 
@@ -133,25 +165,47 @@ public struct InfiniteGenerateSessionResponse: Codable, Sendable, Equatable {
     public let text: String
     public let finishReason: String
     public let resources: InfiniteResourceMetrics
+    /// Turn-commit (engine#267) stats — `nil` for `"thinking_in_session"`
+    /// sessions, where there is no separate reasoning/commit bucket.
+    /// Reasoning-side token count, approximated by re-encoding the split-out
+    /// reasoning text.
+    public let thinkingTokens: Int?
+    /// Exact token count committed to the durable cache this call (user
+    /// turn plus the stable-framed answer).
+    public let committedTokens: Int?
+    /// Wall-clock seconds spent chunk-prefilling the commit onto the
+    /// durable cache.
+    public let commitSeconds: Double?
 
     public init(
         sessionId: String,
         text: String,
         finishReason: String,
-        resources: InfiniteResourceMetrics
+        resources: InfiniteResourceMetrics,
+        thinkingTokens: Int? = nil,
+        committedTokens: Int? = nil,
+        commitSeconds: Double? = nil
     ) {
         self.sessionId = sessionId
         self.text = text
         self.finishReason = finishReason
         self.resources = resources
+        self.thinkingTokens = thinkingTokens
+        self.committedTokens = committedTokens
+        self.commitSeconds = commitSeconds
     }
 }
 
 public struct InfiniteCheckpointSessionRequest: Codable, Sendable, Equatable {
     public let label: String?
+    /// When `true`, the engine releases the session's live KV cache from
+    /// RAM after checkpointing (session `state` becomes `"parked"`).
+    /// `false`/`nil` leaves the session hot.
+    public let park: Bool?
 
-    public init(label: String? = nil) {
+    public init(label: String? = nil, park: Bool? = nil) {
         self.label = label
+        self.park = park
     }
 }
 
@@ -183,13 +237,59 @@ public struct InfiniteSessionCheckpoint: Codable, Sendable, Equatable {
 public struct InfiniteCheckpointSessionResponse: Codable, Sendable, Equatable {
     public let session: InfiniteSessionInfo
     public let checkpoint: InfiniteSessionCheckpoint
+    /// Bytes written to `cache.safetensors` for this checkpoint.
+    public let sizeBytes: Int64
+    /// `tokenRecord.count` at checkpoint time (durable tokens plus the one
+    /// pending token, if any) — the exact figure the manifest was written
+    /// with, duplicated here so a caller doesn't need to cross-reference
+    /// `checkpoint.estimatedInputTokens`.
+    public let tokenCount: Int
+    /// Wall-clock seconds spent branching the live KV cache and writing
+    /// `cache.safetensors` (excludes tokens.bin/manifest.json, which are
+    /// negligible by comparison).
+    public let durationSeconds: Double
+    /// The checkpoint this one supersedes for the same session, if any.
+    public let parentCheckpointId: String?
 
     public init(
         session: InfiniteSessionInfo,
-        checkpoint: InfiniteSessionCheckpoint
+        checkpoint: InfiniteSessionCheckpoint,
+        sizeBytes: Int64,
+        tokenCount: Int,
+        durationSeconds: Double,
+        parentCheckpointId: String? = nil
     ) {
         self.session = session
         self.checkpoint = checkpoint
+        self.sizeBytes = sizeBytes
+        self.tokenCount = tokenCount
+        self.durationSeconds = durationSeconds
+        self.parentCheckpointId = parentCheckpointId
+    }
+}
+
+/// Body for `POST /v1/infinite/sessions/:id/resume`.
+public struct InfiniteResumeSessionRequest: Codable, Sendable, Equatable {
+    /// Checkpoint to resume from; defaults to the session's latest
+    /// checkpoint when omitted.
+    public let checkpointId: String?
+
+    public init(checkpointId: String? = nil) {
+        self.checkpointId = checkpointId
+    }
+}
+
+/// Body for `POST /v1/infinite/sessions/:id/fork`.
+public struct InfiniteForkSessionRequest: Codable, Sendable, Equatable {
+    /// Checkpoint to fork from; defaults to the source session's latest
+    /// checkpoint when omitted (a hot, never-checkpointed source takes an
+    /// implicit checkpoint first).
+    public let checkpointId: String?
+    public let label: String?
+
+    public init(checkpointId: String? = nil, label: String? = nil) {
+        self.checkpointId = checkpointId
+        self.label = label
     }
 }
 

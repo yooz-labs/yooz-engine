@@ -173,7 +173,21 @@ final class InfiniteModuleTests: XCTestCase {
         try await resetEngine()
     }
 
+    /// Real end-to-end session lifecycle: create/append/checkpoint/list/
+    /// delete against a live backend. Gated behind YOOZ_INFINITE_LIVE=1
+    /// because `append` now does real GPU work — a chunked prefill onto
+    /// the session's live KV cache (engine#265) — instead of the pre-#265
+    /// pure `accumulatedText` bookkeeping, so it needs an actually-loaded
+    /// model. `estimatedAppendedTokens`/`estimatedInputTokens` are real
+    /// tokenizer counts now, not the old character-based heuristic, so
+    /// this asserts the invariant that actually matters (the append
+    /// response's count matches the session's own snapshot) rather than a
+    /// hardcoded heuristic value.
     func testSessionLifecycleTracksContextCheckpointsAndCleanup() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["YOOZ_INFINITE_LIVE"] == "1",
+            "set YOOZ_INFINITE_LIVE=1 to run the live session lifecycle test (downloads a model)"
+        )
         guard InfiniteRAMTier.current != .belowMinimum else {
             throw XCTSkip("Infinite requires at least 32 GB unified memory")
         }
@@ -201,9 +215,10 @@ final class InfiniteModuleTests: XCTestCase {
             request: InfiniteAppendSessionRequest(text: "real context")
         )
         XCTAssertEqual(appended.appendedCharacters, 12)
-        XCTAssertEqual(appended.estimatedAppendedTokens, 3)
+        XCTAssertGreaterThan(appended.estimatedAppendedTokens, 0)
         XCTAssertEqual(appended.session.inputCharacters, 12)
-        XCTAssertEqual(appended.session.estimatedInputTokens, 3)
+        // First append on a fresh session: total == this call's own count.
+        XCTAssertEqual(appended.session.estimatedInputTokens, appended.estimatedAppendedTokens)
 
         let checkpoint = try await engine.checkpoint(
             sessionID: created.id,
@@ -211,6 +226,7 @@ final class InfiniteModuleTests: XCTestCase {
         )
         XCTAssertEqual(checkpoint.checkpoint.label, "after-append")
         XCTAssertEqual(checkpoint.checkpoint.inputCharacters, 12)
+        XCTAssertEqual(checkpoint.checkpoint.estimatedInputTokens, appended.session.estimatedInputTokens)
         XCTAssertEqual(checkpoint.session.checkpointCount, 1)
 
         let listed = await engine.listSessions()

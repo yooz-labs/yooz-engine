@@ -784,6 +784,14 @@ targets:
       - target: InfiniteModule
       - target: EngineCore
       - target: YoozEngineWire
+      # The branching/runtime tests construct MLXArrays and KVCache
+      # instances directly; relying on transitive linking through
+      # InfiniteModule proved fragile (missing witness-table symbols on
+      # incremental relinks), so link the products explicitly.
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift-lm
+        product: MLXLMCommon
 
   STTModuleTests:
     type: bundle.unit-test

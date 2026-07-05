@@ -179,6 +179,14 @@ public enum RouteParityAllowlist {
             reason: infiniteReason
         ),
         LoopbackOnlyRoute(
+            .init(.post, "/v1/infinite/sessions/:sessionID/resume"),
+            reason: infiniteReason
+        ),
+        LoopbackOnlyRoute(
+            .init(.post, "/v1/infinite/sessions/:sessionID/fork"),
+            reason: infiniteReason
+        ),
+        LoopbackOnlyRoute(
             .init(.delete, "/v1/infinite/sessions/:sessionID"),
             reason: infiniteReason
         ),

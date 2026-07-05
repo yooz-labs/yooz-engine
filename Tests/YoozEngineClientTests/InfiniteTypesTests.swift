@@ -151,12 +151,36 @@ final class InfiniteTypesTests: XCTestCase {
         )
         let response = InfiniteCheckpointSessionResponse(
             session: session,
-            checkpoint: checkpoint
+            checkpoint: checkpoint,
+            sizeBytes: 4_096,
+            tokenCount: 32,
+            durationSeconds: 0.042,
+            parentCheckpointId: "checkpoint-0"
         )
 
         let data = try JSONEncoder().encode(response)
         let decoded = try JSONDecoder().decode(InfiniteCheckpointSessionResponse.self, from: data)
         XCTAssertEqual(decoded, response)
+    }
+
+    func testInfiniteResumeAndForkRequestsRoundTrip() throws {
+        let resumeWithId = InfiniteResumeSessionRequest(checkpointId: "checkpoint-1")
+        let resumeData = try JSONEncoder().encode(resumeWithId)
+        let decodedResume = try JSONDecoder().decode(InfiniteResumeSessionRequest.self, from: resumeData)
+        XCTAssertEqual(decodedResume, resumeWithId)
+
+        let resumeLatest = InfiniteResumeSessionRequest()
+        XCTAssertNil(resumeLatest.checkpointId)
+
+        let fork = InfiniteForkSessionRequest(checkpointId: "checkpoint-1", label: "branch")
+        let forkData = try JSONEncoder().encode(fork)
+        let decodedFork = try JSONDecoder().decode(InfiniteForkSessionRequest.self, from: forkData)
+        XCTAssertEqual(decodedFork, fork)
+
+        let checkpointWithPark = InfiniteCheckpointSessionRequest(label: "before-park", park: true)
+        let parkData = try JSONEncoder().encode(checkpointWithPark)
+        let parkJSON = try JSONSerialization.jsonObject(with: parkData) as! [String: Any]
+        XCTAssertEqual(parkJSON["park"] as? Bool, true)
     }
 
     func testInfiniteSessionRequestEncoding() throws {
@@ -165,6 +189,19 @@ final class InfiniteTypesTests: XCTestCase {
         let createJSON = try JSONSerialization.jsonObject(with: createData) as! [String: Any]
         XCTAssertEqual(createJSON["modelId"] as? String, "gemma4-e4b-1m")
         XCTAssertEqual(createJSON["label"] as? String, "doc")
+
+        // Quantized-KV knobs (engine#268) round-trip and are omitted
+        // entirely when nil (SDK callers that never opt in send no kv keys).
+        let quantized = InfiniteCreateSessionRequest(
+            modelId: "qwen3-35b-1m", kvBits: 8, kvGroupSize: 32, kvScheme: "affine8"
+        )
+        let quantizedData = try JSONEncoder().encode(quantized)
+        let quantizedDecoded = try JSONDecoder().decode(InfiniteCreateSessionRequest.self, from: quantizedData)
+        XCTAssertEqual(quantizedDecoded, quantized)
+        let quantizedJSON = try JSONSerialization.jsonObject(with: quantizedData) as! [String: Any]
+        XCTAssertEqual(quantizedJSON["kvBits"] as? Int, 8)
+        XCTAssertEqual(quantizedJSON["kvGroupSize"] as? Int, 32)
+        XCTAssertEqual(quantizedJSON["kvScheme"] as? String, "affine8")
 
         let append = InfiniteAppendSessionRequest(text: "real context")
         let appendData = try JSONEncoder().encode(append)
