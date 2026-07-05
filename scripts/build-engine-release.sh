@@ -94,6 +94,7 @@ xcodebuild \
     -scheme "$SCHEME" \
     -configuration "$CONFIG" \
     -derivedDataPath "$DERIVED_DATA" \
+    -skipMacroValidation \
     CODE_SIGN_IDENTITY="" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=NO \
