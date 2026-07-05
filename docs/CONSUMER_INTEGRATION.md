@@ -2,7 +2,7 @@
 
 How to integrate Yooz Engine (0.7.5 as of 2026-07) into a Swift/SwiftUI app.
 
-The `YoozEngineClient` SDK surface is identical across three transports (loopback HTTP/WS, in-process, XPC) — see "Transport selection" below to pick the right one for your packaging. The rest of this document, unless a section says otherwise, describes the **loopback transport** (`HTTPTransport`), which remains the right choice for local dev and for the super-yooz host. **App Store standalone apps should use the in-process transport today** (see "Transport selection"); it is what Yooz Whisper ships.
+The `YoozEngineClient` SDK surface is identical across three transports (loopback HTTP/WS, in-process, XPC) — see "Transport selection" below to pick the right one for your packaging. The rest of this document, unless a section says otherwise, describes the **loopback transport** (`HTTPTransport`), which remains the right choice for local dev and for the super-yooz host. **App Store standalone apps should start with in-process for the smallest integration surface, then move to XPC when they need process isolation** (see "Transport selection"); Yooz Whisper now ships XPC for Release/App Store builds, with in-process kept as its Debug/dev fallback.
 
 ## TL;DR (loopback transport)
 
@@ -28,8 +28,8 @@ Pick a transport based on how your app ships, not on which modules you need (mod
 
 | Transport | Use when | Status as of 2026-07 |
 |---|---|---|
-| **In-process** (`YoozEngineInProcess` SPM product, `InProcessTransport`) | You're an App Store standalone app. No socket, no separate process — the engine actors run in your sandbox. **Recommended today.** Yooz Whisper ships this (pinned by revision in its `project.yml`, engine 0.7.5 at time of writing). | Shipping. One gap: `/v1/infinite/*` is intentionally unsupported in-process — Infinite's consumer is the loopback host. (The former `/v1/session/*` gap closed in engine#232; sessions dispatch through the shared endpoint table on every transport.) |
-| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Packaged, self-contained, and provable (engine#227, engine#248), full route surface (engine#244).** This repo's own `project.yml` ships `YoozEngineXPC` (the `.xpc` target), entitlements, and a dev-only harness that round-trips health + streaming STT through it in a Release build copied outside DerivedData (`scripts/verify-xpc-portability.sh`) — see "XPC service embed recipe" below. `/v1/events` bridges over the same callback-proxy shape as streaming STT (engine#244), so a picker built on `EngineStateStore` now works on all three transports. No shipping consumer app has adopted XPC yet; Whisper's migration is a follow-up (whisper#267), in-process stays its fallback in the meantime. |
+| **In-process** (`YoozEngineInProcess` SPM product, `InProcessTransport`) | You're an App Store standalone app and want the smallest first integration: no socket, no separate process — the engine actors run in your sandbox. Good starting point before adding XPC packaging. | Shipping. Yooz Whisper keeps this path as its Debug/dev fallback while Release/App Store builds use XPC (whisper#267). One gap: `/v1/infinite/*` is intentionally unsupported in-process — Infinite's consumer is the loopback host. (The former `/v1/session/*` gap closed in engine#232; sessions dispatch through the shared endpoint table on every transport.) |
+| **XPC** (`XPCTransport` + a packaged `.xpc` service) | You're an App Store standalone app and want process-isolated crash/OOM containment (an engine crash does not take your app down). This is the **preferred long-term shape** per the packaging design (avoids ITMS-90296 the way an unsandboxed helper `.app` cannot). | **Packaged, self-contained, and provable (engine#227, engine#248), full route surface (engine#244).** This repo's own `project.yml` ships `YoozEngineXPC` (the `.xpc` target), entitlements, and a dev-only harness that round-trips health + streaming STT through it in a Release build copied outside DerivedData (`scripts/verify-xpc-portability.sh`) — see "XPC service embed recipe" below. `/v1/events` bridges over the same callback-proxy shape as streaming STT (engine#244), so a picker built on `EngineStateStore` now works on all three transports. Yooz Whisper's Release/App Store build now uses `XPC_TRANSPORT` with `ReconnectingXPCTransport` (whisper#267), which is the first shipping consumer reference for this path. |
 | **Loopback** (`HTTPTransport`, this document's default) | You're the super-yooz host, or doing local dev/testing. Not valid for an App Store standalone — the unsandboxed helper `.app` under `Contents/Helpers/` fails App Store review (ITMS-90296). | Shipping, default. |
 
 In-process integration looks like this instead of the TL;DR above:
@@ -63,6 +63,11 @@ app's project rather than re-deriving it. Adopting this transport is a bigger
 lift than in-process (a real `.xpc` target, entitlements, an app group), so
 budget it as its own piece of work; in-process remains the recommended
 starting point.
+
+This section assumes your app already has the Yooz Engine Swift package
+pinned by revision and the in-process recipe above working. The XPC steps are
+an addendum to that setup: keep the existing `package:` block and add the XPC
+service target, embed phase, entitlements, and `XPCTransport` call sites below.
 
 ### 1. Add the XPC service target
 
@@ -394,6 +399,32 @@ try await client.infinite.checkpoint(sessionId: session.id, label: "loaded")
 try await client.infinite.deleteSession(id: session.id)
 ```
 
+### Recording session boundaries
+
+`YoozEngineClient` intentionally has no `client.session` convenience today.
+Use the transport seam directly for the recording boundary routes; this works
+the same way over loopback, in-process, and XPC because `/v1/session/*`
+dispatches through the shared endpoint table:
+
+```swift
+import Foundation
+import YoozEngineWire
+
+let beginData = try await client.transport.post("/v1/session/begin", body: Data())
+let begin = try JSONDecoder().decode(SessionBeginResponse.self, from: beginData)
+print(begin.sessionId, begin.ts) // tag your own logs/metrics for this recording
+
+let endData = try await client.transport.post("/v1/session/end", body: Data())
+precondition(endData.isEmpty) // 204-equivalent empty body
+```
+
+`/v1/session/begin` resets `SessionResettable` modules and returns a fresh
+`SessionBeginResponse { sessionId, ts }` for caller-side correlation.
+`/v1/session/end` performs the same reset fan-out and returns an empty body.
+These are recording/work boundaries, not Infinite lifecycle calls; Infinite
+sessions remain engine-owned resources and still need explicit deletion as
+shown below.
+
 ## The canonical model picker pattern
 
 Every module that exposes a model selection follows the same shape:
@@ -714,7 +745,7 @@ Both models use the same engine substrate. Design new consumer apps to be comple
 
 ## Reference apps
 
-- **yooz-whisper** — the canonical in-process reference. Links `YoozEngineInProcess` (`YoozEngineWhisper` module set: STT + AppleSTT + Grammar + LLM, no VAD/Infinite), pinned by revision in its `project.yml`, drives the LLM + STT pickers, ships an Engine settings tab. See `yooz-whisper/AGENTS.md`.
+- **yooz-whisper** — the consumer-app reference. Release/App Store builds use `XPC_TRANSPORT` with `ReconnectingXPCTransport` (whisper#267); Debug/dev keeps the `YoozEngineInProcess` fallback (`YoozEngineWhisper` module set: STT + AppleSTT + Grammar + LLM, no VAD/Infinite), pinned by revision in its `project.yml`, drives the LLM + STT pickers, ships an Engine settings tab. See `yooz-whisper/AGENTS.md`.
 - **super-yooz** — the canonical loopback reference (not yet implemented as of 2026-07; zero code against the engine substrate). Host-app charter at `super-yooz/.context/charter.md`.
 
 ## Common pitfalls
