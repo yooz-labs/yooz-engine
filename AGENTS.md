@@ -443,6 +443,36 @@ VAD stays whisper-embedded (~64ms call rate makes HTTP round-trip non-viable). I
 | 8 | Engine substrate contract v2 (session routing parity, XPC packaging, model-selection state) | New | In flight — epic #230 (2026-07-02 architecture review), tracking #222-#229; see `.context/plan.md` |
 | 9 | TTS (Kokoro) | Future | Not started |
 
+## Versioning and releases
+
+Patch-bump on every batch of work merged to `main`; the 0.7.x line patch-bumps
+even for feature epics. One release = one commit + one tag:
+
+1. Bump BOTH version strings to `X.Y.Z` in the same commit:
+   - `Sources/EngineCore/EngineConfig.swift` (`public static let version`)
+   - `YoozEngine/Info.plist` (`CFBundleShortVersionString`)
+2. Commit `bump version to X.Y.Z` on `main`, tag `vX.Y.Z`, push commit + tag.
+3. The tag push triggers `release-notes.yml`, which creates a **draft** GitHub
+   release (no macOS runners for this repo, engine#23; artifacts are
+   maintainer-built).
+4. Build + sign locally: `bash scripts/release-engine.sh` (emits
+   `dist/*.app.zip` + `dist/RELEASE.md`), then
+   `bash scripts/smoke-test-release.sh` (all three variants must print ALIVE;
+   port 19920 must be free).
+5. Upload and publish:
+
+   ```bash
+   gh release upload vX.Y.Z dist/YoozEngine.app.zip dist/YoozEngineLite.app.zip \
+       dist/YoozEngineWhisper.app.zip dist/RELEASE.md
+   gh release edit vX.Y.Z --notes-file dist/RELEASE.md
+   gh release edit vX.Y.Z --draft=false
+   ```
+
+Do not leave a tag without a published release: "Latest" on GitHub is the
+artifact source for consumers, and SDK consumers resolve versions from tags.
+Full runbook, prerequisites (Developer ID cert, xcodegen), and
+troubleshooting: `docs/RELEASE.md`.
+
 ## Conventions
 
 - **Swift 6 concurrency:** use `@MainActor` on classes that hold `@Published` state.

@@ -38,7 +38,7 @@ curl http://localhost:19920/v1/health
 
 `-skipMacroValidation` bypasses the per-machine trust prompt for `MLXHuggingFaceMacros` (required for headless / first-run CLI builds). `-derivedDataPath build` keeps the artifact next to the source tree instead of `~/Library/Developer/Xcode/DerivedData`.
 
-The full architecture, build variants, conventions, and module specs live in [`AGENTS.md`](AGENTS.md). The strategic licensing position lives in [`LICENSING.md`](LICENSING.md).
+The full architecture, build variants, conventions, and module specs live in [`AGENTS.md`](AGENTS.md).
 
 The Infinite long-context module API, RAM tiers, model catalogue, and verification commands live in [`docs/INFINITE_MODULE.md`](docs/INFINITE_MODULE.md).
 
@@ -60,7 +60,7 @@ The engine source code is licensed under [**PolyForm Shield 1.0.0**](LICENSE.md)
 - Embed it in apps that aren't direct Yooz Engine substitutes.
 - Contribute back via PRs.
 
-You cannot offer a "managed Yooz Engine" or a re-skinned commercial fork. For the strategic rationale and the full product/weights matrix, see [`LICENSING.md`](LICENSING.md).
+You cannot offer a "managed Yooz Engine" or a re-skinned commercial fork.
 
 **Compiled `.app` binaries** distributed via GitHub Releases are also under PolyForm Shield. Model weights on HuggingFace are Apache 2.0 (a separate, more permissive license — open weights are a deliberate choice).
 

@@ -4,7 +4,7 @@ Thanks for considering a contribution. The engine is the heart of the Yooz ecosy
 
 ## Before you start
 
-- **License agreement**: this repository is licensed under [PolyForm Shield 1.0.0](LICENSE.md). By contributing, you agree your contribution is provided under the same license. The strategic rationale lives in [`LICENSING.md`](LICENSING.md).
+- **License agreement**: this repository is licensed under [PolyForm Shield 1.0.0](LICENSE.md). By contributing, you agree your contribution is provided under the same license.
 - **DCO sign-off** (required): every commit must carry a `Signed-off-by:` trailer. This is a lightweight statement that you have the right to submit the contribution under the project's license. No CLA required.
 
   ```bash
