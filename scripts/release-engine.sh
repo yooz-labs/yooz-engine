@@ -106,10 +106,10 @@ UNSIGNED_VARIANTS=()
 
 {
     printf "# Yooz Engine Release %s\n\n" "$VERSION"
-    printf "- **Built:** %s\n" "$TIMESTAMP"
-    printf "- **Config:** %s\n" "$CONFIG"
-    printf "- **Host:** %s (%s)\n" "$(hostname -s)" "$(uname -sm)"
-    printf "- **Git:** \`%s\` @ \`%s\`\n" \
+    printf -- "- **Built:** %s\n" "$TIMESTAMP"
+    printf -- "- **Config:** %s\n" "$CONFIG"
+    printf -- "- **Host:** %s (%s)\n" "$(hostname -s)" "$(uname -sm)"
+    printf -- "- **Git:** \`%s\` @ \`%s\`\n" \
         "$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)" \
         "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     printf "\n"
