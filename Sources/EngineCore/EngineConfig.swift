@@ -39,7 +39,7 @@ public enum EngineConfig {
     }
 
     public static let host: String = "127.0.0.1"
-    public static let version: String = "0.7.5"
+    public static let version: String = "0.7.6"
 
     /// Budget for MLX's Metal buffer cache **per resident model category**. The
     /// process-global `MLX.Memory.cacheLimit` is set to this value times the
