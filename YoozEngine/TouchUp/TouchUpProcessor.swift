@@ -13,7 +13,7 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpPro
 ///
 /// Uses two-model routing strategy:
 /// - No replacements: Qwen2.5-0.5B proofreads only (fast path)
-/// - Has replacements: Qwen3-1.7B validates replacements + proofreads
+/// - Has replacements: Qwen3.5-0.8B validates replacements + proofreads
 ///
 /// Pipeline:
 /// ```
@@ -216,6 +216,26 @@ public enum TouchUpProcessor {
 
                 logger.info("Proofread complete in \(Int(latencyMs))ms, success=\(success)")
 
+                guard success else {
+                    // The model ran and returned a response, but parsing it
+                    // failed (malformed JSON, placeholder echo, etc.) —
+                    // `resultText` is the unprocessed fallback, not real
+                    // cleanup, so this must not read as a successful `.light`
+                    // pass (engine#279 review: both branches previously
+                    // hardcoded `fallbackReason: nil` here regardless of
+                    // `success`, silently masking parse failures both in
+                    // logs and in the wire `warnings` field, which forwards
+                    // `fallbackReason` at the transport layer).
+                    logger.warning("Light model response failed to parse; returning unprocessed text")
+                    return ProcessResult(
+                        text: resultText,
+                        keepDecisions: [],
+                        modelUsed: .fallbackRegex,
+                        latencyMs: latencyMs,
+                        fallbackReason: "Light model response failed to parse"
+                    )
+                }
+
                 return ProcessResult(
                     text: resultText,
                     keepDecisions: [],
@@ -263,7 +283,7 @@ public enum TouchUpProcessor {
                     workloadClass: workloadClass
                 )
 
-                let (resultText, keepDecisions, _) = parseValidateResponse(
+                let (resultText, keepDecisions, success) = parseValidateResponse(
                     response,
                     fallback: processedText,
                     numReplacements: replacements.count
@@ -285,7 +305,24 @@ public enum TouchUpProcessor {
                 }
 
                 let latencyMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                logger.info("Validation complete in \(Int(latencyMs))ms, kept \(keepDecisions.filter { $0 }.count)/\(keepDecisions.count)")
+                let keptCount = keepDecisions.filter { $0 }.count
+                logger.info("Validation complete in \(Int(latencyMs))ms, kept \(keptCount)/\(keepDecisions.count), success=\(success)")
+
+                guard success else {
+                    // Same masking bug as the fast path above, previously
+                    // discarding `success` entirely via `_`: parsing failed,
+                    // so `keepDecisions` is the all-revert default and
+                    // `finalText` is not real quality-model validation —
+                    // must not report `.quality` (engine#279 review).
+                    logger.warning("Quality model response failed to parse; reverted all replacements")
+                    return ProcessResult(
+                        text: finalText,
+                        keepDecisions: keepDecisions,
+                        modelUsed: .fallbackRegex,
+                        latencyMs: latencyMs,
+                        fallbackReason: "Quality model response failed to parse"
+                    )
+                }
 
                 return ProcessResult(
                     text: finalText,
