@@ -591,16 +591,25 @@ public actor TouchUpEngine {
     ///   - workloadClass: GPU admission class (engine#228). Defaults to
     ///     `.background` — TouchUp generation is throughput work per the
     ///     issue's classification.
+    ///   - contextVocabulary: Optional dictation vocabulary hint
+    ///     (engine#280 Phase 4). Capped and, when
+    ///     `EngineConfig.touchUpContextEnabled` is on, appended to the
+    ///     selected prompt via `withContext`. Nil is a no-op.
+    ///   - contextAppName: Optional frontmost-app display name for the
+    ///     same eval-gated injection. Nil is a no-op.
     /// - Returns: ProcessResult with cleaned text and metadata
     public func process(
         text: String,
         mode: TouchUpMode,
         replacements: [(original: String, replacement: String)] = [],
-        workloadClass: MLXWorkloadClass = .background
+        workloadClass: MLXWorkloadClass = .background,
+        contextVocabulary: [String]? = nil,
+        contextAppName: String? = nil
     ) async -> TouchUpProcessor.ProcessResult {
         let replacementStructs = replacements.map {
             TouchUpProcessor.Replacement(original: $0.original, replacement: $0.replacement)
         }
+        let cappedVocabulary = Self.cappedContextVocabulary(contextVocabulary)
 
         // Mode off: no LLM cleanup is requested — return regex-only (voice
         // commands) without loading any model. Must precede the lazy-load below
@@ -647,9 +656,10 @@ public actor TouchUpEngine {
 
 
         // Select the proofread prompt based on mode and available model
-        let proofreadPrompt = selectPrompt(
-            for: mode,
-            qualityAvailable: qualityAvailable
+        let proofreadPrompt = Self.withContext(
+            prompt: selectPrompt(for: mode, qualityAvailable: qualityAvailable),
+            vocabulary: cappedVocabulary,
+            appName: contextAppName
         )
 
         // Route to appropriate processing
@@ -795,6 +805,52 @@ public actor TouchUpEngine {
                 return YoozPrompts.lightFull
             }
         }
+    }
+
+    // MARK: - Context injection (engine#280 Phase 4, eval-gated)
+
+    /// Server-side defensive cap on vocabulary terms attached to a TouchUp
+    /// request (engine#280 / whisper#317): regardless of how many terms a
+    /// caller sends, at most this many are honored downstream. Applied on
+    /// receipt in `process(...)`/`processWithActiveModel(...)` so neither
+    /// call path (loopback `APIServer` nor in-process `InProcessTransport`)
+    /// can forget to enforce it.
+    public static let touchUpContextVocabularyCap = 30
+
+    /// Cap `vocabulary` to `touchUpContextVocabularyCap` terms. A pure,
+    /// synchronous transform — testable without a loaded model.
+    static func cappedContextVocabulary(_ vocabulary: [String]?) -> [String]? {
+        guard let vocabulary, vocabulary.count > touchUpContextVocabularyCap else {
+            return vocabulary
+        }
+        return Array(vocabulary.prefix(touchUpContextVocabularyCap))
+    }
+
+    /// Append a compact context block to `prompt` when injection is enabled
+    /// (`EngineConfig.touchUpContextEnabled`) and at least one of
+    /// `vocabulary`/`appName` is non-empty. Applied to `selectPrompt`'s
+    /// RETURN VALUE, never to the `YoozPrompts` constants themselves —
+    /// `YoozPromptsParityTests` locks those verbatim against the fine-tuned
+    /// weights' training data, so this composition step must stay strictly
+    /// downstream of them. Disabling the flag, or omitting both fields,
+    /// reproduces `prompt` byte-for-byte.
+    static func withContext(
+        prompt: String,
+        vocabulary: [String]?,
+        appName: String?
+    ) -> String {
+        guard EngineConfig.touchUpContextEnabled else { return prompt }
+        let terms = (vocabulary ?? []).filter { !$0.isEmpty }
+        let trimmedAppName = appName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lines: [String] = []
+        if !terms.isEmpty {
+            lines.append("Known terms the speaker may use: \(terms.joined(separator: ", ")).")
+        }
+        if let trimmedAppName, !trimmedAppName.isEmpty {
+            lines.append("Text will be pasted into: \(trimmedAppName).")
+        }
+        guard !lines.isEmpty else { return prompt }
+        return prompt + "\n\n" + lines.joined(separator: "\n")
     }
 
     // MARK: - Model Info
@@ -1230,7 +1286,9 @@ public actor TouchUpEngine {
         text: String,
         mode: TouchUpMode,
         replacements: [(original: String, replacement: String)] = [],
-        workloadClass: MLXWorkloadClass = .background
+        workloadClass: MLXWorkloadClass = .background,
+        contextVocabulary: [String]? = nil,
+        contextAppName: String? = nil
     ) async -> TouchUpProcessor.ProcessResult {
         await restorePersistedSelectionIfNeeded()
         switch await activeModel {
@@ -1238,7 +1296,8 @@ public actor TouchUpEngine {
             return await processWithFoundationModels(text: text, mode: mode)
         case .yoozLight:
             return await process(
-                text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                text: text, mode: mode, replacements: replacements, workloadClass: workloadClass,
+                contextVocabulary: contextVocabulary, contextAppName: contextAppName
             )
         case .yoozQuality:
             // Force the quality backend on both routing slots so the
@@ -1252,15 +1311,21 @@ public actor TouchUpEngine {
                 // path. The fallback uses the light model and
                 // surfaces the load failure as a warning string.
                 return await process(
-                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass,
+                    contextVocabulary: contextVocabulary, contextAppName: contextAppName
                 )
             }
             guard let quality = qualityModel, await quality.isLoaded else {
                 return await process(
-                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass,
+                    contextVocabulary: contextVocabulary, contextAppName: contextAppName
                 )
             }
-            let proofreadPrompt = selectPrompt(for: mode, qualityAvailable: true)
+            let proofreadPrompt = Self.withContext(
+                prompt: selectPrompt(for: mode, qualityAvailable: true),
+                vocabulary: Self.cappedContextVocabulary(contextVocabulary),
+                appName: contextAppName
+            )
             let replacementStructs = replacements.map {
                 TouchUpProcessor.Replacement(
                     original: $0.original, replacement: $0.replacement
