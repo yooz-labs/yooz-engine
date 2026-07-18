@@ -365,6 +365,40 @@ public enum EngineConfig {
             .appendingPathComponent("YoozEngine/telemetry")
     }
 
+    // MARK: - TouchUp context injection (engine#280 Phase 4)
+
+    /// Compiled default for `touchUpContextEnabled`. Measured `false` by
+    /// the Phase 4 eval gate (`TouchUpFidelityEvalTests`, engine#280 /
+    /// whisper#317, run 2026-07-18): `testLightFullFidelityWithContextBlockAttached`
+    /// was clean (3/3 fixtures), but
+    /// `testQualityFullFidelityWithContextBlockAttached` reproducibly
+    /// regressed 1 of 13 — `notNormalizedButDropped` — once
+    /// `sharedContextBlock` was appended: the Quality backend's negation
+    /// phrasing shifted from "it is not fully normalized" to "it isn't
+    /// fully normalized", a meaning-preserving contraction that still trips
+    /// the `requiredContent` assertion's literal `"not"` substring check.
+    /// Confirmed reproducible on a second run (greedy decode is
+    /// deterministic for a fixed prompt). Exactly the LoRA prompt-drift
+    /// class Phase 2 warned about: an additive, semantically-neutral
+    /// prompt change still perturbs the tuned adapter's phrasing. The wire
+    /// fields land unconditionally regardless (Stage 1 is not gated on
+    /// this outcome); see yooz-benchmark#25 for the retrain note that
+    /// would let the adapter learn the context-block format.
+    public static let defaultTouchUpContextEnabled = false
+
+    /// Whether the compact vocabulary/app-name context block (Phase 4
+    /// `TouchUpEngine.withContext`) is appended to the TouchUp system
+    /// prompt. Driven by `YOOZ_TOUCHUP_CONTEXT_ENABLED`: `"1"`/`"true"`
+    /// forces on, `"0"`/`"false"` forces off; unset or any other value
+    /// falls back to `defaultTouchUpContextEnabled`.
+    public static var touchUpContextEnabled: Bool {
+        switch ProcessInfo.processInfo.environment["YOOZ_TOUCHUP_CONTEXT_ENABLED"] {
+        case "1", "true": return true
+        case "0", "false": return false
+        default: return defaultTouchUpContextEnabled
+        }
+    }
+
     /// Path to the JSONL metrics file under `telemetryDirectory`.
     public static var sttMetricsFileURL: URL {
         telemetryDirectory.appendingPathComponent("stt_metrics.jsonl")

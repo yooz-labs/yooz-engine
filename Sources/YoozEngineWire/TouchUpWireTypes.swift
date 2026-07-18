@@ -31,17 +31,39 @@ public struct TouchUpRequest: Codable, Sendable, Equatable {
     /// rejects the request rather than silently downgrading (see the
     /// `GPUWorkloadClass` doc).
     public let workloadClass: GPUWorkloadClass?
+    /// Optional dictation vocabulary terms the caller wants the model to
+    /// recognize (engine#280 / whisper#317, Phase 4 of the touch-up
+    /// faithfulness epic). Nil unless the caller opts in. Capped server-side
+    /// (`TouchUpEngine.touchUpContextVocabularyCap`) regardless of how many
+    /// arrive. Only injected into the prompt when
+    /// `EngineConfig.touchUpContextEnabled` is on — the field always wires
+    /// through even while injection stays gated off.
+    public let contextVocabulary: [String]?
+    /// Optional display name of the app the corrected text will be pasted
+    /// into (e.g. "Slack"), for the same eval-gated injection above.
+    /// Privacy: never persisted to any on-disk log on the ENGINE side —
+    /// ephemeral, request-scoped only. This is a request-body field, not a
+    /// storage guarantee: consuming apps (whisper) MUST NOT persist this
+    /// value either (e.g. into a debug log, analytics event, or any
+    /// on-disk record) — app identity is more sensitive than the vocabulary
+    /// list and has no existing precedent for being written to a
+    /// persisted, iCloud-synced log.
+    public let contextAppName: String?
 
     public init(
         text: String,
         mode: TouchUpMode,
         language: String? = nil,
-        workloadClass: GPUWorkloadClass? = nil
+        workloadClass: GPUWorkloadClass? = nil,
+        contextVocabulary: [String]? = nil,
+        contextAppName: String? = nil
     ) {
         self.text = text
         self.mode = mode
         self.language = language
         self.workloadClass = workloadClass
+        self.contextVocabulary = contextVocabulary
+        self.contextAppName = contextAppName
     }
 }
 

@@ -1,0 +1,10 @@
+{
+  "contextAppName" : "Slack",
+  "contextVocabulary" : [
+    "Robinhood",
+    "Cloudflare"
+  ],
+  "language" : "en",
+  "mode" : "standard",
+  "text" : "hello   world"
+}

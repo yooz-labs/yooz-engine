@@ -591,16 +591,27 @@ public actor TouchUpEngine {
     ///   - workloadClass: GPU admission class (engine#228). Defaults to
     ///     `.background` — TouchUp generation is throughput work per the
     ///     issue's classification.
+    ///   - contextVocabulary: Optional dictation vocabulary hint
+    ///     (engine#280 Phase 4). Sanitized, deduped, and capped
+    ///     (`cappedContextVocabulary`) and, when
+    ///     `EngineConfig.touchUpContextEnabled` is on, appended to the
+    ///     selected prompt via `withContext`. Nil is a no-op.
+    ///   - contextAppName: Optional frontmost-app display name for the
+    ///     same eval-gated injection, sanitized and length-capped
+    ///     (`sanitizedContextAppName`). Nil is a no-op.
     /// - Returns: ProcessResult with cleaned text and metadata
     public func process(
         text: String,
         mode: TouchUpMode,
         replacements: [(original: String, replacement: String)] = [],
-        workloadClass: MLXWorkloadClass = .background
+        workloadClass: MLXWorkloadClass = .background,
+        contextVocabulary: [String]? = nil,
+        contextAppName: String? = nil
     ) async -> TouchUpProcessor.ProcessResult {
         let replacementStructs = replacements.map {
             TouchUpProcessor.Replacement(original: $0.original, replacement: $0.replacement)
         }
+        let cappedVocabulary = Self.cappedContextVocabulary(contextVocabulary)
 
         // Mode off: no LLM cleanup is requested — return regex-only (voice
         // commands) without loading any model. Must precede the lazy-load below
@@ -647,9 +658,10 @@ public actor TouchUpEngine {
 
 
         // Select the proofread prompt based on mode and available model
-        let proofreadPrompt = selectPrompt(
-            for: mode,
-            qualityAvailable: qualityAvailable
+        let proofreadPrompt = Self.withContext(
+            prompt: selectPrompt(for: mode, qualityAvailable: qualityAvailable),
+            vocabulary: cappedVocabulary,
+            appName: contextAppName
         )
 
         // Route to appropriate processing
@@ -698,9 +710,21 @@ public actor TouchUpEngine {
 
     /// Process text using Apple Intelligence backend directly.
     /// Falls back to MLX models if Foundation Models unavailable.
+    ///
+    /// - Parameters:
+    ///   - contextVocabulary: Optional dictation vocabulary hint
+    ///     (engine#280 Phase 4). Only reaches the model when this method
+    ///     falls back to `process(...)` (MLX Light) — the successful Apple
+    ///     Intelligence branch below composes `systemPrompt` directly from
+    ///     `YoozPrompts.appleStandard`/`appleFull`, not `selectPrompt`, so it
+    ///     stays context-free by design (disclosed scope: MLX Light/Quality
+    ///     get context, Apple Intelligence does not).
+    ///   - contextAppName: Same scope note as `contextVocabulary`.
     public func processWithFoundationModels(
         text: String,
-        mode: TouchUpMode
+        mode: TouchUpMode,
+        contextVocabulary: [String]? = nil,
+        contextAppName: String? = nil
     ) async -> TouchUpProcessor.ProcessResult {
         let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -712,7 +736,10 @@ public actor TouchUpEngine {
         }
         guard let backend = foundationModelsBackend, await backend.isLoaded else {
             logger.warning("Foundation Models not available, falling back to MLX")
-            var result = await process(text: text, mode: mode)
+            var result = await process(
+                text: text, mode: mode,
+                contextVocabulary: contextVocabulary, contextAppName: contextAppName
+            )
             result = TouchUpProcessor.ProcessResult(
                 text: result.text,
                 keepDecisions: result.keepDecisions,
@@ -795,6 +822,139 @@ public actor TouchUpEngine {
                 return YoozPrompts.lightFull
             }
         }
+    }
+
+    // MARK: - Context injection (engine#280 Phase 4, eval-gated)
+
+    /// Server-side defensive cap on the NUMBER of vocabulary terms attached
+    /// to a TouchUp request (engine#280 / whisper#317): regardless of how
+    /// many terms a caller sends, at most this many are honored downstream.
+    /// Applied on receipt in `process(...)`/`processWithActiveModel(...)`
+    /// so neither call path (loopback `APIServer` nor in-process
+    /// `InProcessTransport`) can forget to enforce it. See also
+    /// `touchUpContextTermCharacterCap`/`touchUpContextAppNameCharacterCap`
+    /// for the SIZE bounds (review item 1) — this cap alone does not bound
+    /// how long any individual term or the app name can be.
+    public static let touchUpContextVocabularyCap = 30
+
+    /// Per-term character cap (engine#280 review item 1). A term longer
+    /// than this is DROPPED entirely rather than truncated: truncating
+    /// mid-word could turn a real term into a different, misleading word
+    /// (e.g. a 200-char product name truncated to "Ac" reads as noise, or
+    /// worse, a real different term), whereas dropping it just means that
+    /// one term never made it into the prompt.
+    public static let touchUpContextTermCharacterCap = 100
+
+    /// Character cap for the app name (engine#280 review item 1). Unlike
+    /// vocabulary terms, there is only ever one app name, so an over-cap
+    /// value is TRUNCATED rather than dropped — losing the feature
+    /// entirely for an app with a long display name is a worse outcome
+    /// than a truncated one.
+    public static let touchUpContextAppNameCharacterCap = 60
+
+    /// Shared control-character/whitespace sanitizer (engine#280 review
+    /// item 2), used by both vocabulary terms and the app name: collapses
+    /// embedded newlines, tabs, and any other control character — plus
+    /// runs of plain whitespace — down to a single space, then trims the
+    /// ends. Without this, a caller-supplied term or app name containing a
+    /// raw newline could corrupt the composed prompt's line structure
+    /// (e.g. injecting a fake extra "Text will be pasted into:" line).
+    static func sanitizedContextText(_ text: String) -> String {
+        let breakCharacters = CharacterSet.controlCharacters.union(.whitespacesAndNewlines)
+        return text.components(separatedBy: breakCharacters)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// Sanitize one vocabulary term: the shared whitespace/control-character
+    /// cleanup above, plus dropping commas (review item 2) — the composed
+    /// prompt joins terms with `", "`, so an un-dropped comma inside a term
+    /// like "Acme, Inc." would read ambiguously as two separate terms in
+    /// that list. Commas become spaces (not deleted outright) so both
+    /// "Acme,Inc" and "Acme, Inc." land as the same "Acme Inc." rather than
+    /// gluing words together.
+    static func sanitizedContextTerm(_ term: String) -> String {
+        sanitizedContextText(term.replacingOccurrences(of: ",", with: " "))
+    }
+
+    /// Sanitize the app name: the shared whitespace/control-character
+    /// cleanup only — commas are legitimate in an app name ("Acme, Inc." is
+    /// unambiguous on its own, unlike inside a comma-joined list) — plus
+    /// the character cap (review item 1). Returns `nil` for a `nil` or
+    /// blank-after-sanitizing input.
+    static func sanitizedContextAppName(_ appName: String?) -> String? {
+        guard let appName else { return nil }
+        let sanitized = sanitizedContextText(appName)
+        guard !sanitized.isEmpty else { return nil }
+        guard sanitized.count > touchUpContextAppNameCharacterCap else { return sanitized }
+        return String(sanitized.prefix(touchUpContextAppNameCharacterCap))
+    }
+
+    /// Receipt-time pipeline for `contextVocabulary` (engine#280 review item
+    /// 2): sanitize -> drop terms that are empty after sanitizing OR exceed
+    /// `touchUpContextTermCharacterCap` (dropped whole, never truncated —
+    /// see that constant's doc) -> dedupe case-insensitively (first
+    /// occurrence wins) -> cap to `touchUpContextVocabularyCap`. The ORDER
+    /// matters: capping before filtering would let blank, over-length, or
+    /// duplicate terms consume cap slots that a real term further down the
+    /// caller's list needed. A pure, synchronous transform — testable
+    /// without a loaded model.
+    static func cappedContextVocabulary(_ vocabulary: [String]?) -> [String]? {
+        guard let vocabulary else { return nil }
+        var seenLowercased = Set<String>()
+        var result: [String] = []
+        for term in vocabulary {
+            let sanitized = sanitizedContextTerm(term)
+            guard !sanitized.isEmpty, sanitized.count <= touchUpContextTermCharacterCap else { continue }
+            guard seenLowercased.insert(sanitized.lowercased()).inserted else { continue }
+            result.append(sanitized)
+            if result.count == touchUpContextVocabularyCap { break }
+        }
+        return result
+    }
+
+    /// Append a compact context block to `prompt` when injection is enabled
+    /// (`EngineConfig.touchUpContextEnabled`) and at least one of
+    /// `vocabulary`/`appName` is non-empty after sanitizing. Applied to
+    /// `selectPrompt`'s RETURN VALUE, never to the `YoozPrompts` constants
+    /// themselves — `YoozPromptsParityTests` locks those verbatim against
+    /// the fine-tuned weights' training data, so this composition step must
+    /// stay strictly downstream of them. Disabling the flag, or omitting
+    /// both fields, reproduces `prompt` byte-for-byte. Sanitizes each term
+    /// and the app name itself (via the shared helpers above) so this
+    /// function is safe even when called directly with un-sanitized input
+    /// (as the pure-function tests do) — the count cap (30 terms) is
+    /// `cappedContextVocabulary`'s job upstream, not re-applied here.
+    static func withContext(
+        prompt: String,
+        vocabulary: [String]?,
+        appName: String?
+    ) -> String {
+        guard EngineConfig.touchUpContextEnabled else {
+            // One-line breadcrumb (engine#280 review item 5), counts only —
+            // no term/app-name CONTENT in the log — so a future "why isn't
+            // context showing up in the prompt" investigation doesn't need
+            // a source dive to learn the flag is simply off.
+            if vocabulary != nil || appName != nil {
+                logger.debug(
+                    "TouchUp context received but injection disabled (vocabularyCount=\(vocabulary?.count ?? 0), appNameAttached=\(appName != nil))"
+                )
+            }
+            return prompt
+        }
+        let terms = (vocabulary ?? [])
+            .map(Self.sanitizedContextTerm)
+            .filter { !$0.isEmpty && $0.count <= touchUpContextTermCharacterCap }
+        let sanitizedAppName = Self.sanitizedContextAppName(appName)
+        var lines: [String] = []
+        if !terms.isEmpty {
+            lines.append("Known terms the speaker may use: \(terms.joined(separator: ", ")).")
+        }
+        if let sanitizedAppName {
+            lines.append("Text will be pasted into: \(sanitizedAppName).")
+        }
+        guard !lines.isEmpty else { return prompt }
+        return prompt + "\n\n" + lines.joined(separator: "\n")
     }
 
     // MARK: - Model Info
@@ -1230,15 +1390,21 @@ public actor TouchUpEngine {
         text: String,
         mode: TouchUpMode,
         replacements: [(original: String, replacement: String)] = [],
-        workloadClass: MLXWorkloadClass = .background
+        workloadClass: MLXWorkloadClass = .background,
+        contextVocabulary: [String]? = nil,
+        contextAppName: String? = nil
     ) async -> TouchUpProcessor.ProcessResult {
         await restorePersistedSelectionIfNeeded()
         switch await activeModel {
         case .foundationModels:
-            return await processWithFoundationModels(text: text, mode: mode)
+            return await processWithFoundationModels(
+                text: text, mode: mode,
+                contextVocabulary: contextVocabulary, contextAppName: contextAppName
+            )
         case .yoozLight:
             return await process(
-                text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                text: text, mode: mode, replacements: replacements, workloadClass: workloadClass,
+                contextVocabulary: contextVocabulary, contextAppName: contextAppName
             )
         case .yoozQuality:
             // Force the quality backend on both routing slots so the
@@ -1252,15 +1418,21 @@ public actor TouchUpEngine {
                 // path. The fallback uses the light model and
                 // surfaces the load failure as a warning string.
                 return await process(
-                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass,
+                    contextVocabulary: contextVocabulary, contextAppName: contextAppName
                 )
             }
             guard let quality = qualityModel, await quality.isLoaded else {
                 return await process(
-                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass
+                    text: text, mode: mode, replacements: replacements, workloadClass: workloadClass,
+                    contextVocabulary: contextVocabulary, contextAppName: contextAppName
                 )
             }
-            let proofreadPrompt = selectPrompt(for: mode, qualityAvailable: true)
+            let proofreadPrompt = Self.withContext(
+                prompt: selectPrompt(for: mode, qualityAvailable: true),
+                vocabulary: Self.cappedContextVocabulary(contextVocabulary),
+                appName: contextAppName
+            )
             let replacementStructs = replacements.map {
                 TouchUpProcessor.Replacement(
                     original: $0.original, replacement: $0.replacement

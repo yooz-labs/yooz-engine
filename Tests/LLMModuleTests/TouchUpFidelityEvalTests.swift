@@ -81,7 +81,24 @@ final class TouchUpFidelityEvalTests: XCTestCase {
         /// content presence separates them. Each corruption fixture lists
         /// the exact token(s) its production bug destroyed.
         var mustContain: [String] = []
+        /// Optional context block (engine#280 Phase 4 Stage 2 eval gate),
+        /// appended to `systemPrompt` with a blank-line separator — the
+        /// SAME shape `TouchUpEngine.withContext` composes in production.
+        /// Nil (the default) reproduces every pre-Phase-4 fixture run
+        /// byte-for-byte; the context-gate tests below set this on a copy
+        /// of each fixture to measure whether attaching a realistic
+        /// vocabulary/app block regresses any of the seven assertions.
+        var contextBlock: String?
     }
+
+    /// Realistic vocabulary/app-name context block for the Stage 2 eval
+    /// gate (engine#280 Phase 4 / whisper#317 item 11): the SAME compact
+    /// format `TouchUpEngine.withContext` produces in production, so this
+    /// gate measures the actual composed prompt shape, not an approximation
+    /// of it.
+    static let sharedContextBlock =
+        "Known terms the speaker may use: Robinhood, Cloudflare, AWS S3, NASA HQ.\n"
+        + "Text will be pasted into: Slack."
 
     static let qualityFixtures: [Fixture] = [
         // Corruption-pattern fixtures — verbatim inputs from
@@ -341,6 +358,151 @@ final class TouchUpFidelityEvalTests: XCTestCase {
         Self.assertAndLog(outcomes, sectionName: "Light / lightFull")
     }
 
+    // MARK: - Stage 2 eval gate (engine#280 Phase 4 / whisper#317 item 11-12)
+    //
+    // Decides `EngineConfig.defaultTouchUpContextEnabled`: every existing
+    // fixture, re-run with `sharedContextBlock` attached to its system
+    // prompt, must stay green on all seven assertions. All-green -> the
+    // flag defaults ON; any regression -> it defaults OFF (the wire fields
+    // still land unconditionally — Stage 1 is not gated on this outcome).
+    //
+    // MEASURED (2026-07-18, reproduced twice under greedy/deterministic
+    // decode): `testLightFullFidelityWithContextBlockAttached` is clean.
+    // `testQualityFullFidelityWithContextBlockAttached` is a KNOWN, EXPECTED
+    // failure — do not "fix" it by loosening the fixture — it IS the
+    // measurement that set `EngineConfig.defaultTouchUpContextEnabled` to
+    // `false`. `notNormalizedButDropped`'s output shifts from "it is not
+    // fully normalized" to "it isn't fully normalized" once the context
+    // block is attached: a meaning-preserving contraction that still trips
+    // the `requiredContent` assertion's literal `"not"` substring check.
+    // Exactly the LoRA prompt-drift class Phase 2 warned about.
+    //
+    // Wrapped in `XCTExpectFailure` with a narrow `issueMatcher` (only this
+    // exact fixture/check) rather than left permanently red or swallowed
+    // wholesale: a bare failing assertion is alarm-fatigue debt (every
+    // future gated run reports red), while an unscoped `XCTExpectFailure`
+    // would swallow ANY failure in the block, making a brand-new regression
+    // elsewhere in this same test indistinguishable from this known one.
+    // The narrow matcher means a different fixture or check failing still
+    // surfaces as a real, unmatched failure. `isStrict` covers the reverse
+    // direction: if `notNormalizedButDropped` stops failing (retrain, model
+    // swap), the expected failure is not observed and THIS test fails loud
+    // — that is the signal to flip `defaultTouchUpContextEnabled` and
+    // delete the wrapper. Do not "fix" the fixture to silence it — it IS
+    // the measurement.
+
+    func testQualityFullFidelityWithContextBlockAttached() async throws {
+        try XCTSkipUnless(
+            shouldLoadRealModels,
+            "Set YOOZ_LLM_LOAD_MODELS=1 to run the Phase 4 context-block eval gate"
+        )
+        let fixturesWithContext = Self.qualityFixtures.map { fixture -> Fixture in
+            var withContext = fixture
+            withContext.contextBlock = Self.sharedContextBlock
+            return withContext
+        }
+        let outcomes = try await Self.runFidelityHarness(
+            backend: MLXLLMBackend.createQuality(),
+            fixtures: fixturesWithContext
+        )
+        var options = XCTExpectedFailure.Options()
+        options.isStrict = true
+        options.issueMatcher = { issue in
+            issue.compactDescription.contains("[notNormalizedButDropped] requiredContent failed")
+        }
+        XCTExpectFailure(
+            "Context block perturbs the LoRA-tuned adapter (isn't-contraction breaks the"
+                + " literal not-check); expected red until the yooz-benchmark#25 retrain"
+                + " teaches the context-block format. If this UNEXPECTEDLY PASSES, the"
+                + " retrain (or a model swap) has landed — flip defaultTouchUpContextEnabled"
+                + " and remove this wrapper. Known failure: [notNormalizedButDropped]"
+                + " requiredContent — \"it is not fully normalized\" becomes \"it isn't fully"
+                + " normalized\" once sharedContextBlock is attached, a meaning-preserving"
+                + " contraction that still misses the literal \"not\" substring check.",
+            options: options
+        ) {
+            Self.assertAndLog(outcomes, sectionName: "Quality / qualityFull + context block (eval gate)")
+        }
+    }
+
+    func testLightFullFidelityWithContextBlockAttached() async throws {
+        try XCTSkipUnless(
+            shouldLoadRealModels,
+            "Set YOOZ_LLM_LOAD_MODELS=1 to run the Phase 4 context-block eval gate"
+        )
+        let fixturesWithContext = Self.lightFixtures.map { fixture -> Fixture in
+            var withContext = fixture
+            withContext.contextBlock = Self.sharedContextBlock
+            return withContext
+        }
+        let outcomes = try await Self.runFidelityHarness(
+            backend: MLXLLMBackend.createLight(),
+            fixtures: fixturesWithContext
+        )
+        Self.assertAndLog(outcomes, sectionName: "Light / lightFull + context block (eval gate)")
+    }
+
+    // MARK: - Informational canonicalization probe (non-gating)
+    //
+    // Three fixtures pairing a misheard proper noun with the SAME term
+    // spelled correctly in `sharedContextBlock`, probing whether the
+    // vocabulary hint nudges the raw model to canonicalize it. Informational
+    // only — whisper's Canonicalizer (Phase 3) already guarantees the
+    // pasted text is corrected regardless of what the raw model does here,
+    // so this does not gate anything; it only logs an observation for the
+    // PR body / yooz-benchmark#25 retrain note.
+    static let informationalContextFixtures: [Fixture] = [
+        Fixture(
+            id: "infoRobinhoodMisheard",
+            input: "I checked my robin hood account this morning.",
+            systemPrompt: YoozPrompts.qualityFull,
+            isClean: false,
+            contextBlock: sharedContextBlock
+        ),
+        Fixture(
+            id: "infoCloudflareMisheard",
+            input: "We moved the DNS over to cloud flare last week.",
+            systemPrompt: YoozPrompts.qualityFull,
+            isClean: false,
+            contextBlock: sharedContextBlock
+        ),
+        Fixture(
+            id: "infoNasaHQMisheard",
+            input: "The kickoff meeting is at nasa hq on Thursday.",
+            systemPrompt: YoozPrompts.qualityFull,
+            isClean: false,
+            contextBlock: sharedContextBlock
+        )
+    ]
+
+    /// Canonical spelling each `informationalContextFixtures` entry hopes to
+    /// see verbatim in the output, keyed by fixture id. Purely for the
+    /// logged observation below — never asserted.
+    private static let informationalCanonicalForms: [String: String] = [
+        "infoRobinhoodMisheard": "Robinhood",
+        "infoCloudflareMisheard": "Cloudflare",
+        "infoNasaHQMisheard": "NASA HQ"
+    ]
+
+    func testInformationalContextCanonicalizationHints() async throws {
+        try XCTSkipUnless(
+            shouldLoadRealModels,
+            "Set YOOZ_LLM_LOAD_MODELS=1 to run the informational context-canonicalization probe"
+        )
+        let outcomes = try await Self.runFidelityHarness(
+            backend: MLXLLMBackend.createQuality(),
+            fixtures: Self.informationalContextFixtures
+        )
+        print("=== TouchUpFidelityEvalTests informational: context canonicalization hints ===")
+        print("fixture | canonicalized | output")
+        for outcome in outcomes {
+            let canonicalForm = Self.informationalCanonicalForms[outcome.fixtureID] ?? ""
+            let canonicalized = !canonicalForm.isEmpty && outcome.output.contains(canonicalForm)
+            print("\(outcome.fixtureID) | \(canonicalized) | \(outcome.output)")
+        }
+        // No XCTAssert: informational only, per the doc above.
+    }
+
     #if canImport(MLXLMCommon)
     private static func stopReasonDescription(_ backend: MLXLLMBackend) async -> String {
         await String(describing: backend.lastStopReason)
@@ -367,7 +529,8 @@ final class TouchUpFidelityEvalTests: XCTestCase {
         var outcomes: [FixtureOutcome] = []
         for fixture in fixtures {
             await backend.clearSession()
-            let raw = try await backend.generate(prompt: fixture.input, systemPrompt: fixture.systemPrompt)
+            let systemPrompt = fixture.contextBlock.map { fixture.systemPrompt + "\n\n" + $0 } ?? fixture.systemPrompt
+            let raw = try await backend.generate(prompt: fixture.input, systemPrompt: systemPrompt)
             let stopReason = await stopReasonDescription(backend)
             let (parsedText, success) = parseProofreadResponse(raw, fallback: fixture.input)
             let checkedText = success ? parsedText : raw
