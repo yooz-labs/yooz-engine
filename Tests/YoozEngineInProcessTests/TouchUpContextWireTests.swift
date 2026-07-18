@@ -15,24 +15,28 @@
 // fixture tests (`WireCompatFixtureTests`) prove the loopback-facing
 // `TouchUpRequest` decodes them fine.
 //
-// Mirrors `GPUAdmissionInProcessTests`'s workloadClass wire-contract style:
-// mode "off" is regex-only (no LLM load), so these stay fast and
-// deterministic. This proves the JSON shape round-trips through the
-// in-process decode path without erroring when the new keys — including an
-// over-cap vocabulary list — are present. It does NOT by itself prove the
-// fields reach the composed system prompt: that deeper claim needs a loaded
-// model (mode "off" never reaches `selectPrompt`/`withContext`) and is
-// covered by the gated `TouchUpFidelityEvalTests` context-block run plus the
-// ungated pure-function tests on `TouchUpEngine.withContext` and
-// `TouchUpEngine.cappedContextVocabulary`.
+// `resolvedTouchUpCallArguments(from:)` (review item 4) is the real
+// regression seam: it decodes `TouchUpBody` and builds the exact
+// `TouchUpCallArguments` `handleTouchUp` passes to
+// `TouchUpEngine.processWithActiveModel`, WITHOUT calling that method — no
+// model load, no transport round trip needed. Asserting equality on the
+// built struct proves the fields are read and forwarded. An earlier version
+// of this file only checked that a mode-"off" `/v1/touchup` call didn't
+// throw, which would have passed even if forwarding silently regressed to
+// `nil, nil`: mode "off" returns from `processWithActiveModel` before those
+// fields are ever read, so a bare success/failure check could not tell the
+// two apart.
+
+import EngineCore
 import XCTest
+import YoozEngineWire
 
 @testable import YoozEngineInProcess
 
 final class TouchUpContextWireTests: XCTestCase {
 
-    private func touchUpBody(vocabulary: [String]?, appName: String?) -> Data {
-        var json = #"{"text":"hello world","mode":"off""#
+    private func touchUpBody(mode: String = "off", vocabulary: [String]?, appName: String?) -> Data {
+        var json = #"{"text":"hello world","mode":"\#(mode)""#
         if let vocabulary {
             let escaped = vocabulary.map { "\"\($0)\"" }.joined(separator: ",")
             json += #","contextVocabulary":[\#(escaped)]"#
@@ -44,22 +48,55 @@ final class TouchUpContextWireTests: XCTestCase {
         return Data(json.utf8)
     }
 
+    // MARK: - Built-argument regression (the two-struct trap, proven directly)
+
+    func testContextFieldsForwardIntoBuiltCallArguments() throws {
+        let body = touchUpBody(
+            mode: "standard", vocabulary: ["Robinhood", "Cloudflare"], appName: "Slack"
+        )
+        let arguments = try InProcessTransport.resolvedTouchUpCallArguments(from: body)
+        XCTAssertEqual(
+            arguments,
+            TouchUpCallArguments(
+                text: "hello world",
+                mode: .standard,
+                workloadClass: .background,
+                contextVocabulary: ["Robinhood", "Cloudflare"],
+                contextAppName: "Slack"
+            )
+        )
+    }
+
+    func testOmittedContextFieldsForwardAsNil() throws {
+        let body = touchUpBody(mode: "standard", vocabulary: nil, appName: nil)
+        let arguments = try InProcessTransport.resolvedTouchUpCallArguments(from: body)
+        XCTAssertNil(arguments.contextVocabulary)
+        XCTAssertNil(arguments.contextAppName)
+    }
+
+    func testOverCapVocabularyForwardsUncappedAtDecodeLayer() throws {
+        // The 30-term cap is TouchUpEngine's job (applied inside
+        // `process`/`processWithActiveModel`), not the transport's — this
+        // decode/forward layer should pass every term through untouched.
+        let overCap = (0..<35).map { "term\($0)" }
+        let body = touchUpBody(mode: "standard", vocabulary: overCap, appName: nil)
+        let arguments = try InProcessTransport.resolvedTouchUpCallArguments(from: body)
+        XCTAssertEqual(arguments.contextVocabulary, overCap)
+    }
+
+    // MARK: - Full transport round trip (fast/deterministic, mode "off")
+    //
+    // These stay as a shallower, wire-shape-only check: mode "off" so the
+    // call resolves without a model load, proving the JSON shape (including
+    // an over-cap vocabulary list) round-trips through the real transport
+    // without erroring end to end.
+
     func testTouchUpContextFieldsDecodeWithoutError() async throws {
         let transport = InProcessTransport()
         try await transport.connect()
         let data = try await transport.post(
             "/v1/touchup",
             body: touchUpBody(vocabulary: ["Robinhood", "Cloudflare"], appName: "Slack")
-        )
-        XCTAssertFalse(data.isEmpty)
-    }
-
-    func testTouchUpOverCapVocabularyDecodesWithoutError() async throws {
-        let transport = InProcessTransport()
-        try await transport.connect()
-        let overCap = (0..<35).map { "term\($0)" }
-        let data = try await transport.post(
-            "/v1/touchup", body: touchUpBody(vocabulary: overCap, appName: nil)
         )
         XCTAssertFalse(data.isEmpty)
     }

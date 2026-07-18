@@ -851,7 +851,17 @@ public final class InProcessTransport: EngineTransport {
         return resolved
     }
 
-    private func handleTouchUp(_ body: Data) async throws -> Data {
+    /// Decode `body` as `TouchUpBody` and resolve it into the exact
+    /// arguments `handleTouchUp` passes to
+    /// `TouchUpEngine.processWithActiveModel` (engine#280 review item 4).
+    /// Pulled out of `handleTouchUp` so a regression test can assert on the
+    /// BUILT arguments directly: mode `"off"` (the fast/deterministic wire
+    /// test choice) returns from `processWithActiveModel` before
+    /// `contextVocabulary`/`contextAppName` are ever read, so a bare
+    /// "the /v1/touchup call didn't throw" check cannot distinguish real
+    /// forwarding from a silent `nil, nil` regression — asserting equality
+    /// on this struct can.
+    static func resolvedTouchUpCallArguments(from body: Data) throws -> TouchUpCallArguments {
         let request = try JSONDecoder().decode(TouchUpBody.self, from: body)
         // The requested mode is explicit caller intent (off/light/standard/full),
         // not a forward-compat wire value — an unknown mode is a hard error, never
@@ -862,6 +872,17 @@ public final class InProcessTransport: EngineTransport {
                 message: "Unknown TouchUp mode '\(request.mode)'"
             )
         }
+        return TouchUpCallArguments(
+            text: request.text,
+            mode: mode,
+            workloadClass: try resolveWorkloadClass(request.workloadClass),
+            contextVocabulary: request.contextVocabulary,
+            contextAppName: request.contextAppName
+        )
+    }
+
+    private func handleTouchUp(_ body: Data) async throws -> Data {
+        let arguments = try Self.resolvedTouchUpCallArguments(from: body)
         // Route through the active-model picker (not the legacy `process()`),
         // so the user's selection is honored in-process: Apple Intelligence
         // (FoundationModels), Yooz Light, or Yooz Quality. `process()` ignored
@@ -869,15 +890,15 @@ public final class InProcessTransport: EngineTransport {
         // in-process cleanup silently passed text through. Each backend now
         // lazy-loads on first use (mirrors the STT lazy-load).
         let result = await TouchUpEngine.shared.processWithActiveModel(
-            text: request.text,
-            mode: mode,
-            workloadClass: try Self.resolveWorkloadClass(request.workloadClass),
-            contextVocabulary: request.contextVocabulary,
-            contextAppName: request.contextAppName
+            text: arguments.text,
+            mode: arguments.mode,
+            workloadClass: arguments.workloadClass,
+            contextVocabulary: arguments.contextVocabulary,
+            contextAppName: arguments.contextAppName
         )
         let response = TouchUpResponse(
             result: result.text,
-            mode: mode,
+            mode: arguments.mode,
             processingTimeMs: Int(result.latencyMs),
             modelUsed: result.modelUsed.rawValue,
             warnings: result.fallbackReason.map { [$0] }
@@ -937,6 +958,19 @@ public final class InProcessTransport: EngineTransport {
         )
     }
 
+}
+
+/// Fully-resolved arguments for one `/v1/touchup` call (engine#280 review
+/// item 4), built by `InProcessTransport.resolvedTouchUpCallArguments(from:)`.
+/// `Equatable` so a regression test can assert on the exact built values —
+/// see that function's doc for why a bare success/failure check on the
+/// call isn't sufficient proof of forwarding.
+struct TouchUpCallArguments: Equatable {
+    let text: String
+    let mode: TouchUpMode
+    let workloadClass: MLXWorkloadClass
+    let contextVocabulary: [String]?
+    let contextAppName: String?
 }
 
 // MARK: - TouchUp mode decode shim

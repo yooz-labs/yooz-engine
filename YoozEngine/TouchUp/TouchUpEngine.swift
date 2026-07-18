@@ -710,9 +710,21 @@ public actor TouchUpEngine {
 
     /// Process text using Apple Intelligence backend directly.
     /// Falls back to MLX models if Foundation Models unavailable.
+    ///
+    /// - Parameters:
+    ///   - contextVocabulary: Optional dictation vocabulary hint
+    ///     (engine#280 Phase 4). Only reaches the model when this method
+    ///     falls back to `process(...)` (MLX Light) — the successful Apple
+    ///     Intelligence branch below composes `systemPrompt` directly from
+    ///     `YoozPrompts.appleStandard`/`appleFull`, not `selectPrompt`, so it
+    ///     stays context-free by design (disclosed scope: MLX Light/Quality
+    ///     get context, Apple Intelligence does not).
+    ///   - contextAppName: Same scope note as `contextVocabulary`.
     public func processWithFoundationModels(
         text: String,
-        mode: TouchUpMode
+        mode: TouchUpMode,
+        contextVocabulary: [String]? = nil,
+        contextAppName: String? = nil
     ) async -> TouchUpProcessor.ProcessResult {
         let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -724,7 +736,10 @@ public actor TouchUpEngine {
         }
         guard let backend = foundationModelsBackend, await backend.isLoaded else {
             logger.warning("Foundation Models not available, falling back to MLX")
-            var result = await process(text: text, mode: mode)
+            var result = await process(
+                text: text, mode: mode,
+                contextVocabulary: contextVocabulary, contextAppName: contextAppName
+            )
             result = TouchUpProcessor.ProcessResult(
                 text: result.text,
                 keepDecisions: result.keepDecisions,
@@ -1382,7 +1397,10 @@ public actor TouchUpEngine {
         await restorePersistedSelectionIfNeeded()
         switch await activeModel {
         case .foundationModels:
-            return await processWithFoundationModels(text: text, mode: mode)
+            return await processWithFoundationModels(
+                text: text, mode: mode,
+                contextVocabulary: contextVocabulary, contextAppName: contextAppName
+            )
         case .yoozLight:
             return await process(
                 text: text, mode: mode, replacements: replacements, workloadClass: workloadClass,

@@ -40,8 +40,14 @@ public struct TouchUpRequest: Codable, Sendable, Equatable {
     /// through even while injection stays gated off.
     public let contextVocabulary: [String]?
     /// Optional display name of the app the corrected text will be pasted
-    /// into (e.g. "Slack"), for the same eval-gated injection above. Never
-    /// persisted to any on-disk log — ephemeral, request-scoped only.
+    /// into (e.g. "Slack"), for the same eval-gated injection above.
+    /// Privacy: never persisted to any on-disk log on the ENGINE side —
+    /// ephemeral, request-scoped only. This is a request-body field, not a
+    /// storage guarantee: consuming apps (whisper) MUST NOT persist this
+    /// value either (e.g. into a debug log, analytics event, or any
+    /// on-disk record) — app identity is more sensitive than the vocabulary
+    /// list and has no existing precedent for being written to a
+    /// persisted, iCloud-synced log.
     public let contextAppName: String?
 
     public init(
