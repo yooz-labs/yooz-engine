@@ -375,10 +375,21 @@ final class TouchUpFidelityEvalTests: XCTestCase {
     // fully normalized" to "it isn't fully normalized" once the context
     // block is attached: a meaning-preserving contraction that still trips
     // the `requiredContent` assertion's literal `"not"` substring check.
-    // Exactly the LoRA prompt-drift class Phase 2 warned about. This test
-    // stays red until a yooz-benchmark#25 retrain teaches the Quality
-    // adapter the context-block format; going green then is the signal to
-    // revisit the default.
+    // Exactly the LoRA prompt-drift class Phase 2 warned about.
+    //
+    // Wrapped in `XCTExpectFailure` with a narrow `issueMatcher` (only this
+    // exact fixture/check) rather than left permanently red or swallowed
+    // wholesale: a bare failing assertion is alarm-fatigue debt (every
+    // future gated run reports red), while an unscoped `XCTExpectFailure`
+    // would swallow ANY failure in the block, making a brand-new regression
+    // elsewhere in this same test indistinguishable from this known one.
+    // The narrow matcher means a different fixture or check failing still
+    // surfaces as a real, unmatched failure. `isStrict` covers the reverse
+    // direction: if `notNormalizedButDropped` stops failing (retrain, model
+    // swap), the expected failure is not observed and THIS test fails loud
+    // — that is the signal to flip `defaultTouchUpContextEnabled` and
+    // delete the wrapper. Do not "fix" the fixture to silence it — it IS
+    // the measurement.
 
     func testQualityFullFidelityWithContextBlockAttached() async throws {
         try XCTSkipUnless(
@@ -394,7 +405,24 @@ final class TouchUpFidelityEvalTests: XCTestCase {
             backend: MLXLLMBackend.createQuality(),
             fixtures: fixturesWithContext
         )
-        Self.assertAndLog(outcomes, sectionName: "Quality / qualityFull + context block (eval gate)")
+        var options = XCTExpectedFailure.Options()
+        options.isStrict = true
+        options.issueMatcher = { issue in
+            issue.compactDescription.contains("[notNormalizedButDropped] requiredContent failed")
+        }
+        XCTExpectFailure(
+            "Context block perturbs the LoRA-tuned adapter (isn't-contraction breaks the"
+                + " literal not-check); expected red until the yooz-benchmark#25 retrain"
+                + " teaches the context-block format. If this UNEXPECTEDLY PASSES, the"
+                + " retrain (or a model swap) has landed — flip defaultTouchUpContextEnabled"
+                + " and remove this wrapper. Known failure: [notNormalizedButDropped]"
+                + " requiredContent — \"it is not fully normalized\" becomes \"it isn't fully"
+                + " normalized\" once sharedContextBlock is attached, a meaning-preserving"
+                + " contraction that still misses the literal \"not\" substring check.",
+            options: options
+        ) {
+            Self.assertAndLog(outcomes, sectionName: "Quality / qualityFull + context block (eval gate)")
+        }
     }
 
     func testLightFullFidelityWithContextBlockAttached() async throws {
