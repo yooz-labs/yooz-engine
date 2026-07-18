@@ -1946,7 +1946,9 @@ final class APIServer: ObservableObject {
             let result = await TouchUpEngine.shared.processWithActiveModel(
                 text: body.text,
                 mode: body.mode,
-                workloadClass: body.workloadClass ?? .background
+                workloadClass: body.workloadClass ?? .background,
+                contextVocabulary: body.contextVocabulary,
+                contextAppName: body.contextAppName
             )
 
             var warnings: [String]? = nil
