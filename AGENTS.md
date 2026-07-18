@@ -41,7 +41,7 @@ Local API Server (localhost:19920, loopback packaging only)
 
 Engine modules (framework targets; all but Infinite also SPM products — epic #192)
 ├── STT Module (Parakeet TDT, FastConformer, Apple STT)
-├── LLM Module (MLX: Qwen 0.5B, 1.7B; Apple Intelligence on macOS 26+)
+├── LLM Module (MLX: Qwen 0.5B, 0.8B; Apple Intelligence on macOS 26+)
 ├── TouchUp Module (regex + grammar + LLM pipeline)
 ├── Grammar Module (Rust text-cleanup xcframework + source)
 ├── VAD Module (Silero v6.0.0 CoreML, energy-based fallback)

@@ -31,6 +31,11 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "MLXLLMBack
 private struct GenerateResult {
     let text: String
     let kvSnapshot: [[MLXArray]]?
+    /// Why generation stopped, from the stream's `.info` frame. nil only if
+    /// the stream never emitted one (shouldn't happen in practice, but the
+    /// property is optional rather than defaulted so a missing `.info`
+    /// frame is visible instead of silently reading as `.stop`).
+    let stopReason: GenerateStopReason?
 }
 #endif
 
@@ -69,6 +74,12 @@ actor MLXLLMBackend: LLMBackend {
 
     /// System prompt that produced the cached KV state
     private var cachedSystemPrompt: String?
+
+    /// Why the most recent `generate()` call's stream stopped (engine#279
+    /// review — a `.length` stop is a silent truncation otherwise). Internal
+    /// visibility only: not part of `LLMBackend`, a test-only seam reached
+    /// via `@testable import LLMModule` rather than a public API change.
+    private(set) var lastStopReason: GenerateStopReason?
     #endif
 
     // MARK: - Initialization
@@ -287,6 +298,40 @@ actor MLXLLMBackend: LLMBackend {
         logger.debug("Prompt cache cleared")
     }
 
+    // MARK: - Sampling constants (engine#279 review: named so tests can pin them)
+
+    /// Greedy decoding (ArgMaxSampler, see Evaluate.swift:148-160): deterministic
+    /// output for identical dictation is a feature here, and it removes sampling
+    /// variance as a corruption source.
+    static let touchUpTemperature: Float = 0
+
+    /// Mild on purpose: the repetition-penalty ring buffer is prompt-seeded, so
+    /// it also taxes legitimate copying in this copy-heavy proofreading task.
+    /// 1.1 is enough to break a clause-loop attractor (the penalty compounds
+    /// across a whole repeated clause) without measurably discouraging correct
+    /// single-token copies at near-greedy sampling. Validated by this PR's eval
+    /// harness (pre/post-Stage-1 runs).
+    static let touchUpRepetitionPenalty: Float = 1.1
+
+    /// Covers clause-loop spans without penalizing tokens far outside the loop.
+    static let touchUpRepetitionContextSize = 64
+
+    /// maxTokens sized off the USER-only token count (the system-prompt
+    /// boundary is computed a few lines below `generate()`'s call site, via
+    /// the KV-cache probe), floored at 160. Undersizing truncates legitimate
+    /// output — a plausible contributor to the observed content-drop
+    /// corruption — while a generous cap costs nothing: generation still
+    /// stops at EOS, and the cap only guards against a genuine runaway. +64
+    /// covers headroom for expansion (spoken numbers -> digits, contractions,
+    /// punctuation) beyond a token-for-token rewrite. Sizing off the full
+    /// [system, user] token count instead (an earlier version of this
+    /// function did) gave short dictations a 3-5x larger runaway ceiling than
+    /// needed, since the ~250-420-token system prompt dwarfed the actual user
+    /// content. Pure function so tests can pin the boundary directly.
+    static func computeMaxTokens(userTokenCount: Int) -> Int {
+        max(160, userTokenCount + 64)
+    }
+
     func generate(
         prompt: String,
         systemPrompt: String,
@@ -322,8 +367,6 @@ actor MLXLLMBackend: LLMBackend {
                 )
             }
 
-            let estimatedTokens = max(100, (prompt.count / 3) + 50)
-
             // Invalidate cache if system prompt changed
             if systemPrompt != cachedSystemPrompt {
                 cachedPromptKVState = nil
@@ -338,12 +381,6 @@ actor MLXLLMBackend: LLMBackend {
             ]
             let userInput = UserInput(chat: messages)
             let fullInput = try await container.prepare(input: userInput)
-
-            let params = GenerateParameters(
-                maxTokens: estimatedTokens,
-                temperature: 0.1,
-                topP: 0.9
-            )
 
             let savedKVState = cachedPromptKVState
             let savedTokenCount = cachedPromptTokenCount
@@ -378,6 +415,21 @@ actor MLXLLMBackend: LLMBackend {
             }
             let sysCount = sysOnlyTokenCount
 
+            // Now that the system-prompt boundary is known, size maxTokens off
+            // the USER-only portion (see `computeMaxTokens`'s doc for why).
+            let userTokenCount = fullInput.text.tokens.size - sysCount
+            let maxTokens = Self.computeMaxTokens(userTokenCount: userTokenCount)
+
+            let params = GenerateParameters(
+                maxTokens: maxTokens,
+                // topP is inert under temperature 0 (sampler() checks
+                // temperature first) so it is dropped rather than kept as
+                // dead configuration.
+                temperature: Self.touchUpTemperature,
+                repetitionPenalty: Self.touchUpRepetitionPenalty,
+                repetitionContextSize: Self.touchUpRepetitionContextSize
+            )
+
             // If we have a cached system prompt KV state, skip the system tokens and
             // only feed the user portion. Otherwise, feed all tokens.
             let hasCachedState = savedKVState != nil && sysCount > 0
@@ -410,6 +462,7 @@ actor MLXLLMBackend: LLMBackend {
                 )
 
                 var text = ""
+                var stopReason: GenerateStopReason?
                 for await generation in stream {
                     // Chunk-level yielding (engine#228): re-check the gate
                     // between token batches so an in-flight background
@@ -427,6 +480,17 @@ actor MLXLLMBackend: LLMBackend {
                     // ml-explore `Generation.chunk` carries the decoded String.
                     if case let .chunk(chunk) = generation {
                         text += chunk
+                    } else if case let .info(completionInfo) = generation {
+                        // `.length` means the maxTokens cap was hit — a silent
+                        // truncation (possibly mid-JSON) if this went
+                        // unlogged (engine#279 review). `.stop`/`.cancelled`
+                        // are the expected, unremarkable paths.
+                        stopReason = completionInfo.stopReason
+                        if completionInfo.stopReason == .length {
+                            let generated = completionInfo.generationTokenCount
+                            let promptTokens = completionInfo.promptTokenCount
+                            logger.warning("Generation hit maxTokens cap: \(generated)/\(promptTokens) tokens (cap=\(maxTokens))")
+                        }
                     }
                 }
 
@@ -463,9 +527,12 @@ actor MLXLLMBackend: LLMBackend {
                 }
                 return GenerateResult(
                     text: text,
-                    kvSnapshot: snapshot
+                    kvSnapshot: snapshot,
+                    stopReason: stopReason
                 )
             }
+
+            lastStopReason = result.stopReason
 
             // Update cached state. A non-nil snapshot is provably system-prompt
             // only (verified above), so persist it for reuse. A nil snapshot means
