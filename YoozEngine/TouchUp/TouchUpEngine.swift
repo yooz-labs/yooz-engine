@@ -63,7 +63,7 @@ public actor TouchUpEngine {
     /// The light model backend (Yooz-Light, Qwen2.5-0.5B)
     private var lightModel: MLXLLMBackend?
 
-    /// The quality model backend (Yooz-Quality, Qwen3-1.7B)
+    /// The quality model backend (Yooz-Quality, Qwen3.5-0.8B)
     private var qualityModel: MLXLLMBackend?
 
     /// The Apple Intelligence backend (Foundation Models, macOS 26+)
