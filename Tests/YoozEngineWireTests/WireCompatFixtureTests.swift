@@ -313,6 +313,32 @@ final class WireCompatFixtureTests: XCTestCase {
         )
     }
 
+    /// Decode-without-new-keys (engine#280 Phase 4): the pre-existing
+    /// `TouchUpRequest.json` fixture predates `contextVocabulary`/
+    /// `contextAppName` and has neither key. `testTouchUpRequest` above
+    /// already proves the round trip via `Equatable`; this test makes the
+    /// "old JSON decodes fine, new fields land nil" contract explicit and
+    /// readable on its own.
+    func testTouchUpRequestOldFixtureDecodesContextFieldsAsNil() throws {
+        let decoded = try JSONDecoder().decode(TouchUpRequest.self, from: try fixture("TouchUpRequest"))
+        XCTAssertNil(decoded.contextVocabulary)
+        XCTAssertNil(decoded.contextAppName)
+    }
+
+    /// Populated variant (mirrors `testTouchUpResponseWithWarnings`'s
+    /// rationale): the nil-fields fixture above cannot catch a silent key
+    /// rename or a dropped `encodeIfPresent` on either new field — this
+    /// variant, with both populated, can.
+    func testTouchUpRequestWithContext() throws {
+        try assertWireStable(
+            TouchUpRequest.self, fixture: "TouchUpRequestWithContext",
+            expected: TouchUpRequest(
+                text: "hello   world", mode: .standard, language: "en",
+                contextVocabulary: ["Robinhood", "Cloudflare"], contextAppName: "Slack"
+            )
+        )
+    }
+
     func testTouchUpResponse() throws {
         try assertWireStable(
             TouchUpResponse.self, fixture: "TouchUpResponse",
