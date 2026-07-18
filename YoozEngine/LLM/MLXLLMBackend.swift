@@ -322,8 +322,6 @@ actor MLXLLMBackend: LLMBackend {
                 )
             }
 
-            let estimatedTokens = max(100, (prompt.count / 3) + 50)
-
             // Invalidate cache if system prompt changed
             if systemPrompt != cachedSystemPrompt {
                 cachedPromptKVState = nil
@@ -339,10 +337,35 @@ actor MLXLLMBackend: LLMBackend {
             let userInput = UserInput(chat: messages)
             let fullInput = try await container.prepare(input: userInput)
 
+            // Real token count (mirrors MLXInfiniteBackend.swift's prompt-token
+            // sizing), not the prior char-count heuristic (prompt.count / 3 +
+            // 50): undersizing here truncates legitimate output — a plausible
+            // contributor to the observed content-drop corruption — while a
+            // generous cap costs nothing, since generation still stops at EOS
+            // and the cap only guards against a genuine runaway. +64 covers
+            // headroom for expansion (spoken numbers -> digits, contractions,
+            // punctuation) beyond a token-for-token rewrite.
+            let maxTokens = max(160, fullInput.text.tokens.size + 64)
+
             let params = GenerateParameters(
-                maxTokens: estimatedTokens,
-                temperature: 0.1,
-                topP: 0.9
+                maxTokens: maxTokens,
+                // Greedy decoding (ArgMaxSampler, see Evaluate.swift:148-160):
+                // deterministic output for identical dictation is a feature
+                // here, and it removes sampling variance as a corruption
+                // source. topP is inert under temperature 0 (sampler() checks
+                // temperature first) so it is dropped rather than kept as
+                // dead configuration.
+                temperature: 0,
+                // Mild on purpose: the repetition-penalty ring buffer is
+                // prompt-seeded, so it also taxes legitimate copying in this
+                // copy-heavy proofreading task. 1.1 is enough to break a
+                // clause-loop attractor (the penalty compounds across a whole
+                // repeated clause) without measurably discouraging correct
+                // single-token copies at near-greedy sampling. Validated by
+                // the Stage 2 eval harness. Context size 64 covers clause-loop
+                // spans without penalizing tokens far outside the loop.
+                repetitionPenalty: 1.1,
+                repetitionContextSize: 64
             )
 
             let savedKVState = cachedPromptKVState
