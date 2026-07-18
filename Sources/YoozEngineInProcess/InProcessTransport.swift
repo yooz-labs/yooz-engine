@@ -871,7 +871,9 @@ public final class InProcessTransport: EngineTransport {
         let result = await TouchUpEngine.shared.processWithActiveModel(
             text: request.text,
             mode: mode,
-            workloadClass: try Self.resolveWorkloadClass(request.workloadClass)
+            workloadClass: try Self.resolveWorkloadClass(request.workloadClass),
+            contextVocabulary: request.contextVocabulary,
+            contextAppName: request.contextAppName
         )
         let response = TouchUpResponse(
             result: result.text,
@@ -958,4 +960,13 @@ private struct TouchUpBody: Decodable {
     /// a plain `String?` at the decode layer; `resolveWorkloadClass` maps
     /// nil/empty to `.background` and rejects unknown values with a 400.
     let workloadClass: String?
+    /// Mirrors `TouchUpRequest.contextVocabulary`/`contextAppName`
+    /// (engine#280 Phase 4). This decode shim is a SEPARATE type from the
+    /// canonical `TouchUpRequest` (#225 — see the doc above), so adding a
+    /// field to one does not add it to the other: without these two
+    /// fields, `handleTouchUp` below would silently drop whisper's
+    /// in-process context payload even though the loopback route decodes
+    /// it fine — the "two-struct trap".
+    let contextVocabulary: [String]?
+    let contextAppName: String?
 }
