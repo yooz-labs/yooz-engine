@@ -771,6 +771,15 @@ targets:
       - target: LLMModule
       - target: EngineCore
       - target: YoozEngineWire
+      # TouchUpFidelityEvalTests (engine#279 review item 3) reads
+      # MLXLLMBackend.lastStopReason (a GenerateStopReason?) via
+      # String(describing:), which needs that type's runtime metadata
+      # linked directly — relying on transitive linking through
+      # LLMModule alone leaves it undefined ("nominal type descriptor
+      # for MLXLMCommon.GenerateStopReason"). Same fix InfiniteModuleTests
+      # already applies below for its own direct MLX/KVCache use.
+      - package: mlx-swift-lm
+        product: MLXLMCommon
 
   InfiniteModuleTests:
     type: bundle.unit-test
