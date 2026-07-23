@@ -134,7 +134,7 @@ final class TouchUpPickerTests: XCTestCase {
             displayName: "Yooz-Light",
             description: "Fast",
             tier: .light,
-            sizeBytes: 276 * 1024 * 1024,
+            sizeBytes: 605 * 1024 * 1024,
             loadState: .loaded,
             isActive: true
         )

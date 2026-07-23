@@ -3617,24 +3617,20 @@ extension APIServer {
 
     #if canImport(LLMModule)
     /// Build a single-model entry for the `/v1/llm/*` responses.
-    /// `latencyHintMs` is a best-effort per-model baseline drawn from
-    /// LLMModelType.description (e.g. "~300ms"). Keeps the JSON wire
+    /// `latencyHintMs` comes from `LLMModelType.latencyHintMs` (the
+    /// registry single source of truth; a private copy here went stale
+    /// across the v2 -> v3 repoint, PR #283 review). Keeps the JSON wire
     /// shape homogeneous across GET + preload + unload responses.
     nonisolated static func infoEntry(
         for modelType: LLMModelType,
         loaded: Bool
     ) -> YoozEngineWire.LLMModelInfo {
-        let hint: Int
-        switch modelType {
-        case .yoozLight: hint = 200
-        case .yoozQuality: hint = 490
-        }
-        return YoozEngineWire.LLMModelInfo(
+        YoozEngineWire.LLMModelInfo(
             id: modelType.rawValue,
             displayName: modelType.displayName,
             sizeBytes: modelType.estimatedSize,
             loaded: loaded,
-            latencyHintMs: hint
+            latencyHintMs: modelType.latencyHintMs
         )
     }
 

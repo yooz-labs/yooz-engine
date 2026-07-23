@@ -64,7 +64,7 @@ public actor TouchUpEngine {
     /// The light model backend (Yooz-Light, KD Qwen3.5-0.8B)
     private var lightModel: MLXLLMBackend?
 
-    /// The quality model backend (Yooz-Quality, Qwen3.5-0.8B)
+    /// The quality model backend (Yooz-Quality, KD Qwen3.5-4B)
     private var qualityModel: MLXLLMBackend?
 
     /// The Apple Intelligence backend (Foundation Models, macOS 26+)
@@ -1194,9 +1194,20 @@ public actor TouchUpEngine {
     }
 
     private func performPersistedSelectionRestore() async {
-        guard let storedId = await selectionStore.activeId(for: Self.selectionStoreModule),
-              let selection = TouchUpModelSelection(rawValue: storedId)
-        else { return }
+        guard let storedId = await selectionStore.activeId(for: Self.selectionStoreModule) else {
+            return
+        }
+        guard let selection = TouchUpModelSelection(rawValue: storedId) else {
+            // A persisted id from an older build (e.g. the pre-#282
+            // `yooz-*-v2` wire ids) no longer parses. Falling back to the
+            // compiled-in default is correct, but doing it silently would
+            // hide why a user's tier changed after an upgrade — fail loudly
+            // instead (PR #239 review precedent, PR #283 review).
+            logger.error(
+                "TouchUp persisted selection \(storedId, privacy: .public) has no TouchUpModelSelection; keeping default \(self._activeModel.rawValue, privacy: .public)"
+            )
+            return
+        }
         _activeModel = selection
         logger.info(
             "TouchUp active model restored from persistence: \(selection.rawValue, privacy: .public)"

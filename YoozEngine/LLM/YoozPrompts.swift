@@ -81,7 +81,7 @@ enum YoozPrompts {
         Remove: "scratch that", "never mind", "delete that" and preceding phrase. Convert spoken numbers and version numbers. Fix grammar and misheard words. Always respond with ONLY a JSON object. Never include explanations.
         """
 
-    // MARK: - Quality Model Prompts (Yooz-Quality, Qwen3.5-0.8B)
+    // MARK: - Quality Model Prompts (Yooz-Quality, KD Qwen3.5-4B)
     //
     // `/no_think` is a Qwen3-specific prefix that disables chain-of-thought
     // reasoning, producing direct JSON output instead of "thinking" blocks

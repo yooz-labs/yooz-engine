@@ -13,7 +13,7 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpPro
 ///
 /// Uses two-model routing strategy:
 /// - No replacements: the Light tier proofreads only (fast path)
-/// - Has replacements: Qwen3.5-0.8B validates replacements + proofreads
+/// - Has replacements: the Quality tier validates replacements + proofreads
 ///
 /// Pipeline:
 /// ```

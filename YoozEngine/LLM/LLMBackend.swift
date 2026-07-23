@@ -60,6 +60,20 @@ public enum LLMModelType: String, CaseIterable, Sendable {
         }
     }
 
+    /// Best-effort per-model latency baseline in milliseconds for
+    /// picker UX hints (`LLMModelInfo.latencyHintMs`). Single source of
+    /// truth: `APIServer.infoEntry` reads this; keep it consistent with
+    /// `description` above (yooz-benchmark research/issue-24 harness
+    /// measured 341 / 1,226 ms at batch 1).
+    public var latencyHintMs: Int {
+        switch self {
+        case .yoozLight:
+            return 300
+        case .yoozQuality:
+            return 1200
+        }
+    }
+
     /// Hugging Face model identifier. Pulled by
     /// `loadModelContainer(from: #hubDownloader(), …, configuration:)`
     /// on first load. `revision` defaults to `main`; pin a commit here

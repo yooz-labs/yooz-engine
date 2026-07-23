@@ -216,6 +216,37 @@ final class EngineStateAndEventsTests: XCTestCase {
         )
     }
 
+    /// A persisted id written by a pre-#282 build (`yooz-quality-v2`) no
+    /// longer parses as a `TouchUpModelSelection`. The restore must fall
+    /// back to the compiled-in default (logging the mismatch) rather than
+    /// crash or silently adopt an unknown id (PR #283 review).
+    func testLegacyPersistedIdFallsBackToCompiledDefault() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("touchup-selection-legacy-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let store = ModelSelectionStore(fileURL: fileURL)
+
+        let firstRun = TouchUpEngine(selectionStore: store)
+        _ = try await firstRun.setActiveModelAsync(.yoozQuality, preload: false)
+
+        // Rewrite the persisted id to the retired v2 wire id, exactly as a
+        // pre-upgrade engine build would have left it on disk.
+        let json = try String(contentsOf: fileURL, encoding: .utf8)
+            .replacingOccurrences(of: "yooz-quality-v3", with: "yooz-quality-v2")
+        try json.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        // A fresh store over the same file: the first store instance holds
+        // the pre-rewrite id in memory, and a real engine restart would
+        // re-read from disk.
+        let restartStore = ModelSelectionStore(fileURL: fileURL)
+        let secondRun = TouchUpEngine(selectionStore: restartStore)
+        let active = await secondRun.activeModel
+        XCTAssertEqual(
+            active, .yoozLight,
+            "an unparseable persisted id must fall back to the compiled-in default"
+        )
+    }
+
     /// Without a persisted selection, a fresh instance still defaults to
     /// `.yoozLight` — restoring must never invent a selection out of thin
     /// air, only recall a genuinely persisted one.

@@ -448,9 +448,9 @@ final class YoozEngineClientTests: XCTestCase {
         let info = TouchUpModelInfo(
             id: "yooz-light-v3",
             displayName: "Yooz-Light",
-            description: "Fast proofreading (~200ms)",
+            description: "Fast proofreading (~300ms)",
             tier: .light,
-            sizeBytes: 276 * 1024 * 1024,
+            sizeBytes: 605 * 1024 * 1024,
             loadState: .loaded,
             isActive: true
         )
@@ -773,9 +773,9 @@ final class YoozEngineClientTests: XCTestCase {
         let info = LLMModelInfo(
             id: "yooz-light-v3",
             displayName: "Yooz-Light",
-            sizeBytes: 276 * 1024 * 1024,
+            sizeBytes: 605 * 1024 * 1024,
             loaded: true,
-            latencyHintMs: 200
+            latencyHintMs: 300
         )
         let data = try JSONEncoder().encode(info)
         let decoded = try JSONDecoder().decode(LLMModelInfo.self, from: data)
