@@ -99,7 +99,7 @@ public struct TouchUpResponse: Codable, Sendable, Equatable {
 /// to learn the new active id and any cache/load changes the
 /// preload triggered.
 public struct TouchUpModelInfo: Codable, Sendable, Equatable {
-    /// Stable wire id (e.g. `"yooz-light-v2"`).
+    /// Stable wire id (e.g. `"yooz-light-v3"`).
     public let id: String
     /// Picker-visible name (e.g. "Yooz-Light").
     public let displayName: String

@@ -1,6 +1,6 @@
 {
   "mode" : "standard",
-  "modelUsed" : "yooz-light-v2",
+  "modelUsed" : "yooz-light-v3",
   "processingTimeMs" : 80,
   "result" : "Hello, world."
 }

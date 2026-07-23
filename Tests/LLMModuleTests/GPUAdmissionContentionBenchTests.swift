@@ -61,7 +61,7 @@ final class GPUAdmissionContentionBenchTests: XCTestCase {
         let cached = await backend.isModelCached
         try XCTSkipUnless(
             cached,
-            "Yooz-Light-v2 weights not found in ~/.cache/huggingface; skipping rather than downloading"
+            "Yooz-Light-v3 weights not found in ~/.cache/huggingface; skipping rather than downloading"
         )
         try await backend.load()
 
@@ -158,7 +158,7 @@ final class GPUAdmissionContentionBenchTests: XCTestCase {
         let cached = await backend.isModelCached
         try XCTSkipUnless(
             cached,
-            "Yooz-Light-v2 weights not found in ~/.cache/huggingface; skipping rather than downloading"
+            "Yooz-Light-v3 weights not found in ~/.cache/huggingface; skipping rather than downloading"
         )
         try await backend.load()
 

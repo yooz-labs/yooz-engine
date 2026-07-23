@@ -15,8 +15,8 @@ import Foundation
 /// the consumer SDK depends on.
 ///
 /// Stable wire ids (do not rename without bumping a major SDK):
-/// - `yooz-light-v2` — `LLMModelType.yoozLight`
-/// - `yooz-quality-v2` — `LLMModelType.yoozQuality`
+/// - `yooz-light-v3` — `LLMModelType.yoozLight`
+/// - `yooz-quality-v3` — `LLMModelType.yoozQuality`
 /// - `foundation-models` — `FoundationModelsBackend` (macOS 26+ only)
 ///
 /// All picker UX strings (display name, description, tier, size)
@@ -25,8 +25,8 @@ import Foundation
 /// engine-side `LLMModelType` stays headless so a backend rename
 /// cannot silently change picker text.
 public enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
-    case yoozLight = "yooz-light-v2"
-    case yoozQuality = "yooz-quality-v2"
+    case yoozLight = "yooz-light-v3"
+    case yoozQuality = "yooz-quality-v3"
     case foundationModels = "foundation-models"
 
     /// Picker-visible name surfaced in consumer UIs.
@@ -41,8 +41,8 @@ public enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
     /// One-line description for picker subtitles.
     var description: String {
         switch self {
-        case .yoozLight: return "Fast proofreading (~200ms)"
-        case .yoozQuality: return "High quality proofreading (~310ms)"
+        case .yoozLight: return "Fast proofreading (~300ms)"
+        case .yoozQuality: return "High quality rewriting (~1s)"
         case .foundationModels: return "On-device 3B (macOS 26+, no download)"
         }
     }
@@ -62,8 +62,8 @@ public enum TouchUpModelSelection: String, Codable, Sendable, CaseIterable {
     /// FoundationModels because the OS owns the weights.
     var estimatedSize: Int64? {
         switch self {
-        case .yoozLight: return 276 * 1024 * 1024  // ~276 MB
-        case .yoozQuality: return 424 * 1024 * 1024  // ~424 MB
+        case .yoozLight: return 605 * 1024 * 1024  // ~605 MB
+        case .yoozQuality: return 3277 * 1024 * 1024  // ~3.2 GB
         case .foundationModels: return nil
         }
     }

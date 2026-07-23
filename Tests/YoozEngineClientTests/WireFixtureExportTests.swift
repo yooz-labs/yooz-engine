@@ -36,7 +36,7 @@ final class WireFixtureExportTests: XCTestCase {
         try write(ModelLoadState.cached, "ModelLoadState", to: dir)
 
         let touchUpModelInfo = TouchUpModelInfo(
-            id: "yooz-light-v2",
+            id: "yooz-light-v3",
             displayName: "Yooz-Light",
             description: "Fast, on-device cleanup",
             tier: .light,
@@ -46,11 +46,11 @@ final class WireFixtureExportTests: XCTestCase {
         )
         try write(touchUpModelInfo, "TouchUpModelInfo", to: dir)
         try write(
-            TouchUpModelsResponse(models: [touchUpModelInfo], activeId: "yooz-light-v2"),
+            TouchUpModelsResponse(models: [touchUpModelInfo], activeId: "yooz-light-v3"),
             "TouchUpModelsResponse", to: dir
         )
         try write(
-            TouchUpSetModelRequest(id: "yooz-light-v2", preload: true),
+            TouchUpSetModelRequest(id: "yooz-light-v3", preload: true),
             "TouchUpSetModelRequest", to: dir
         )
 
@@ -79,7 +79,7 @@ final class WireFixtureExportTests: XCTestCase {
         // MARK: Models/status/modules family
 
         let managedModelInfo = ManagedModelInfo(
-            id: "yooz-light-v2",
+            id: "yooz-light-v3",
             module: "llm",
             displayName: "Yooz-Light",
             sizeBytes: 550_000_000,
@@ -103,7 +103,7 @@ final class WireFixtureExportTests: XCTestCase {
         )
         try write(LoadState.loading, "LoadState", to: dir)
         try write(
-            LLMStatus(loaded: true, modelId: "yooz-light-v2", progress: nil, state: .ready, lastError: nil),
+            LLMStatus(loaded: true, modelId: "yooz-light-v3", progress: nil, state: .ready, lastError: nil),
             "LLMStatus", to: dir
         )
         try write(
@@ -113,23 +113,23 @@ final class WireFixtureExportTests: XCTestCase {
         // MARK: STT/LLM/TouchUp/Grammar/VAD bodies
 
         try write(
-            LLMGenerateRequest(prompt: "hello world", model: "yooz-light-v2", systemPrompt: "be terse"),
+            LLMGenerateRequest(prompt: "hello world", model: "yooz-light-v3", systemPrompt: "be terse"),
             "LLMGenerateRequest", to: dir
         )
         try write(
-            LLMGenerateResponse(text: "Hello, world.", model: "yooz-light-v2", tokensGenerated: 4, processingTimeMs: 120),
+            LLMGenerateResponse(text: "Hello, world.", model: "yooz-light-v3", tokensGenerated: 4, processingTimeMs: 120),
             "LLMGenerateResponse", to: dir
         )
         let llmModelInfo = LLMModelInfo(
-            id: "yooz-light-v2", displayName: "Yooz-Light",
+            id: "yooz-light-v3", displayName: "Yooz-Light",
             sizeBytes: 550_000_000, loaded: true, latencyHintMs: 200
         )
         try write(llmModelInfo, "LLMModelInfo", to: dir)
         try write(
-            LLMModelsResponse(current: "yooz-light-v2", available: [llmModelInfo]),
+            LLMModelsResponse(current: "yooz-light-v3", available: [llmModelInfo]),
             "LLMModelsResponse", to: dir
         )
-        try write(LLMModelSelection(model: "yooz-light-v2"), "LLMModelSelection", to: dir)
+        try write(LLMModelSelection(model: "yooz-light-v3"), "LLMModelSelection", to: dir)
 
         try write(TouchUpMode.standard, "TouchUpMode", to: dir)
         try write(
@@ -139,7 +139,7 @@ final class WireFixtureExportTests: XCTestCase {
         try write(
             TouchUpResponse(
                 result: "Hello, world.", mode: .standard, processingTimeMs: 80,
-                modelUsed: "yooz-light-v2", warnings: nil
+                modelUsed: "yooz-light-v3", warnings: nil
             ),
             "TouchUpResponse", to: dir
         )
@@ -148,8 +148,8 @@ final class WireFixtureExportTests: XCTestCase {
         try write(
             TouchUpResponse(
                 result: "Hello, world.", mode: .full, processingTimeMs: 310,
-                modelUsed: "yooz-light-v2",
-                warnings: ["yooz-quality-v2 not loaded; fell back to yooz-light-v2"]
+                modelUsed: "yooz-light-v3",
+                warnings: ["yooz-quality-v3 not loaded; fell back to yooz-light-v3"]
             ),
             "TouchUpResponseWarnings", to: dir
         )

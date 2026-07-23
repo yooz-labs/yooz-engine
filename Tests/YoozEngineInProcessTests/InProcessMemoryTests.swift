@@ -87,16 +87,16 @@ final class InProcessMemoryTests: XCTestCase {
 
         // Load Light, then switch to Quality with preload. Single-resident
         // eviction must unload Light so Quality is the only resident tier.
-        _ = try await client.touchUp.setModel(id: "yooz-light-v2", preload: true)
-        _ = try await client.touchUp.setModel(id: "yooz-quality-v2", preload: true)
+        _ = try await client.touchUp.setModel(id: "yooz-light-v3", preload: true)
+        _ = try await client.touchUp.setModel(id: "yooz-quality-v3", preload: true)
 
         // Explicit type: TouchUpClient overloads `availableModels()` by return
         // type (TouchUpModelsResponse vs LLMModelsResponse).
         let picker: TouchUpModelsResponse = try await client.touchUp.availableModels()
-        XCTAssertEqual(picker.activeId, "yooz-quality-v2", "Quality must be active")
+        XCTAssertEqual(picker.activeId, "yooz-quality-v3", "Quality must be active")
 
-        let light = picker.models.first { $0.id == "yooz-light-v2" }
-        let quality = picker.models.first { $0.id == "yooz-quality-v2" }
+        let light = picker.models.first { $0.id == "yooz-light-v3" }
+        let quality = picker.models.first { $0.id == "yooz-quality-v3" }
         XCTAssertNotEqual(
             light?.loadState, .loaded,
             "Light must be evicted (not resident) after switching to Quality"

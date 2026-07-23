@@ -16,12 +16,12 @@ final class EngineEventBusTests: XCTestCase {
         let stream = await bus.subscribe()
         var iterator = stream.makeAsyncIterator()
 
-        await bus.publish(EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v2"))
+        await bus.publish(EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v3"))
 
         let received = await iterator.next()
         XCTAssertEqual(received?.kind, .modelChanged)
         XCTAssertEqual(received?.module, "touchup")
-        XCTAssertEqual(received?.modelId, "yooz-light-v2")
+        XCTAssertEqual(received?.modelId, "yooz-light-v3")
     }
 
     func testEventsArriveInPublishOrder() async {
@@ -48,12 +48,12 @@ final class EngineEventBusTests: XCTestCase {
         var iteratorA = streamA.makeAsyncIterator()
         var iteratorB = streamB.makeAsyncIterator()
 
-        await bus.publish(EngineEvent(kind: .residencyChanged, module: "touchup", modelId: "yooz-quality-v2"))
+        await bus.publish(EngineEvent(kind: .residencyChanged, module: "touchup", modelId: "yooz-quality-v3"))
 
         let a = await iteratorA.next()
         let b = await iteratorB.next()
-        XCTAssertEqual(a?.modelId, "yooz-quality-v2")
-        XCTAssertEqual(b?.modelId, "yooz-quality-v2")
+        XCTAssertEqual(a?.modelId, "yooz-quality-v3")
+        XCTAssertEqual(b?.modelId, "yooz-quality-v3")
     }
 
     /// A subscriber that never subscribed must not see events published
@@ -61,14 +61,14 @@ final class EngineEventBusTests: XCTestCase {
     /// `GET /v1/state`, not this bus).
     func testLateSubscriberDoesNotSeePriorEvents() async {
         let bus = EngineEventBus()
-        await bus.publish(EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v2"))
+        await bus.publish(EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v3"))
 
         let stream = await bus.subscribe()
-        await bus.publish(EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-quality-v2"))
+        await bus.publish(EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-quality-v3"))
 
         var iterator = stream.makeAsyncIterator()
         let received = await iterator.next()
-        XCTAssertEqual(received?.modelId, "yooz-quality-v2")
+        XCTAssertEqual(received?.modelId, "yooz-quality-v3")
     }
 
     func testCancellingConsumerRemovesSubscriber() async {
@@ -94,7 +94,7 @@ final class EngineEventBusTests: XCTestCase {
     }
 
     func testEngineEventDefaultsTsToNonEmptyISO8601String() {
-        let event = EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v2")
+        let event = EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v3")
         XCTAssertFalse(event.ts.isEmpty)
         XCTAssertNotNil(ISO8601DateFormatter().date(from: event.ts))
     }

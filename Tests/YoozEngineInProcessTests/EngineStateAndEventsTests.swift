@@ -69,7 +69,7 @@ final class EngineStateAndEventsTests: XCTestCase {
         let stream = try await transport.openEvents()
 
         let body = try JSONEncoder().encode(
-            TouchUpSetModelRequest(id: "yooz-quality-v2", preload: false)
+            TouchUpSetModelRequest(id: "yooz-quality-v3", preload: false)
         )
         _ = try await transport.post("/v1/touchup/model", body: body)
 
@@ -78,15 +78,15 @@ final class EngineStateAndEventsTests: XCTestCase {
         // singleton, so scan (bounded) for the one this test caused rather
         // than asserting the very next event.
         let matched = try await firstMatchingEvent(stream, timeoutSeconds: 5) {
-            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v3"
         }
-        XCTAssertNotNil(matched, "expected a modelChanged event for yooz-quality-v2")
+        XCTAssertNotNil(matched, "expected a modelChanged event for yooz-quality-v3")
 
         // Leave the shared engine in a known state for any other in-process
         // test relying on the .yoozLight default.
         _ = try await transport.post(
             "/v1/touchup/model",
-            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v2", preload: false))
+            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v3", preload: false))
         )
     }
 

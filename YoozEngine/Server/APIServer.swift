@@ -3618,7 +3618,7 @@ extension APIServer {
     #if canImport(LLMModule)
     /// Build a single-model entry for the `/v1/llm/*` responses.
     /// `latencyHintMs` is a best-effort per-model baseline drawn from
-    /// LLMModelType.description (e.g. "~200ms"). Keeps the JSON wire
+    /// LLMModelType.description (e.g. "~300ms"). Keeps the JSON wire
     /// shape homogeneous across GET + preload + unload responses.
     nonisolated static func infoEntry(
         for modelType: LLMModelType,

@@ -12,7 +12,7 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpPro
 /// Smart routing processor for AI touch-up of transcriptions.
 ///
 /// Uses two-model routing strategy:
-/// - No replacements: Qwen2.5-0.5B proofreads only (fast path)
+/// - No replacements: the Light tier proofreads only (fast path)
 /// - Has replacements: Qwen3.5-0.8B validates replacements + proofreads
 ///
 /// Pipeline:
@@ -24,8 +24,8 @@ public enum TouchUpProcessor {
 
     /// Which model was used for processing.
     public enum ModelUsed: String, Sendable {
-        case light = "yooz-light-v2"
-        case quality = "yooz-quality-v2"
+        case light = "yooz-light-v3"
+        case quality = "yooz-quality-v3"
         case foundationModels = "foundation-models"
         case regexOnly = "regex-only"
         case fallbackRegex = "fallback-regex"

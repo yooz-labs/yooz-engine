@@ -1,5 +1,5 @@
 {
-  "model" : "yooz-light-v2",
+  "model" : "yooz-light-v3",
   "processingTimeMs" : 120,
   "text" : "Hello, world.",
   "tokensGenerated" : 4

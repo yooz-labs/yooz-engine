@@ -12,7 +12,7 @@ import Foundation
 /// the engine measured (not a static estimate), and `deletable` says whether
 /// the app may offer a Delete button for it.
 public struct ManagedModelInfo: Codable, Sendable, Equatable {
-    /// Stable delete handle: an LLM model id (e.g. `yooz-quality-v2`) or the
+    /// Stable delete handle: an LLM model id (e.g. `yooz-quality-v3`) or the
     /// HuggingFace hub directory name (`models--<ns>--<repo>`) for a swept
     /// model.
     public let id: String

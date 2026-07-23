@@ -201,7 +201,7 @@ final class EngineStateRouteTests: XCTestCase {
                 let (http, _) = try await post(
                     "/v1/touchup/model",
                     body: try JSONEncoder().encode(
-                        TouchUpSetModelRequest(id: "yooz-light-v2", preload: false)
+                        TouchUpSetModelRequest(id: "yooz-light-v3", preload: false)
                     )
                 )
                 XCTAssertEqual(http.statusCode, 200)
@@ -222,7 +222,7 @@ final class EngineStateRouteTests: XCTestCase {
             let (http, _) = try await post(
                 "/v1/touchup/model",
                 body: try JSONEncoder().encode(
-                    TouchUpSetModelRequest(id: "yooz-quality-v2", preload: false)
+                    TouchUpSetModelRequest(id: "yooz-quality-v3", preload: false)
                 )
             )
             XCTAssertEqual(http.statusCode, 200)
@@ -230,7 +230,7 @@ final class EngineStateRouteTests: XCTestCase {
             // Bounded scan: at most 40 frame-waits of 250ms each (~10s
             // worst case). Unrelated events from the shared bus (leftover
             // handshake frames included) may interleave.
-            let expected = EngineEventPayload.modelChanged(modelId: "yooz-quality-v2")
+            let expected = EngineEventPayload.modelChanged(modelId: "yooz-quality-v3")
             var matched: EngineEvent?
             for _ in 0..<40 {
                 guard let event = await buffer.popFirst(waitingUpTo: .milliseconds(250)) else { continue }

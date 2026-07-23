@@ -77,8 +77,8 @@ final class LLMModuleTests: XCTestCase {
     // MARK: - LLMModelType (always runs)
 
     func testLLMModelTypeRawValues() {
-        XCTAssertEqual(LLMModelType.yoozLight.rawValue, "yooz-light-v2")
-        XCTAssertEqual(LLMModelType.yoozQuality.rawValue, "yooz-quality-v2")
+        XCTAssertEqual(LLMModelType.yoozLight.rawValue, "yooz-light-v3")
+        XCTAssertEqual(LLMModelType.yoozQuality.rawValue, "yooz-quality-v3")
     }
 
     func testLLMModelTypeAllCases() {
@@ -92,8 +92,8 @@ final class LLMModuleTests: XCTestCase {
     }
 
     func testLLMModelTypeInitFromRawValue() {
-        XCTAssertEqual(LLMModelType(rawValue: "yooz-light-v2"), .yoozLight)
-        XCTAssertEqual(LLMModelType(rawValue: "yooz-quality-v2"), .yoozQuality)
+        XCTAssertEqual(LLMModelType(rawValue: "yooz-light-v3"), .yoozLight)
+        XCTAssertEqual(LLMModelType(rawValue: "yooz-quality-v3"), .yoozQuality)
         XCTAssertNil(LLMModelType(rawValue: "bogus-model"),
                      "init(rawValue:) must return nil for unknown model names")
     }
@@ -117,11 +117,11 @@ final class LLMModuleTests: XCTestCase {
         // a CI failure rather than silent quality regression.
         XCTAssertEqual(
             LLMModelType.yoozLight.huggingFaceID,
-            "YoozLabs/Yooz-Light-v2-Qwen2.5-0.5B-LoRA"
+            "YoozLabs/Yooz-Light-v3-Qwen3.5-0.8B"
         )
         XCTAssertEqual(
             LLMModelType.yoozQuality.huggingFaceID,
-            "YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA"
+            "YoozLabs/Yooz-Quality-v3-Qwen3.5-4B"
         )
     }
 

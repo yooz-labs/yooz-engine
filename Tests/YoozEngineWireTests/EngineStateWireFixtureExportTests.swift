@@ -31,7 +31,7 @@ final class EngineStateWireFixtureExportTests: XCTestCase {
             EngineEvent(
                 kind: .downloadProgress,
                 module: "touchup",
-                modelId: "yooz-quality-v2",
+                modelId: "yooz-quality-v3",
                 loadState: nil,
                 progress: 0.42,
                 message: nil,
@@ -41,14 +41,14 @@ final class EngineStateWireFixtureExportTests: XCTestCase {
         )
 
         let row = EngineModelSnapshotRow(
-            id: "yooz-light-v2", displayName: "Yooz-Light",
+            id: "yooz-light-v3", displayName: "Yooz-Light",
             description: "Fast, on-device cleanup", tier: .light,
             sizeBytes: 276_000_000, loadState: .loaded, isActive: true
         )
         try write(row, "EngineModelSnapshotRow", to: dir)
 
         let moduleSnapshot = EngineModuleSnapshot(
-            module: "touchup", models: [row], activeId: "yooz-light-v2"
+            module: "touchup", models: [row], activeId: "yooz-light-v3"
         )
         try write(moduleSnapshot, "EngineModuleSnapshot", to: dir)
 

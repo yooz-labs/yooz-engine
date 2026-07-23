@@ -13,9 +13,10 @@ private let logger = Logger(subsystem: "live.yooz.engine", category: "TouchUpEng
 ///
 /// The TouchUpEngine manages LLM models and provides smart routing
 /// for transcription cleanup. It uses up to three backends:
-/// - **Yooz-Light** (Qwen2.5-0.5B): Fast proofreading, ~200ms latency
-/// - **Yooz-Quality** (Qwen3.5-0.8B, `YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA`,
-///   ~424 MB 4-bit): Higher quality proofreading, ~310ms latency
+/// - **Yooz-Light** (KD Qwen3.5-0.8B, `YoozLabs/Yooz-Light-v3-Qwen3.5-0.8B`,
+///   ~605 MB 6-bit): Fast proofreading, ~300ms latency
+/// - **Yooz-Quality** (KD Qwen3.5-4B, `YoozLabs/Yooz-Quality-v3-Qwen3.5-4B`,
+///   ~3.2 GB 6-bit): Higher quality rewriting, ~1s latency
 /// - **Apple Intelligence** (Foundation Models 3B): macOS 26+, structured generation
 public actor TouchUpEngine {
 
@@ -60,7 +61,7 @@ public actor TouchUpEngine {
     /// `Task.isCancelled` after its load settles).
     private var backgroundPreloadTask: Task<Void, Never>?
 
-    /// The light model backend (Yooz-Light, Qwen2.5-0.5B)
+    /// The light model backend (Yooz-Light, KD Qwen3.5-0.8B)
     private var lightModel: MLXLLMBackend?
 
     /// The quality model backend (Yooz-Quality, Qwen3.5-0.8B)

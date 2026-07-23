@@ -95,7 +95,7 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             TouchUpModelInfo.self, fixture: "TouchUpModelInfo",
             expected: TouchUpModelInfo(
-                id: "yooz-light-v2", displayName: "Yooz-Light",
+                id: "yooz-light-v3", displayName: "Yooz-Light",
                 description: "Fast, on-device cleanup", tier: .light,
                 sizeBytes: 550_000_000, loadState: .cached, isActive: true
             )
@@ -107,11 +107,11 @@ final class WireCompatFixtureTests: XCTestCase {
             TouchUpModelsResponse.self, fixture: "TouchUpModelsResponse",
             expected: TouchUpModelsResponse(
                 models: [TouchUpModelInfo(
-                    id: "yooz-light-v2", displayName: "Yooz-Light",
+                    id: "yooz-light-v3", displayName: "Yooz-Light",
                     description: "Fast, on-device cleanup", tier: .light,
                     sizeBytes: 550_000_000, loadState: .cached, isActive: true
                 )],
-                activeId: "yooz-light-v2"
+                activeId: "yooz-light-v3"
             )
         )
     }
@@ -119,7 +119,7 @@ final class WireCompatFixtureTests: XCTestCase {
     func testTouchUpSetModelRequest() throws {
         try assertWireStable(
             TouchUpSetModelRequest.self, fixture: "TouchUpSetModelRequest",
-            expected: TouchUpSetModelRequest(id: "yooz-light-v2", preload: true)
+            expected: TouchUpSetModelRequest(id: "yooz-light-v3", preload: true)
         )
     }
 
@@ -185,7 +185,7 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             ManagedModelInfo.self, fixture: "ManagedModelInfo",
             expected: ManagedModelInfo(
-                id: "yooz-light-v2", module: "llm", displayName: "Yooz-Light",
+                id: "yooz-light-v3", module: "llm", displayName: "Yooz-Light",
                 sizeBytes: 550_000_000, cached: true, loaded: true,
                 isActive: true, deletable: false
             )
@@ -196,7 +196,7 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             ManagedModelsResponse.self, fixture: "ManagedModelsResponse",
             expected: ManagedModelsResponse(models: [ManagedModelInfo(
-                id: "yooz-light-v2", module: "llm", displayName: "Yooz-Light",
+                id: "yooz-light-v3", module: "llm", displayName: "Yooz-Light",
                 sizeBytes: 550_000_000, cached: true, loaded: true,
                 isActive: true, deletable: false
             )])
@@ -227,7 +227,7 @@ final class WireCompatFixtureTests: XCTestCase {
     func testLLMStatus() throws {
         try assertWireStable(
             LLMStatus.self, fixture: "LLMStatus",
-            expected: LLMStatus(loaded: true, modelId: "yooz-light-v2", progress: nil, state: .ready, lastError: nil)
+            expected: LLMStatus(loaded: true, modelId: "yooz-light-v3", progress: nil, state: .ready, lastError: nil)
         )
     }
 
@@ -244,7 +244,7 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             LLMGenerateRequest.self, fixture: "LLMGenerateRequest",
             expected: LLMGenerateRequest(
-                prompt: "hello world", model: "yooz-light-v2", systemPrompt: "be terse"
+                prompt: "hello world", model: "yooz-light-v3", systemPrompt: "be terse"
             )
         )
     }
@@ -253,7 +253,7 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             LLMGenerateResponse.self, fixture: "LLMGenerateResponse",
             expected: LLMGenerateResponse(
-                text: "Hello, world.", model: "yooz-light-v2",
+                text: "Hello, world.", model: "yooz-light-v3",
                 tokensGenerated: 4, processingTimeMs: 120
             )
         )
@@ -276,7 +276,7 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             LLMModelInfo.self, fixture: "LLMModelInfo",
             expected: LLMModelInfo(
-                id: "yooz-light-v2", displayName: "Yooz-Light",
+                id: "yooz-light-v3", displayName: "Yooz-Light",
                 sizeBytes: 550_000_000, loaded: true, latencyHintMs: 200
             )
         )
@@ -286,9 +286,9 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             LLMModelsResponse.self, fixture: "LLMModelsResponse",
             expected: LLMModelsResponse(
-                current: "yooz-light-v2",
+                current: "yooz-light-v3",
                 available: [LLMModelInfo(
-                    id: "yooz-light-v2", displayName: "Yooz-Light",
+                    id: "yooz-light-v3", displayName: "Yooz-Light",
                     sizeBytes: 550_000_000, loaded: true, latencyHintMs: 200
                 )]
             )
@@ -298,7 +298,7 @@ final class WireCompatFixtureTests: XCTestCase {
     func testLLMModelSelection() throws {
         try assertWireStable(
             LLMModelSelection.self, fixture: "LLMModelSelection",
-            expected: LLMModelSelection(model: "yooz-light-v2")
+            expected: LLMModelSelection(model: "yooz-light-v3")
         )
     }
 
@@ -344,7 +344,7 @@ final class WireCompatFixtureTests: XCTestCase {
             TouchUpResponse.self, fixture: "TouchUpResponse",
             expected: TouchUpResponse(
                 result: "Hello, world.", mode: .standard, processingTimeMs: 80,
-                modelUsed: "yooz-light-v2", warnings: nil
+                modelUsed: "yooz-light-v3", warnings: nil
             )
         )
     }
@@ -356,8 +356,8 @@ final class WireCompatFixtureTests: XCTestCase {
             TouchUpResponse.self, fixture: "TouchUpResponseWarnings",
             expected: TouchUpResponse(
                 result: "Hello, world.", mode: .full, processingTimeMs: 310,
-                modelUsed: "yooz-light-v2",
-                warnings: ["yooz-quality-v2 not loaded; fell back to yooz-light-v2"]
+                modelUsed: "yooz-light-v3",
+                warnings: ["yooz-quality-v3 not loaded; fell back to yooz-light-v3"]
             )
         )
     }
@@ -482,7 +482,7 @@ final class WireCompatFixtureTests: XCTestCase {
             expected: EngineEvent(
                 kind: .downloadProgress,
                 module: "touchup",
-                modelId: "yooz-quality-v2",
+                modelId: "yooz-quality-v3",
                 loadState: nil,
                 progress: 0.42,
                 message: nil,
@@ -527,26 +527,26 @@ final class WireCompatFixtureTests: XCTestCase {
     /// kind resolves its required fields exhaustively.
     func testEngineEventPayloadResolvesEachKind() {
         XCTAssertEqual(
-            EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v2").payload,
-            .modelChanged(modelId: "yooz-light-v2")
+            EngineEvent(kind: .modelChanged, module: "touchup", modelId: "yooz-light-v3").payload,
+            .modelChanged(modelId: "yooz-light-v3")
         )
         XCTAssertEqual(
             EngineEvent(
                 kind: .loadStateChanged, module: "touchup",
-                modelId: "yooz-quality-v2", loadState: .loaded
+                modelId: "yooz-quality-v3", loadState: .loaded
             ).payload,
-            .loadStateChanged(modelId: "yooz-quality-v2", loadState: .loaded, message: nil)
+            .loadStateChanged(modelId: "yooz-quality-v3", loadState: .loaded, message: nil)
         )
         XCTAssertEqual(
             EngineEvent(
                 kind: .downloadProgress, module: "touchup",
-                modelId: "yooz-quality-v2", progress: 0.5
+                modelId: "yooz-quality-v3", progress: 0.5
             ).payload,
-            .downloadProgress(modelId: "yooz-quality-v2", progress: 0.5)
+            .downloadProgress(modelId: "yooz-quality-v3", progress: 0.5)
         )
         XCTAssertEqual(
-            EngineEvent(kind: .residencyChanged, module: "touchup", modelId: "yooz-light-v2").payload,
-            .residencyChanged(modelId: "yooz-light-v2")
+            EngineEvent(kind: .residencyChanged, module: "touchup", modelId: "yooz-light-v3").payload,
+            .residencyChanged(modelId: "yooz-light-v3")
         )
     }
 
@@ -567,7 +567,7 @@ final class WireCompatFixtureTests: XCTestCase {
         try assertWireStable(
             EngineModelSnapshotRow.self, fixture: "EngineModelSnapshotRow",
             expected: EngineModelSnapshotRow(
-                id: "yooz-light-v2", displayName: "Yooz-Light",
+                id: "yooz-light-v3", displayName: "Yooz-Light",
                 description: "Fast, on-device cleanup", tier: .light,
                 sizeBytes: 276_000_000, loadState: .loaded, isActive: true
             )
@@ -580,11 +580,11 @@ final class WireCompatFixtureTests: XCTestCase {
             expected: EngineModuleSnapshot(
                 module: "touchup",
                 models: [EngineModelSnapshotRow(
-                    id: "yooz-light-v2", displayName: "Yooz-Light",
+                    id: "yooz-light-v3", displayName: "Yooz-Light",
                     description: "Fast, on-device cleanup", tier: .light,
                     sizeBytes: 276_000_000, loadState: .loaded, isActive: true
                 )],
-                activeId: "yooz-light-v2"
+                activeId: "yooz-light-v3"
             )
         )
     }
@@ -596,11 +596,11 @@ final class WireCompatFixtureTests: XCTestCase {
                 EngineModuleSnapshot(
                     module: "touchup",
                     models: [EngineModelSnapshotRow(
-                        id: "yooz-light-v2", displayName: "Yooz-Light",
+                        id: "yooz-light-v3", displayName: "Yooz-Light",
                         description: "Fast, on-device cleanup", tier: .light,
                         sizeBytes: 276_000_000, loadState: .loaded, isActive: true
                     )],
-                    activeId: "yooz-light-v2"
+                    activeId: "yooz-light-v3"
                 ),
             ])
         )
