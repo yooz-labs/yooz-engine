@@ -156,6 +156,14 @@ public struct EngineModelSnapshotRow: Codable, Sendable, Equatable {
     public let sizeBytes: Int64?
     public let loadState: ModelLoadState
     public let isActive: Bool
+    /// Fraction-completed [0, 1) while THIS row's weights are being
+    /// fetched, else nil (engine#292). Added so a consumer's reconciliation
+    /// path — a plain `GET /v1/state`, immune to a dropped event frame —
+    /// can correct a stale or frozen progress banner. Before this, progress
+    /// existed only as `/v1/events` frames, so a consumer had no snapshot
+    /// arm to fall back on. Optional + defaulted, so older clients decode
+    /// unchanged and callers that don't track progress omit it.
+    public let downloadProgress: Double?
 
     public init(
         id: String,
@@ -164,7 +172,8 @@ public struct EngineModelSnapshotRow: Codable, Sendable, Equatable {
         tier: ModelTier,
         sizeBytes: Int64?,
         loadState: ModelLoadState,
-        isActive: Bool
+        isActive: Bool,
+        downloadProgress: Double? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -173,6 +182,7 @@ public struct EngineModelSnapshotRow: Codable, Sendable, Equatable {
         self.sizeBytes = sizeBytes
         self.loadState = loadState
         self.isActive = isActive
+        self.downloadProgress = downloadProgress
     }
 }
 

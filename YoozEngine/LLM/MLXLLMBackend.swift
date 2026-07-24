@@ -59,6 +59,11 @@ actor MLXLLMBackend: LLMBackend {
     /// jump straight to 1.0.
     private(set) var downloadProgress: Double = 0
 
+    /// Live KVO registration on the download's parent `Progress`
+    /// (engine#292). Held for the download's duration — see
+    /// `retainProgressObservation`.
+    private var progressObservation: NSKeyValueObservation?
+
     private let bundleIdentifier: String
 
     #if canImport(MLXLMCommon)
@@ -277,11 +282,23 @@ actor MLXLLMBackend: LLMBackend {
                 from: #hubDownloader(),
                 using: #huggingFaceTokenizerLoader(),
                 configuration: configuration,
+                // swift-huggingface calls this handler EXACTLY ONCE, handing
+                // over a live parent `Progress` whose per-file children are
+                // attached afterwards (`HubClient+Files.downloadSnapshot`:
+                // `let progress = Progress(...); await progressHandler(progress)`
+                // then `Progress(..., parent: progress, ...)` per file). Reading
+                // `fractionCompleted` inside the callback therefore captured
+                // t=0 (~0.003%) and froze there for the whole download —
+                // engine#292's 0%-forever bar. KVO-observe the object instead
+                // so every child completion pushes a fresh fraction in.
                 progressHandler: { [weak self] progress in
-                    let fraction = progress.fractionCompleted
-                    Task {
-                        await self?.setDownloadProgress(fraction)
+                    let observation = progress.observe(
+                        \.fractionCompleted, options: [.initial, .new]
+                    ) { observed, _ in
+                        let fraction = observed.fractionCompleted
+                        Task { await self?.setDownloadProgress(fraction) }
                     }
+                    Task { await self?.retainProgressObservation(observation) }
                 }
             )
 
@@ -345,6 +362,10 @@ actor MLXLLMBackend: LLMBackend {
         #endif
         isLoaded = false
         downloadProgress = 0
+        // Stop observing the finished/abandoned download's Progress
+        // (engine#292) so a cancelled load can't keep pushing fractions
+        // into a tier that is no longer loading.
+        progressObservation = nil
         // Release this model's residency. Trims the global cache budget to the
         // categories still resident; the freed weight/KV buffers are returned
         // to the OS by the flush — but only when no MLX category is left
@@ -668,6 +689,16 @@ actor MLXLLMBackend: LLMBackend {
     private func setDownloadProgress(_ value: Double) {
         downloadProgress = value
         logger.debug("Download progress: \(Int(value * 100))%")
+    }
+
+    /// Keep the KVO registration alive for the duration of the download
+    /// (engine#292): an `NSKeyValueObservation` stops observing the moment
+    /// it deallocates, so without this the very first fraction would be the
+    /// only one — the exact symptom being fixed. Replacing a previous
+    /// observation (a re-load on the same backend) releases the old one,
+    /// and `unload` clears it.
+    private func retainProgressObservation(_ observation: NSKeyValueObservation) {
+        progressObservation = observation
     }
 
     // MARK: - Post-Processing

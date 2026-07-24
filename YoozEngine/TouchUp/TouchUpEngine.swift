@@ -1454,17 +1454,49 @@ public actor TouchUpEngine {
         _ modelType: LLMModelType, selection: TouchUpModelSelection
     ) async {
         var lastPublished: Double = -1
+        var ticksSincePublish = 0
         while !Task.isCancelled {
+            // Reads the backend's live KVO-fed fraction (engine#292). The
+            // byte-on-disk alternative was measured and rejected: this
+            // downloader stages the one multi-GB weights file outside the hub
+            // repo and moves it in at the end, so on-disk bytes sit flat at
+            // ~0.6% for the entire transfer and then jump.
             let fraction = await downloadProgress(for: modelType) ?? 0
-            if fraction > 0, fraction < 1, fraction - lastPublished >= 0.02 {
+            // Publish on a 0.5% move OR at least every ~2s (7 ticks) while a
+            // fetch is genuinely in progress, so slow links still animate
+            // instead of looking frozen (engine#292). The old 2%-only
+            // threshold, fed by a source that never advanced, is what
+            // produced a permanently-0% bar.
+            let moved = fraction - lastPublished >= 0.005
+            let overdue = fraction > 0 && ticksSincePublish >= 7
+            if fraction > 0, fraction < 1, moved || overdue {
                 lastPublished = fraction
+                ticksSincePublish = 0
                 await EngineEventBus.shared.publish(EngineEvent(
                     kind: .downloadProgress, module: Self.selectionStoreModule,
                     modelId: selection.rawValue, progress: fraction
                 ))
+            } else {
+                ticksSincePublish += 1
             }
             try? await Task.sleep(for: .milliseconds(300))
         }
+    }
+
+    /// In-flight download fraction per wire id, for the `/v1/state` snapshot
+    /// (engine#292). Only tiers whose `loadState` is `.loading` report a
+    /// value — a settled tier's backend still holds its final fraction, and
+    /// reporting that would render a permanent "download in progress" row.
+    /// Cheap: an in-memory read per MLX tier, no filesystem work.
+    public func inFlightDownloadFractions() async -> [String: Double] {
+        var result: [String: Double] = [:]
+        for modelType in LLMModelType.allCases where loadStates[modelType] == .loading {
+            guard let fraction = await downloadProgress(for: modelType) else { continue }
+            if fraction > 0, fraction < 1 {
+                result[modelType.rawValue] = fraction
+            }
+        }
+        return result
     }
 
     private func publishLoadStateChanged(
