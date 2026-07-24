@@ -124,7 +124,43 @@ actor MLXLLMBackend: LLMBackend {
             )
             candidates.append(resourceDir.appendingPathComponent(id))
         }
+        candidates += hostAppResourceCandidates(
+            forNestedServiceAt: Bundle.main.bundleURL, id: id
+        )
         return firstModelDirectory(containingConfigIn: candidates)
+    }
+
+    /// Host-app resource candidates for a NESTED XPC service (the whisper#267
+    /// packaging): inside the service, `Bundle.main` is the `.xpc` bundle at
+    /// `<app>/Contents/XPCServices/<service>.xpc`, so the host app's own
+    /// `Contents/Resources` — where a consumer bundles its zero-download
+    /// model — is invisible to the `resourcePath` probes above and the
+    /// service re-downloaded a model the app already carries (engine#284).
+    /// Returns the host app's `Resources/Models/<id>` and `Resources/<id>`
+    /// (same order the in-process probes use), or `[]` when `bundleURL` is
+    /// not under `Contents/XPCServices/` (in-process builds, the menu-bar
+    /// app, tests). Pure + static: derivation is testable without a real
+    /// bundle. Fail-safe by construction — if the service's sandbox denies
+    /// reading the host app's Resources, the `config.json` probe in
+    /// `firstModelDirectory(containingConfigIn:)` fails and the caller
+    /// falls through to the HF path exactly as before this candidate
+    /// existed.
+    static func hostAppResourceCandidates(
+        forNestedServiceAt bundleURL: URL, id: String
+    ) -> [URL] {
+        let components = bundleURL.pathComponents
+        guard components.count >= 3,
+              components[components.count - 2] == "XPCServices",
+              components[components.count - 3] == "Contents"
+        else { return [] }
+        let hostResources = bundleURL
+            .deletingLastPathComponent() // XPCServices
+            .deletingLastPathComponent() // Contents
+            .appendingPathComponent("Resources")
+        return [
+            hostResources.appendingPathComponent("Models").appendingPathComponent(id),
+            hostResources.appendingPathComponent(id),
+        ]
     }
 
     /// Whether a complete copy of `modelType` ships in the app bundle (or the

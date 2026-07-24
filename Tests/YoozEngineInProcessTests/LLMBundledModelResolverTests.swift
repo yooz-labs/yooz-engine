@@ -41,4 +41,40 @@ final class LLMBundledModelResolverTests: XCTestCase {
             MLXLLMBackend.firstModelDirectory(containingConfigIn: [missing, partial])
         )
     }
+
+    // MARK: - Host-app candidates for a nested XPC service (engine#284)
+
+    func testNestedServiceBundleYieldsHostAppResourceCandidates() {
+        let serviceBundle = URL(
+            fileURLWithPath:
+            "/Applications/Yooz Whisper.app/Contents/XPCServices/YoozWhisperXPC.xpc"
+        )
+        let candidates = MLXLLMBackend.hostAppResourceCandidates(
+            forNestedServiceAt: serviceBundle, id: "yooz-light-v3"
+        )
+        XCTAssertEqual(candidates.map(\.path), [
+            "/Applications/Yooz Whisper.app/Contents/Resources/Models/yooz-light-v3",
+            "/Applications/Yooz Whisper.app/Contents/Resources/yooz-light-v3",
+        ])
+    }
+
+    func testNonNestedBundleYieldsNoHostAppCandidates() {
+        // In-process build: Bundle.main is the host app itself.
+        let appBundle = URL(fileURLWithPath: "/Applications/Yooz Whisper.app")
+        XCTAssertTrue(
+            MLXLLMBackend.hostAppResourceCandidates(
+                forNestedServiceAt: appBundle, id: "yooz-light-v3"
+            ).isEmpty
+        )
+        // "XPCServices" appearing elsewhere in the path must not match:
+        // only the exact <app>/Contents/XPCServices/<service> nesting counts.
+        let lookalike = URL(
+            fileURLWithPath: "/Users/dev/XPCServices/Contents/NotAService.xpc"
+        )
+        XCTAssertTrue(
+            MLXLLMBackend.hostAppResourceCandidates(
+                forNestedServiceAt: lookalike, id: "yooz-light-v3"
+            ).isEmpty
+        )
+    }
 }
