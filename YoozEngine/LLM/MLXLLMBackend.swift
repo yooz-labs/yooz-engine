@@ -277,6 +277,17 @@ actor MLXLLMBackend: LLMBackend {
                 from: #hubDownloader(),
                 using: #huggingFaceTokenizerLoader(),
                 configuration: configuration,
+                // Measured behavior of this handler (engine#292, instrumented
+                // against a real 3.44 GB fetch): swift-huggingface's sampling
+                // task calls it ~every 100ms for the whole download (681 calls
+                // observed), and `totalUnitCount` is byte-accurate — but
+                // `completedUnitCount` only advances when a whole FILE lands.
+                // It climbed to exactly 20,081,682 (the small files) and stayed
+                // bit-for-bit constant for the entire multi-GB weights
+                // transfer. So the fraction this feeds is per-file, not
+                // per-byte: honest, but coarse for a single-big-file repo.
+                // Consumers must therefore treat an unchanging fraction as
+                // "still working" (indeterminate), not as a stall.
                 progressHandler: { [weak self] progress in
                     let fraction = progress.fractionCompleted
                     Task {

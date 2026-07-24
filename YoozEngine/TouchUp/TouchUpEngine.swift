@@ -1454,17 +1454,74 @@ public actor TouchUpEngine {
         _ modelType: LLMModelType, selection: TouchUpModelSelection
     ) async {
         var lastPublished: Double = -1
+        var ticksSincePublish = 0
         while !Task.isCancelled {
+            // Reads the backend's live KVO-fed fraction (engine#292). The
+            // byte-on-disk alternative was measured and rejected: this
+            // downloader stages the one multi-GB weights file outside the hub
+            // repo and moves it in at the end, so on-disk bytes sit flat at
+            // ~0.6% for the entire transfer and then jump.
+            // Stop the moment the tier stops loading (PR #293 review):
+            // `markLoadSettled` flips `loadStates` from inside the load task,
+            // strictly BEFORE this watcher's `defer { cancel() }` runs (that
+            // waits on `awaitLoadTask` plus a `publishLoadStateChanged`
+            // await). A failed/cancelled load also leaves the backend's
+            // fraction at its last partial value, so without this guard the
+            // watcher could wake in that window and publish "still
+            // downloading" for a tier whose failed/available
+            // `loadStateChanged` is already in flight. Mirrors the same gate
+            // `inFlightDownloadFractions()` applies below.
+            guard loadStates[modelType] == .loading else { return }
             let fraction = await downloadProgress(for: modelType) ?? 0
-            if fraction > 0, fraction < 1, fraction - lastPublished >= 0.02 {
+            // Publish on a 0.5% move OR at least every ~2s (7 ticks) while a
+            // fetch is in progress (engine#292). The old rule published only
+            // on a >=2% move, so with a per-file source the single 0.58% step
+            // never cleared it and exactly ONE frame escaped per download —
+            // the 0%-forever bar.
+            //
+            // The ~2s arm is a deliberate KEEP-ALIVE, not a progress claim:
+            // measured, `completedUnitCount` is flat for the whole multi-GB
+            // file (see `MLXLLMBackend.load`'s progressHandler comment), so
+            // repeating the same fraction is how a consumer distinguishes
+            // "still downloading" from "engine went away". A consumer must
+            // render an unchanging fraction as indeterminate rather than as
+            // a precise percentage — an identical value arriving every 2s is
+            // the signal for that, and the terminal truth stays
+            // `loadStateChanged`.
+            let moved = fraction - lastPublished >= 0.005
+            // DO NOT "optimize" this into dedupe-by-value: republishing an
+            // UNCHANGED fraction is the intended keep-alive, and flat
+            // stretches are the normal case (per-file granularity), so
+            // suppressing them reintroduces the frozen-bar bug this fixes.
+            let overdue = fraction > 0 && ticksSincePublish >= 7
+            if fraction > 0, fraction < 1, moved || overdue {
                 lastPublished = fraction
+                ticksSincePublish = 0
                 await EngineEventBus.shared.publish(EngineEvent(
                     kind: .downloadProgress, module: Self.selectionStoreModule,
                     modelId: selection.rawValue, progress: fraction
                 ))
+            } else {
+                ticksSincePublish += 1
             }
             try? await Task.sleep(for: .milliseconds(300))
         }
+    }
+
+    /// In-flight download fraction per wire id, for the `/v1/state` snapshot
+    /// (engine#292). Only tiers whose `loadState` is `.loading` report a
+    /// value — a settled tier's backend still holds its final fraction, and
+    /// reporting that would render a permanent "download in progress" row.
+    /// Cheap: an in-memory read per MLX tier, no filesystem work.
+    public func inFlightDownloadFractions() async -> [String: Double] {
+        var result: [String: Double] = [:]
+        for modelType in LLMModelType.allCases where loadStates[modelType] == .loading {
+            guard let fraction = await downloadProgress(for: modelType) else { continue }
+            if fraction > 0, fraction < 1 {
+                result[modelType.rawValue] = fraction
+            }
+        }
+        return result
     }
 
     private func publishLoadStateChanged(

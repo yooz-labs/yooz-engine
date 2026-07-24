@@ -29,13 +29,18 @@ public enum EngineStateEndpoints {
     static func touchUpSnapshot() async -> EngineModuleSnapshot {
         let models = await TouchUpEngine.shared.availableModels()
         let activeId = await TouchUpEngine.shared.activeModel.rawValue
+        // Per-row in-flight download fraction (engine#292) so a consumer's
+        // snapshot reconciliation can correct a frozen progress banner
+        // instead of depending on event frames alone. Only a tier that is
+        // actually mid-fetch reports a value; anything settled reports nil.
+        let progressById = await TouchUpEngine.shared.inFlightDownloadFractions()
         return EngineModuleSnapshot(
             module: TouchUpEngine.selectionStoreModule,
             models: models.map {
                 EngineModelSnapshotRow(
                     id: $0.id, displayName: $0.displayName, description: $0.description,
                     tier: $0.tier, sizeBytes: $0.sizeBytes, loadState: $0.loadState,
-                    isActive: $0.isActive
+                    isActive: $0.isActive, downloadProgress: progressById[$0.id]
                 )
             },
             activeId: activeId
