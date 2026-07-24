@@ -91,6 +91,61 @@ public enum TouchUpEndpoints {
                     )
                 }
             },
+            // `POST /v1/touchup/download` — explicit download, decoupled
+            // from the active selection (engine#288 slice 2). Returns the
+            // tier's current row immediately; progress + terminal outcome
+            // arrive via `/v1/events`, exactly like a preloading switch.
+            Endpoint(EndpointSpecs.touchUpDownload) { request in
+                let selection = try Self.downloadableSelection(from: request.body)
+                guard let row = await TouchUpEngine.shared.requestDownload(selection) else {
+                    throw WireError(
+                        status: 500, code: "model_set_failed",
+                        message: "no picker row for '\(selection.rawValue)'"
+                    )
+                }
+                return try WireResponse.json(row)
+            },
+            // `POST /v1/touchup/download/cancel` — abort an in-flight
+            // download. No-op (200 with the current row) when the tier
+            // isn't downloading; never unloads a resident model.
+            Endpoint(EndpointSpecs.touchUpCancelDownload) { request in
+                let selection = try Self.downloadableSelection(from: request.body)
+                guard let row = await TouchUpEngine.shared.cancelDownload(selection) else {
+                    throw WireError(
+                        status: 500, code: "model_set_failed",
+                        message: "no picker row for '\(selection.rawValue)'"
+                    )
+                }
+                return try WireResponse.json(row)
+            },
         ]
+    }
+
+    /// Shared body validation for the download/cancel pair: decode
+    /// `TouchUpDownloadRequest`, resolve the selection, and reject
+    /// FoundationModels (OS-resident, nothing to download) with the same
+    /// 400 wire code the picker uses for unknown ids.
+    private static func downloadableSelection(
+        from body: Data
+    ) throws -> TouchUpModelSelection {
+        let request: TouchUpDownloadRequest
+        do {
+            request = try JSONDecoder().decode(TouchUpDownloadRequest.self, from: body)
+        } catch {
+            throw WireError.invalidRequest(error)
+        }
+        guard let selection = TouchUpModelSelection(rawValue: request.id),
+              selection != .foundationModels
+        else {
+            let known = TouchUpModelSelection.allCases
+                .filter { $0 != .foundationModels }
+                .map(\.rawValue).joined(separator: ", ")
+            throw WireError(
+                status: 400,
+                code: "invalid_model",
+                message: "'\(request.id)' is not a downloadable model id. Known: \(known)."
+            )
+        }
+        return selection
     }
 }

@@ -1294,6 +1294,45 @@ public actor TouchUpEngine {
         backgroundPreloadTasks[selection] = nil
     }
 
+    /// Explicit download, decoupled from the active selection (engine#288
+    /// slice 2): fetch `selection`'s weights without switching models.
+    /// Reuses the per-tier preload dispatch — if `selection` is NOT the
+    /// active model when the load settles, the superseded-completion path
+    /// frees the memory copy and the tier lands `.cached` on disk; if it
+    /// IS active, this is an ordinary preload. Dedupes onto any dispatch
+    /// already running for the tier. Progress/outcome arrive via events.
+    /// Returns the tier's current picker row (nil for an id with no row —
+    /// structurally unreachable for validated selections).
+    public func requestDownload(
+        _ selection: TouchUpModelSelection
+    ) async -> TouchUpModelInfo? {
+        if backgroundPreloadTasks[selection] == nil {
+            backgroundPreloadTasks[selection] = Task {
+                await self.preloadActiveSelectionInBackground(selection)
+                await self.clearBackgroundPreload(selection)
+            }
+        }
+        let rows = await availableModels()
+        return rows.first(where: { $0.id == selection.rawValue })
+    }
+
+    /// Cancel an in-flight download for `selection` (engine#288 slice 2).
+    /// Only acts when the tier is actually `.loading` — cancelling a
+    /// loaded/settled tier is a no-op (never unloads a resident model).
+    /// `unload(_:)` cancels the in-flight load task; the tier's dispatch
+    /// observes the cancellation and publishes the settled `.available`
+    /// row state itself (cooperative-cancel path, no error toast).
+    public func cancelDownload(
+        _ selection: TouchUpModelSelection
+    ) async -> TouchUpModelInfo? {
+        if let modelType = LLMModelType(rawValue: selection.rawValue),
+           loadState(for: modelType) == .loading {
+            await unload(modelType)
+        }
+        let rows = await availableModels()
+        return rows.first(where: { $0.id == selection.rawValue })
+    }
+
     /// Background load + single-resident eviction for
     /// `setActiveModelAsync`. Runs disconnected from the HTTP/in-process
     /// request that triggered it — every observable outcome goes through
