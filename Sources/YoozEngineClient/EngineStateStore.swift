@@ -159,7 +159,12 @@ public final class EngineStateStore: ObservableObject {
                     EngineModelSnapshotRow(
                         id: $0.id, displayName: $0.displayName, description: $0.description,
                         tier: $0.tier, sizeBytes: $0.sizeBytes, loadState: $0.loadState,
-                        isActive: $0.id == modelId
+                        isActive: $0.id == modelId,
+                        // Carry the cached fraction across an unrelated event
+                        // (PR #293 review): dropping it here would blank a
+                        // mid-download tier's progress every time the active
+                        // model changed, until the next full refresh.
+                        downloadProgress: $0.downloadProgress
                     )
                 },
                 activeId: modelId
@@ -173,14 +178,23 @@ public final class EngineStateStore: ObservableObject {
                     return EngineModelSnapshotRow(
                         id: row.id, displayName: row.displayName, description: row.description,
                         tier: row.tier, sizeBytes: row.sizeBytes, loadState: loadState,
-                        isActive: row.isActive
+                        isActive: row.isActive,
+                        // A settled tier is no longer downloading, so clear
+                        // the fraction; anything still loading keeps it
+                        // (PR #293 review).
+                        downloadProgress: loadState == .cached || loadState == .loaded
+                            ? nil : row.downloadProgress
                     )
                 },
                 activeId: module.activeId
             )
         case .downloadProgress, .residencyChanged:
-            // No snapshot field carries progress or resident-set membership
-            // today — these surface only via `latestEvents`/`latestEvent(_:)`.
+            // `downloadProgress` frames surface via `latestEvents` /
+            // `latestEvent(_:)`; the snapshot's own per-row
+            // `downloadProgress` (engine#292) is refreshed by
+            // `refreshSnapshot()`, which is the reconciliation arm a
+            // consumer falls back on when a frame is dropped.
+            // `residencyChanged` carries no snapshot field of its own:
             // The stale-row concern `residencyChanged` might suggest is
             // covered engine-side: eviction publishes a per-model
             // `loadStateChanged` for every evicted tier (see

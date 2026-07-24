@@ -1463,10 +1463,20 @@ public actor TouchUpEngine {
             // ~0.6% for the entire transfer and then jump.
             let fraction = await downloadProgress(for: modelType) ?? 0
             // Publish on a 0.5% move OR at least every ~2s (7 ticks) while a
-            // fetch is genuinely in progress, so slow links still animate
-            // instead of looking frozen (engine#292). The old 2%-only
-            // threshold, fed by a source that never advanced, is what
-            // produced a permanently-0% bar.
+            // fetch is in progress (engine#292). The old rule published only
+            // on a >=2% move, so with a per-file source the single 0.58% step
+            // never cleared it and exactly ONE frame escaped per download —
+            // the 0%-forever bar.
+            //
+            // The ~2s arm is a deliberate KEEP-ALIVE, not a progress claim:
+            // measured, `completedUnitCount` is flat for the whole multi-GB
+            // file (see `MLXLLMBackend.load`'s progressHandler comment), so
+            // repeating the same fraction is how a consumer distinguishes
+            // "still downloading" from "engine went away". A consumer must
+            // render an unchanging fraction as indeterminate rather than as
+            // a precise percentage — an identical value arriving every 2s is
+            // the signal for that, and the terminal truth stays
+            // `loadStateChanged`.
             let moved = fraction - lastPublished >= 0.005
             let overdue = fraction > 0 && ticksSincePublish >= 7
             if fraction > 0, fraction < 1, moved || overdue {
