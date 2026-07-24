@@ -106,9 +106,11 @@ actor MLXLLMBackend: LLMBackend {
 
     /// Resolve a locally-bundled/preinstalled snapshot directory for `modelType`
     /// so a packaged app loads its embedded model with no Hugging Face fetch.
-    /// Mirrors `YoozSTTEngine.getModelDirectory`'s probe order, but keyed by
-    /// `modelType.rawValue` (e.g. `yooz-quality-v3`) since multiple LLM tiers
-    /// coexist. `config.json` is the readiness sentinel; a partial drop returns
+    /// Started as a mirror of `YoozSTTEngine.getModelDirectory`'s probe order
+    /// but diverges since engine#284 (the app-group and nested-XPC host-app
+    /// candidates below are LLM-only for now; STT is the tracked follow-up),
+    /// and is keyed by `modelType.rawValue` (e.g. `yooz-quality-v3`) since
+    /// multiple LLM tiers coexist. `config.json` is the readiness sentinel; a partial drop returns
     /// nil and the caller falls through to the HF path. In-process, `Bundle.main`
     /// is the host app, where whisper copies the model to
     /// `Contents/Resources/<id>/` (a folder-reference resource).

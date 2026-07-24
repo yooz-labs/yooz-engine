@@ -24,14 +24,16 @@ import OSLog
 /// `$(TeamIdentifierPrefix)` at build time instead of guessing the running
 /// process's team id at runtime.
 ///
-/// Scope: this redirects the HF hub cache only (`HF_HUB_CACHE`, the highest
-/// -priority branch of `EngineConfig.huggingFaceCacheDirectory`'s resolution
-/// order) — the large downloads (STT/LLM weights) all land there per
-/// AGENTS.md "HF model auto-download". `EngineConfig.modelsDirectory` (a few
-/// smaller LLM/STT artifacts) is a separate, non-overridable
-/// `Application Support` path scoped to each sandboxed process's own
-/// container; it is NOT yet app-group-aware — tracked as a known follow-up,
-/// out of scope for the XPC packaging epic itself.
+/// Scope: `redirectHuggingFaceCache` redirects the HF hub cache
+/// (`HF_HUB_CACHE`, the highest-priority branch of
+/// `EngineConfig.huggingFaceCacheDirectory`'s resolution order) — the large
+/// downloads (STT/LLM weights) all land there per AGENTS.md "HF model
+/// auto-download". `EngineConfig.modelsDirectory` (bundled/preinstalled
+/// snapshots) remains a per-process container path, but since engine#284 it
+/// has a shared app-group TWIN below (`modelsDirectoryURL(inContainer:)` /
+/// `sharedModelsDirectory(groupIdentifier:)`) that the LLM bundled-model
+/// probe checks, so a consumer app can seed its bundled model where the
+/// sandboxed service can actually read it.
 public enum AppGroupWeightsLocation {
     private static let logger = Logger(subsystem: "live.yooz.engine", category: "AppGroupWeightsLocation")
 
