@@ -243,7 +243,7 @@ final class EngineStateAndEventsTests: XCTestCase {
         let active = await secondRun.activeModel
         XCTAssertEqual(
             active, .yoozLight,
-            "an unparseable persisted id must fall back to the compiled-in default"
+            "an unparsable persisted id must fall back to the compiled-in default"
         )
     }
 
