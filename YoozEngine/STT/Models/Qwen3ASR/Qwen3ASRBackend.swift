@@ -58,6 +58,17 @@ public actor Qwen3ASRBackend {
             return
         }
 
+        // Keep the hosting process alive through the load (engine#286):
+        // no network here (weights are pre-fetched), but the cold
+        // Metal/JIT compile runs from the detached warmup path with no
+        // live client — same idle-exit hazard, same fix as
+        // MLXLLMBackend.load's whole-load coverage.
+        let keepAlive = ProcessInfo.processInfo.beginActivity(
+            options: [.automaticTerminationDisabled, .suddenTerminationDisabled],
+            reason: "Qwen3-ASR pipeline load"
+        )
+        defer { ProcessInfo.processInfo.endActivity(keepAlive) }
+
         // Different directory or nothing loaded — drop old, load new.
         if pipeline != nil {
             await unload()

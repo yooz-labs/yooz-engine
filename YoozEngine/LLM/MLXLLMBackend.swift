@@ -218,6 +218,20 @@ actor MLXLLMBackend: LLMBackend {
     func load() async throws {
         guard !isLoaded else { return }
 
+        // Keep the hosting process alive for the whole download+load
+        // (engine#286): in the nested-XPC packaging, launchd idle-exits the
+        // service on TRANSACTION count, not open connections — once the
+        // consumer's event stream closes (Settings window closed), a
+        // detached multi-GB download with no activity token dies with the
+        // process. Ended in the defer on every exit path (success, throw,
+        // cancellation). Harmless in-process / loopback: it just also
+        // disables sudden/automatic termination there for the duration.
+        let keepAlive = ProcessInfo.processInfo.beginActivity(
+            options: [.automaticTerminationDisabled, .suddenTerminationDisabled],
+            reason: "LLM model download/load: \(modelType.rawValue)"
+        )
+        defer { ProcessInfo.processInfo.endActivity(keepAlive) }
+
         // Register this LLM/TouchUp model as resident and size MLX's global
         // buffer cache to the sum across resident categories (per-category
         // budget x category count). Replaces the prior unilateral 512 MB cap,

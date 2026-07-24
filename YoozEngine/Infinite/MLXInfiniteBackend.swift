@@ -245,6 +245,15 @@ public actor MLXInfiniteBackend {
                 "model \(descriptor.selection.rawValue) has no model repository to load"
             )
         }
+        // Keep the hosting process alive for the whole download+load
+        // (engine#286) — InfiniteEngine.loadBackend runs this in a detached
+        // shared Task, the exact launchd idle-exit hazard MLXLLMBackend.load
+        // documents. Ended in the defer on every exit path.
+        let keepAlive = ProcessInfo.processInfo.beginActivity(
+            options: [.automaticTerminationDisabled, .suddenTerminationDisabled],
+            reason: "Infinite model download/load: \(descriptor.selection.rawValue)"
+        )
+        defer { ProcessInfo.processInfo.endActivity(keepAlive) }
         let repoRef = "\(repository.id)@\(repository.revision)"
         mlxInfiniteLogger.info(
             "Loading Infinite \(descriptor.selection.rawValue, privacy: .public) from \(repoRef, privacy: .public)"

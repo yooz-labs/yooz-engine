@@ -410,6 +410,14 @@ public actor Qwen3ASRModelFetcher {
     ) -> AsyncThrowingStream<DownloadProgress, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                // Keep the hosting process alive for the whole download
+                // (engine#286) — launchd idle-exit hazard in the nested-XPC
+                // packaging, same as MLXLLMBackend.load().
+                let keepAlive = ProcessInfo.processInfo.beginActivity(
+                    options: [.automaticTerminationDisabled, .suddenTerminationDisabled],
+                    reason: "Qwen3-ASR model download"
+                )
+                defer { ProcessInfo.processInfo.endActivity(keepAlive) }
                 do {
                     try await self.runDownload(
                         modelDir: modelDir,
