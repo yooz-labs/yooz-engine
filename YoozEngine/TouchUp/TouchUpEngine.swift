@@ -1306,14 +1306,25 @@ public actor TouchUpEngine {
     public func requestDownload(
         _ selection: TouchUpModelSelection
     ) async -> TouchUpModelInfo? {
+        let rows = await availableModels()
+        guard let row = rows.first(where: { $0.id == selection.rawValue }) else {
+            return nil
+        }
+        // Nothing to fetch (PR #290 review): `.cached` is complete on
+        // disk and `.loaded` is resident — dispatching anyway would
+        // materialize weights into GPU memory only for the superseded-
+        // completion path to evict them again (real wasted work, and a
+        // residency blip for the actively generating tier).
+        if row.loadState == .cached || row.loadState == .loaded {
+            return row
+        }
         if backgroundPreloadTasks[selection] == nil {
             backgroundPreloadTasks[selection] = Task {
                 await self.preloadActiveSelectionInBackground(selection)
                 await self.clearBackgroundPreload(selection)
             }
         }
-        let rows = await availableModels()
-        return rows.first(where: { $0.id == selection.rawValue })
+        return row
     }
 
     /// Cancel an in-flight download for `selection` (engine#288 slice 2).
@@ -1328,6 +1339,15 @@ public actor TouchUpEngine {
         if let modelType = LLMModelType(rawValue: selection.rawValue),
            loadState(for: modelType) == .loading {
             await unload(modelType)
+            // Also cancel + clear the OUTER dispatch handle (PR #290
+            // review): `unload` only cancels the inner load task, and
+            // cancellation unwinds cooperatively — until the old dispatch
+            // exits and self-clears, a rapid re-download/re-select of the
+            // same tier would dedupe onto the dying dispatch and silently
+            // no-op. Clearing here guarantees the next request always
+            // starts fresh.
+            backgroundPreloadTasks[selection]?.cancel()
+            backgroundPreloadTasks[selection] = nil
         }
         let rows = await availableModels()
         return rows.first(where: { $0.id == selection.rawValue })
