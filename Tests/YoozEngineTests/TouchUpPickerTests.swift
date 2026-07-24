@@ -20,8 +20,8 @@ final class TouchUpPickerTests: XCTestCase {
     /// SDK clients, depends on these strings. Renaming is a major
     /// SDK bump, so the contract is pinned in a test.
     func testSelectionRawValuesAreStable() {
-        XCTAssertEqual(TouchUpModelSelection.yoozLight.rawValue, "yooz-light-v2")
-        XCTAssertEqual(TouchUpModelSelection.yoozQuality.rawValue, "yooz-quality-v2")
+        XCTAssertEqual(TouchUpModelSelection.yoozLight.rawValue, "yooz-light-v3")
+        XCTAssertEqual(TouchUpModelSelection.yoozQuality.rawValue, "yooz-quality-v3")
         XCTAssertEqual(TouchUpModelSelection.foundationModels.rawValue, "foundation-models")
     }
 
@@ -130,11 +130,11 @@ final class TouchUpPickerTests: XCTestCase {
     /// downstream SDK decode in production.
     func testModelInfoCodableRoundTripPinsWireShape() throws {
         let info = TouchUpModelInfo(
-            id: "yooz-light-v2",
+            id: "yooz-light-v3",
             displayName: "Yooz-Light",
             description: "Fast",
             tier: .light,
-            sizeBytes: 276 * 1024 * 1024,
+            sizeBytes: 605 * 1024 * 1024,
             loadState: .loaded,
             isActive: true
         )

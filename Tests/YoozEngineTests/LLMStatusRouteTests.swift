@@ -72,7 +72,7 @@ final class LLMStatusRouteTests: XCTestCase {
             let status = try JSONDecoder().decode(LLMStatus.self, from: body)
             XCTAssertFalse(status.loaded,
                            "Cold engine: light backend not instantiated, can't be loaded")
-            XCTAssertEqual(status.modelId, "yooz-light-v2",
+            XCTAssertEqual(status.modelId, "yooz-light-v3",
                            "Active model defaults to yoozLight after reset")
             XCTAssertNil(status.progress,
                          "0.0 fraction must collapse to nil (idle, banner hides)")
@@ -114,7 +114,7 @@ final class LLMStatusRouteTests: XCTestCase {
             )
             let (_, body) = try await get("/v1/llm/status")
             let status = try JSONDecoder().decode(LLMStatus.self, from: body)
-            XCTAssertEqual(status.modelId, "yooz-quality-v2",
+            XCTAssertEqual(status.modelId, "yooz-quality-v3",
                            "Status route must report the picker's active id")
             XCTAssertFalse(status.loaded,
                            "Quality not preloaded yet")

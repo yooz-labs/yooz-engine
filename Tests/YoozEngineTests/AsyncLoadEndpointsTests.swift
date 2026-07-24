@@ -147,7 +147,7 @@ final class AsyncLoadEndpointsTests: XCTestCase {
         let engine = TouchUpEngine.shared
         await engine.unload(.yoozLight)
         try await withServer { _ in
-            let body = try JSONEncoder().encode(["model": "yooz-light-v2"])
+            let body = try JSONEncoder().encode(["model": "yooz-light-v3"])
             let (http, _) = try await post("/v1/llm/preload", body: body)
             XCTAssertEqual(http.statusCode, 202,
                            "Default preload must return HTTP 202 (fire-and-forget)")
@@ -179,7 +179,7 @@ final class AsyncLoadEndpointsTests: XCTestCase {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 await engine.unload(.yoozLight)
             }
-            let body = try JSONEncoder().encode(["model": "yooz-light-v2"])
+            let body = try JSONEncoder().encode(["model": "yooz-light-v3"])
             let (http, _) = try await post("/v1/llm/preload?wait=true", body: body)
             XCTAssertNotEqual(http.statusCode, 202,
                               "?wait=true must NOT return 202 — it blocks until the load resolves")

@@ -21,7 +21,7 @@ final class ModelManagementTypesTests: XCTestCase {
         {
           "models": [
             {
-              "id": "yooz-quality-v2",
+              "id": "yooz-quality-v3",
               "module": "llm",
               "displayName": "Yooz-Quality",
               "sizeBytes": 1073741824,
@@ -48,7 +48,7 @@ final class ModelManagementTypesTests: XCTestCase {
         XCTAssertEqual(response.models.count, 2)
 
         let llm = response.models[0]
-        XCTAssertEqual(llm.id, "yooz-quality-v2")
+        XCTAssertEqual(llm.id, "yooz-quality-v3")
         XCTAssertEqual(llm.module, "llm")
         XCTAssertEqual(llm.sizeBytes, 1_073_741_824)
         XCTAssertTrue(llm.cached)
@@ -61,7 +61,7 @@ final class ModelManagementTypesTests: XCTestCase {
     }
 
     func testDeleteModelResultRoundTrips() throws {
-        let original = DeleteModelResult(id: "yooz-light-v2", reclaimedBytes: 289_406_976)
+        let original = DeleteModelResult(id: "yooz-light-v3", reclaimedBytes: 289_406_976)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(DeleteModelResult.self, from: data)
         XCTAssertEqual(decoded, original)
@@ -73,7 +73,7 @@ final class ModelManagementTypesTests: XCTestCase {
           "totalReclaimedBytes": 5368709120,
           "perRepo": {
             "models--mlx-community--parakeet-tdt-0.6b-v3": 4294967296,
-            "models--YoozLabs--Yooz-Quality-v2-Qwen3.5-0.8B-LoRA": 1073741824
+            "models--YoozLabs--Yooz-Quality-v3-Qwen3.5-4B": 1073741824
           }
         }
         """

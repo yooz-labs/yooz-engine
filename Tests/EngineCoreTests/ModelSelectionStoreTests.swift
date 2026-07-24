@@ -27,9 +27,9 @@ final class ModelSelectionStoreTests: XCTestCase {
 
     func testSetThenGetRoundTripsWithinOneInstance() async {
         let store = ModelSelectionStore(fileURL: makeTempFileURL())
-        await store.setActiveId("yooz-quality-v2", for: "touchup")
+        await store.setActiveId("yooz-quality-v3", for: "touchup")
         let id = await store.activeId(for: "touchup")
-        XCTAssertEqual(id, "yooz-quality-v2")
+        XCTAssertEqual(id, "yooz-quality-v3")
     }
 
     /// The actual "survives a restart" contract: write via one actor
@@ -51,13 +51,13 @@ final class ModelSelectionStoreTests: XCTestCase {
     func testModulesArePersistedIndependently() async {
         let fileURL = makeTempFileURL()
         let store = ModelSelectionStore(fileURL: fileURL)
-        await store.setActiveId("yooz-light-v2", for: "touchup")
+        await store.setActiveId("yooz-light-v3", for: "touchup")
         await store.setActiveId("parakeet", for: "stt")
 
         let secondRun = ModelSelectionStore(fileURL: fileURL)
         let touchUp = await secondRun.activeId(for: "touchup")
         let stt = await secondRun.activeId(for: "stt")
-        XCTAssertEqual(touchUp, "yooz-light-v2")
+        XCTAssertEqual(touchUp, "yooz-light-v3")
         XCTAssertEqual(stt, "parakeet")
     }
 
@@ -67,7 +67,7 @@ final class ModelSelectionStoreTests: XCTestCase {
     func testUnknownModuleReturnsNilRatherThanThrowing() async {
         let fileURL = makeTempFileURL()
         let store = ModelSelectionStore(fileURL: fileURL)
-        await store.setActiveId("yooz-light-v2", for: "touchup")
+        await store.setActiveId("yooz-light-v3", for: "touchup")
 
         let secondRun = ModelSelectionStore(fileURL: fileURL)
         let unknown = await secondRun.activeId(for: "some-future-module")
@@ -91,17 +91,17 @@ final class ModelSelectionStoreTests: XCTestCase {
 
         // The store must still be writable after recovering from a corrupt
         // read — a bad file must not permanently wedge persistence.
-        await store.setActiveId("yooz-light-v2", for: "touchup")
+        await store.setActiveId("yooz-light-v3", for: "touchup")
         let written = await store.activeId(for: "touchup")
-        XCTAssertEqual(written, "yooz-light-v2")
+        XCTAssertEqual(written, "yooz-light-v3")
     }
 
     func testOverwritingAnExistingSelectionReplacesIt() async {
         let store = ModelSelectionStore(fileURL: makeTempFileURL())
-        await store.setActiveId("yooz-light-v2", for: "touchup")
-        await store.setActiveId("yooz-quality-v2", for: "touchup")
+        await store.setActiveId("yooz-light-v3", for: "touchup")
+        await store.setActiveId("yooz-quality-v3", for: "touchup")
         let id = await store.activeId(for: "touchup")
-        XCTAssertEqual(id, "yooz-quality-v2")
+        XCTAssertEqual(id, "yooz-quality-v3")
     }
 
     /// The on-disk artifact is the migration/debug contract: a flat
@@ -113,7 +113,7 @@ final class ModelSelectionStoreTests: XCTestCase {
         let fileURL = makeTempFileURL()
         defer { try? FileManager.default.removeItem(at: fileURL) }
         let store = ModelSelectionStore(fileURL: fileURL)
-        await store.setActiveId("yooz-quality-v2", for: "touchup")
+        await store.setActiveId("yooz-quality-v3", for: "touchup")
         await store.setActiveId("parakeet", for: "stt")
 
         let raw = try Data(contentsOf: fileURL)
@@ -121,7 +121,7 @@ final class ModelSelectionStoreTests: XCTestCase {
             JSONSerialization.jsonObject(with: raw) as? [String: String],
             "on-disk shape must be a flat {module: activeId} string map"
         )
-        XCTAssertEqual(decoded, ["touchup": "yooz-quality-v2", "stt": "parakeet"])
+        XCTAssertEqual(decoded, ["touchup": "yooz-quality-v3", "stt": "parakeet"])
     }
 
     /// A persist failure is best-effort but must be OBSERVABLE: it sets
@@ -138,17 +138,17 @@ final class ModelSelectionStoreTests: XCTestCase {
         let failingStore = ModelSelectionStore(
             fileURL: blockingFile.appendingPathComponent("nested.json")
         )
-        await failingStore.setActiveId("yooz-light-v2", for: "touchup")
+        await failingStore.setActiveId("yooz-light-v3", for: "touchup")
         let failure = await failingStore.lastPersistError
         XCTAssertNotNil(failure, "a failed persist must record lastPersistError")
 
         // In-memory selection still took effect despite the disk failure.
         let inMemory = await failingStore.activeId(for: "touchup")
-        XCTAssertEqual(inMemory, "yooz-light-v2")
+        XCTAssertEqual(inMemory, "yooz-light-v3")
 
         // A store with a writable path clears the error on success.
         let workingStore = ModelSelectionStore(fileURL: makeTempFileURL())
-        await workingStore.setActiveId("yooz-light-v2", for: "touchup")
+        await workingStore.setActiveId("yooz-light-v3", for: "touchup")
         let cleared = await workingStore.lastPersistError
         XCTAssertNil(cleared)
     }

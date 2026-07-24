@@ -1,10 +1,10 @@
 {
-  "activeId" : "yooz-light-v2",
+  "activeId" : "yooz-light-v3",
   "models" : [
     {
       "description" : "Fast, on-device cleanup",
       "displayName" : "Yooz-Light",
-      "id" : "yooz-light-v2",
+      "id" : "yooz-light-v3",
       "isActive" : true,
       "loadState" : "cached",
       "sizeBytes" : 550000000,

@@ -7,9 +7,9 @@ import Foundation
 
 /// Mode-specific prompt definitions for touch-up processing.
 ///
-/// Light prompts target Yooz-Light v2 (Qwen2.5-0.5B base, pattern-level,
-/// rule-explicit). Quality prompts target Yooz-Quality v2 (Qwen3.5-0.8B
-/// base, context-aware, `/no_think` required).
+/// Light prompts target Yooz-Light v3 (KD Qwen3.5-0.8B base,
+/// pattern-level, rule-explicit). Quality prompts target Yooz-Quality v3
+/// (KD Qwen3.5-4B base, context-aware).
 ///
 /// Source of truth: `yooz-benchmark/finetune-pipeline/scripts/prepare_data.py`
 /// (constants `LIGHT_PROOFREAD`, `LIGHT_REWRITE`, `QUALITY_STANDARD`,
@@ -27,7 +27,7 @@ enum YoozPrompts {
     /// (engine #113 / yooz-whisper #182).
     static let resultPlaceholder = "corrected text"
 
-    // MARK: - Light Model Prompts (Yooz-Light, Qwen2.5-0.5B)
+    // MARK: - Light Model Prompts (Yooz-Light, KD Qwen3.5-0.8B)
 
     /// Light model Standard mode — mirrors `LIGHT_PROOFREAD`.
     /// Mechanical grammar + capitalization + spoken-number conversion +
@@ -81,7 +81,7 @@ enum YoozPrompts {
         Remove: "scratch that", "never mind", "delete that" and preceding phrase. Convert spoken numbers and version numbers. Fix grammar and misheard words. Always respond with ONLY a JSON object. Never include explanations.
         """
 
-    // MARK: - Quality Model Prompts (Yooz-Quality, Qwen3.5-0.8B)
+    // MARK: - Quality Model Prompts (Yooz-Quality, KD Qwen3.5-4B)
     //
     // `/no_think` is a Qwen3-specific prefix that disables chain-of-thought
     // reasoning, producing direct JSON output instead of "thinking" blocks

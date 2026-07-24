@@ -1,9 +1,9 @@
 {
   "mode" : "full",
-  "modelUsed" : "yooz-light-v2",
+  "modelUsed" : "yooz-light-v3",
   "processingTimeMs" : 310,
   "result" : "Hello, world.",
   "warnings" : [
-    "yooz-quality-v2 not loaded; fell back to yooz-light-v2"
+    "yooz-quality-v3 not loaded; fell back to yooz-light-v3"
   ]
 }

@@ -88,8 +88,8 @@ final class ModelStoreTests: XCTestCase {
 
     func testHubRepoDirNameMatchesHubCacheConvention() {
         XCTAssertEqual(
-            ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: "YoozLabs/Yooz-Quality-v2"),
-            "models--YoozLabs--Yooz-Quality-v2"
+            ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: "YoozLabs/Yooz-Quality-v3"),
+            "models--YoozLabs--Yooz-Quality-v3"
         )
         XCTAssertNil(ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: "  "))
         XCTAssertNil(ModelCacheDescriptor.hubRepoDirName(forHuggingFaceID: "/bad"))

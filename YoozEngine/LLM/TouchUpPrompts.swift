@@ -30,7 +30,7 @@ enum TouchUpPrompts {
 
     // MARK: - Validation + Proofreading (Quality Model)
 
-    /// Prompt for validation + proofreading with Yooz-Quality (Qwen3.5-0.8B)
+    /// Prompt for validation + proofreading with Yooz-Quality (KD Qwen3.5-4B)
     /// Used when vocabulary replacements need contextual validation
     static let validateAndProofread = """
         Do TWO tasks: (1) For each replacement, decide if it fits the context. (2) Fix grammar, capitalize, convert spoken numbers to digits.

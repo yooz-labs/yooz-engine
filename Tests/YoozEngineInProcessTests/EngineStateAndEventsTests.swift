@@ -69,7 +69,7 @@ final class EngineStateAndEventsTests: XCTestCase {
         let stream = try await transport.openEvents()
 
         let body = try JSONEncoder().encode(
-            TouchUpSetModelRequest(id: "yooz-quality-v2", preload: false)
+            TouchUpSetModelRequest(id: "yooz-quality-v3", preload: false)
         )
         _ = try await transport.post("/v1/touchup/model", body: body)
 
@@ -78,15 +78,15 @@ final class EngineStateAndEventsTests: XCTestCase {
         // singleton, so scan (bounded) for the one this test caused rather
         // than asserting the very next event.
         let matched = try await firstMatchingEvent(stream, timeoutSeconds: 5) {
-            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v3"
         }
-        XCTAssertNotNil(matched, "expected a modelChanged event for yooz-quality-v2")
+        XCTAssertNotNil(matched, "expected a modelChanged event for yooz-quality-v3")
 
         // Leave the shared engine in a known state for any other in-process
         // test relying on the .yoozLight default.
         _ = try await transport.post(
             "/v1/touchup/model",
-            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v2", preload: false))
+            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v3", preload: false))
         )
     }
 
@@ -213,6 +213,37 @@ final class EngineStateAndEventsTests: XCTestCase {
         XCTAssertEqual(
             models.first(where: { $0.isActive })?.id,
             TouchUpModelSelection.yoozQuality.rawValue
+        )
+    }
+
+    /// A persisted id written by a pre-#282 build (`yooz-quality-v2`) no
+    /// longer parses as a `TouchUpModelSelection`. The restore must fall
+    /// back to the compiled-in default (logging the mismatch) rather than
+    /// crash or silently adopt an unknown id (PR #283 review).
+    func testLegacyPersistedIdFallsBackToCompiledDefault() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("touchup-selection-legacy-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let store = ModelSelectionStore(fileURL: fileURL)
+
+        let firstRun = TouchUpEngine(selectionStore: store)
+        _ = try await firstRun.setActiveModelAsync(.yoozQuality, preload: false)
+
+        // Rewrite the persisted id to the retired v2 wire id, exactly as a
+        // pre-upgrade engine build would have left it on disk.
+        let json = try String(contentsOf: fileURL, encoding: .utf8)
+            .replacingOccurrences(of: "yooz-quality-v3", with: "yooz-quality-v2")
+        try json.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        // A fresh store over the same file: the first store instance holds
+        // the pre-rewrite id in memory, and a real engine restart would
+        // re-read from disk.
+        let restartStore = ModelSelectionStore(fileURL: fileURL)
+        let secondRun = TouchUpEngine(selectionStore: restartStore)
+        let active = await secondRun.activeModel
+        XCTAssertEqual(
+            active, .yoozLight,
+            "an unparsable persisted id must fall back to the compiled-in default"
         )
     }
 

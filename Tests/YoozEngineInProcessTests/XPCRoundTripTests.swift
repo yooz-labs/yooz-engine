@@ -142,21 +142,21 @@ final class XPCRoundTripTests: XCTestCase {
         let stream = try await client.openEvents()
 
         let body = try JSONEncoder().encode(
-            TouchUpSetModelRequest(id: "yooz-quality-v2", preload: false)
+            TouchUpSetModelRequest(id: "yooz-quality-v3", preload: false)
         )
         _ = try await client.transport.post("/v1/touchup/model", body: body)
 
         let matched = try await Self.firstMatchingEvent(stream, timeoutSeconds: 5) {
-            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v3"
         }
-        XCTAssertNotNil(matched, "expected a modelChanged event for yooz-quality-v2 delivered over XPC")
+        XCTAssertNotNil(matched, "expected a modelChanged event for yooz-quality-v3 delivered over XPC")
 
         // Leave the shared engine in a known state for any other in-process
         // test relying on the .yoozLight default (mirrors
         // EngineStateAndEventsTests' own cleanup for the same reason).
         _ = try await client.transport.post(
             "/v1/touchup/model",
-            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v2", preload: false))
+            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v3", preload: false))
         )
     }
 
@@ -258,17 +258,17 @@ final class XPCRoundTripTests: XCTestCase {
         let streamB = try await client.openEvents()
 
         let body = try JSONEncoder().encode(
-            TouchUpSetModelRequest(id: "yooz-quality-v2", preload: false)
+            TouchUpSetModelRequest(id: "yooz-quality-v3", preload: false)
         )
         _ = try await client.transport.post("/v1/touchup/model", body: body)
 
         // Sequential scans are safe: each client-side AsyncStream buffers
         // (unbounded default), so B's frame waits while A is drained.
         let matchedA = try await Self.firstMatchingEvent(streamA, timeoutSeconds: 5) {
-            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v3"
         }
         let matchedB = try await Self.firstMatchingEvent(streamB, timeoutSeconds: 5) {
-            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v2"
+            $0.kind == .modelChanged && $0.module == "touchup" && $0.modelId == "yooz-quality-v3"
         }
         XCTAssertNotNil(matchedA, "the first concurrent subscription must receive the event")
         XCTAssertNotNil(matchedB, "the second concurrent subscription must receive the event")
@@ -277,7 +277,7 @@ final class XPCRoundTripTests: XCTestCase {
         // round-trip test above).
         _ = try await client.transport.post(
             "/v1/touchup/model",
-            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v2", preload: false))
+            body: try JSONEncoder().encode(TouchUpSetModelRequest(id: "yooz-light-v3", preload: false))
         )
     }
 

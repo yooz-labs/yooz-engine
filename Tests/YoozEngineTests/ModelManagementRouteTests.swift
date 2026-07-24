@@ -91,9 +91,9 @@ final class ModelManagementRouteTests: XCTestCase {
 
     @MainActor
     func testDeleteActiveModelReturns409() async throws {
-        try await resetEngineState()  // active == yooz-light-v2
+        try await resetEngineState()  // active == yooz-light-v3
         try await withServer { _ in
-            let (http, payload) = try await send("DELETE", "/v1/models/yooz-light-v2")
+            let (http, payload) = try await send("DELETE", "/v1/models/yooz-light-v3")
             XCTAssertEqual(http.statusCode, 409)
             let json = try XCTUnwrap(
                 JSONSerialization.jsonObject(with: payload) as? [String: Any]

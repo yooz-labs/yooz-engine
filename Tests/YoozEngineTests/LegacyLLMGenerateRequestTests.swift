@@ -14,12 +14,12 @@ import XCTest
 /// pattern of keeping transport-specific compat out of the shared DTO.
 final class LegacyLLMGenerateRequestTests: XCTestCase {
     func testDecodesCanonicalCamelCase() throws {
-        let json = #"{"prompt":"hi","model":"yooz-light-v2","systemPrompt":"be terse"}"#
+        let json = #"{"prompt":"hi","model":"yooz-light-v3","systemPrompt":"be terse"}"#
         let decoded = try JSONDecoder().decode(
             LegacyLLMGenerateRequest.self, from: Data(json.utf8)
         )
         XCTAssertEqual(decoded.prompt, "hi")
-        XCTAssertEqual(decoded.model, "yooz-light-v2")
+        XCTAssertEqual(decoded.model, "yooz-light-v3")
         XCTAssertEqual(decoded.systemPrompt, "be terse")
         XCTAssertNil(decoded.workloadClass)
     }

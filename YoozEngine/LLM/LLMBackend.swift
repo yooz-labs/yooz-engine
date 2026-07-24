@@ -23,10 +23,12 @@ import Foundation
 /// `public` because `APIServer` (a different target on the modular
 /// build) consumes this enum directly via the picker routes.
 public enum LLMModelType: String, CaseIterable, Sendable {
-    /// Fast proofread tier. Yooz-Light v2 LoRA on Qwen2.5-0.5B base.
-    case yoozLight = "yooz-light-v2"
-    /// High-quality proofread tier. Yooz-Quality v2 LoRA on Qwen3.5-0.8B base.
-    case yoozQuality = "yooz-quality-v2"
+    /// Fast proofread tier. Yooz-Light v3, fused 6-bit on the KD
+    /// Qwen3.5-0.8B QAT base (yooz-benchmark#29).
+    case yoozLight = "yooz-light-v3"
+    /// High-quality rewrite tier. Yooz-Quality v3, fused 6-bit on the KD
+    /// Qwen3.5-4B QAT base. Replaces the former Qwen3.5-9B fallback.
+    case yoozQuality = "yooz-quality-v3"
 
     public var displayName: String {
         switch self {
@@ -40,9 +42,9 @@ public enum LLMModelType: String, CaseIterable, Sendable {
     public var description: String {
         switch self {
         case .yoozLight:
-            return "Fast proofreading (~200ms)"
+            return "Fast proofreading (~300ms)"
         case .yoozQuality:
-            return "High quality proofreading (~310ms)"
+            return "High quality rewriting (~1s)"
         }
     }
 
@@ -52,9 +54,23 @@ public enum LLMModelType: String, CaseIterable, Sendable {
     public var estimatedSize: Int64 {
         switch self {
         case .yoozLight:
-            return 276 * 1024 * 1024   // ~276 MB (Qwen2.5-0.5B-Instruct-4bit)
+            return 605 * 1024 * 1024   // ~605 MB (Yooz-Light-v3 fused 6-bit)
         case .yoozQuality:
-            return 424 * 1024 * 1024   // ~424 MB (Yooz-Quality-v2 fused 4-bit)
+            return 3277 * 1024 * 1024  // ~3.2 GB (Yooz-Quality-v3 fused 6-bit)
+        }
+    }
+
+    /// Best-effort per-model latency baseline in milliseconds for
+    /// picker UX hints (`LLMModelInfo.latencyHintMs`). Single source of
+    /// truth: `APIServer.infoEntry` reads this; keep it consistent with
+    /// `description` above (yooz-benchmark research/issue-24 harness
+    /// measured 341 / 1,226 ms at batch 1).
+    public var latencyHintMs: Int {
+        switch self {
+        case .yoozLight:
+            return 300
+        case .yoozQuality:
+            return 1200
         }
     }
 
@@ -66,12 +82,13 @@ public enum LLMModelType: String, CaseIterable, Sendable {
     public var huggingFaceID: String {
         switch self {
         case .yoozLight:
-            return "YoozLabs/Yooz-Light-v2-Qwen2.5-0.5B-LoRA"
+            return "YoozLabs/Yooz-Light-v3-Qwen3.5-0.8B"
         case .yoozQuality:
-            // v2 publishes fused weights only; the adapter-pollution loader
-            // crash history is regression-guarded by
+            // v3 publishes fused weights only (publish-gated: no adapter
+            // files or lora_* keys); the adapter-pollution loader crash
+            // history is regression-guarded by
             // `testPreloadLoadsQualityModelV2`.
-            return "YoozLabs/Yooz-Quality-v2-Qwen3.5-0.8B-LoRA"
+            return "YoozLabs/Yooz-Quality-v3-Qwen3.5-4B"
         }
     }
 }

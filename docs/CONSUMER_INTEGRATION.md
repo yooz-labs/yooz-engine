@@ -368,7 +368,7 @@ let cleaned = await client.touchUp.touchUp(text: "...", mode: .standard)
 
 // TouchUp model picker (canonical pattern)
 let models = try await client.touchUp.availableModels()  // TouchUpModelsResponse
-try await client.touchUp.setModel(id: "yooz-quality-v2", preload: true)
+try await client.touchUp.setModel(id: "yooz-quality-v3", preload: true)
 
 // Cross-module state snapshot + live events (engine#226) — see "Engine-owned
 // selection state" below for the full `EngineStateStore` recipe.

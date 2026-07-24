@@ -255,7 +255,7 @@ final class InProcessTransportTests: XCTestCase {
         // Apple Intelligence (foundation-models) has no LLMModelType mapping, so
         // it 404s rather than 409s; the active-rejection contract applies to the
         // deletable LLM tiers.
-        guard activeId == "yooz-light-v2" || activeId == "yooz-quality-v2" else {
+        guard activeId == "yooz-light-v3" || activeId == "yooz-quality-v3" else {
             throw XCTSkip("active model \(activeId) is not a deletable LLM tier")
         }
         do {
