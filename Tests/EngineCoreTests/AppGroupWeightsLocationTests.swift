@@ -55,6 +55,47 @@ final class AppGroupWeightsLocationTests: XCTestCase {
         )
     }
 
+    /// The shared models directory sits next to the hub cache under the
+    /// same purge-safe `Application Support/YoozEngine` root (engine#284):
+    /// seeded bundled models must survive disk pressure exactly like HF
+    /// downloads do.
+    func testModelsDirectoryURLSitsUnderApplicationSupport() {
+        let container = URL(fileURLWithPath: "/tmp/fake-app-group-container", isDirectory: true)
+        let models = AppGroupWeightsLocation.modelsDirectoryURL(inContainer: container)
+
+        XCTAssertTrue(models.path.hasPrefix(container.path))
+        XCTAssertTrue(models.path.hasSuffix("/Application Support/YoozEngine/Models"))
+        XCTAssertFalse(models.path.contains("/Caches/"))
+    }
+
+    /// `sharedModelsDirectory` is read-only resolution: an empty identifier
+    /// is nil, and a successful resolution must NOT create the directory —
+    /// the probing side (XPC service) must never mint an empty tree just by
+    /// looking (creation belongs to the seeding side).
+    func testSharedModelsDirectoryResolvesWithoutCreating() throws {
+        XCTAssertNil(AppGroupWeightsLocation.sharedModelsDirectory(groupIdentifier: ""))
+
+        // Unsandboxed test process: containerURL resolves for any
+        // well-formed id (documented Apple behavior, see
+        // redirectHuggingFaceCache's doc comment).
+        let groupID = "test.yooz.engine.\(UUID().uuidString)"
+        let models = try XCTUnwrap(
+            AppGroupWeightsLocation.sharedModelsDirectory(groupIdentifier: groupID)
+        )
+        XCTAssertTrue(models.path.hasSuffix("/Application Support/YoozEngine/Models"))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: models.path),
+            "resolution must not create the directory"
+        )
+        // The transient group container root macOS materializes on resolve
+        // is harmless, but clean up if it appeared.
+        if let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: groupID
+        ) {
+            try? FileManager.default.removeItem(at: container)
+        }
+    }
+
     /// An empty group id is always a no-op — never attempt to resolve a
     /// blank identifier (which would otherwise be a confusing failure mode
     /// distinct from "entitlement missing").

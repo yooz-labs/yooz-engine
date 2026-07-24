@@ -106,9 +106,11 @@ actor MLXLLMBackend: LLMBackend {
 
     /// Resolve a locally-bundled/preinstalled snapshot directory for `modelType`
     /// so a packaged app loads its embedded model with no Hugging Face fetch.
-    /// Mirrors `YoozSTTEngine.getModelDirectory`'s probe order, but keyed by
-    /// `modelType.rawValue` (e.g. `yooz-quality-v3`) since multiple LLM tiers
-    /// coexist. `config.json` is the readiness sentinel; a partial drop returns
+    /// Started as a mirror of `YoozSTTEngine.getModelDirectory`'s probe order
+    /// but diverges since engine#284 (the app-group and nested-XPC host-app
+    /// candidates below are LLM-only for now; STT is the tracked follow-up),
+    /// and is keyed by `modelType.rawValue` (e.g. `yooz-quality-v3`) since
+    /// multiple LLM tiers coexist. `config.json` is the readiness sentinel; a partial drop returns
     /// nil and the caller falls through to the HF path. In-process, `Bundle.main`
     /// is the host app, where whisper copies the model to
     /// `Contents/Resources/<id>/` (a folder-reference resource).
@@ -117,6 +119,21 @@ actor MLXLLMBackend: LLMBackend {
         var candidates: [URL] = [
             EngineConfig.modelsDirectory.appendingPathComponent(id)
         ]
+        // Shared app-group models directory (engine#284): the production
+        // path for a sandboxed XPC service to see the consumer app's
+        // bundled model. The app seeds its bundled copy there on first
+        // launch (APFS clone); both processes carry the same
+        // `YoozAppGroupIdentifier` Info.plist key (the engine#227 weights
+        // wiring), so the probe works identically in-process and in the
+        // service.
+        if let groupID = Bundle.main.object(
+            forInfoDictionaryKey: "YoozAppGroupIdentifier"
+        ) as? String,
+            let sharedModels = AppGroupWeightsLocation.sharedModelsDirectory(
+                groupIdentifier: groupID
+            ) {
+            candidates.append(sharedModels.appendingPathComponent(id))
+        }
         if let resourcePath = Bundle.main.resourcePath {
             let resourceDir = URL(fileURLWithPath: resourcePath)
             candidates.append(
@@ -124,7 +141,48 @@ actor MLXLLMBackend: LLMBackend {
             )
             candidates.append(resourceDir.appendingPathComponent(id))
         }
+        candidates += hostAppResourceCandidates(
+            forNestedServiceAt: Bundle.main.bundleURL, id: id
+        )
         return firstModelDirectory(containingConfigIn: candidates)
+    }
+
+    /// Host-app resource candidates for a NESTED XPC service (the whisper#267
+    /// packaging): inside the service, `Bundle.main` is the `.xpc` bundle at
+    /// `<app>/Contents/XPCServices/<service>.xpc`, so the host app's own
+    /// `Contents/Resources` — where a consumer bundles its zero-download
+    /// model — is invisible to the `resourcePath` probes above and the
+    /// service re-downloaded a model the app already carries (engine#284).
+    /// Returns the host app's `Resources/Models/<id>` and `Resources/<id>`
+    /// (same order the in-process probes use), or `[]` when `bundleURL` is
+    /// not under `Contents/XPCServices/` (in-process builds, the menu-bar
+    /// app, tests). Pure + static: derivation is testable without a real
+    /// bundle.
+    ///
+    /// KNOWN LIMIT (verified live on a Release whisper build, engine#284):
+    /// a SANDBOXED service is silently denied file access to the host
+    /// app's Resources, so under the App Sandbox these candidates never
+    /// match and the app-group seed above is the mechanism that actually
+    /// fires. Kept because the probe is fail-safe by construction (a
+    /// denied read just fails the `config.json` check and the caller falls
+    /// through) and it makes UNSANDBOXED nested layouts — the dev
+    /// harnesses — resolve the bundle with no seed step.
+    static func hostAppResourceCandidates(
+        forNestedServiceAt bundleURL: URL, id: String
+    ) -> [URL] {
+        let components = bundleURL.pathComponents
+        guard components.count >= 3,
+              components[components.count - 2] == "XPCServices",
+              components[components.count - 3] == "Contents"
+        else { return [] }
+        let hostResources = bundleURL
+            .deletingLastPathComponent() // XPCServices
+            .deletingLastPathComponent() // Contents
+            .appendingPathComponent("Resources")
+        return [
+            hostResources.appendingPathComponent("Models").appendingPathComponent(id),
+            hostResources.appendingPathComponent(id),
+        ]
     }
 
     /// Whether a complete copy of `modelType` ships in the app bundle (or the
