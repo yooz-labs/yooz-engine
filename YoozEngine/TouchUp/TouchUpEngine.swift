@@ -54,12 +54,12 @@ public actor TouchUpEngine {
     /// return before the restore has fully settled.
     private var restoreTask: Task<Void, Never>?
 
-    /// Most recent background-preload dispatch from `setActiveModelAsync`
-    /// (PR #239 review). A new switch cancels the previous handle so a
-    /// superseded tier's progress watcher stops promptly and its
-    /// late-completing load skips eviction/eventing (the task checks
-    /// `Task.isCancelled` after its load settles).
-    private var backgroundPreloadTask: Task<Void, Never>?
+    /// In-flight background-preload dispatches from `setActiveModelAsync`,
+    /// keyed per tier (engine#288). A switch never cancels another tier's
+    /// dispatch — its download runs to completion in the background — and
+    /// same-tier re-requests dedupe onto the existing handle. Entries
+    /// remove themselves on completion via `clearBackgroundPreload`.
+    private var backgroundPreloadTasks: [TouchUpModelSelection: Task<Void, Never>] = [:]
 
     /// The light model backend (Yooz-Light, KD Qwen3.5-0.8B)
     private var lightModel: MLXLLMBackend?
@@ -355,11 +355,17 @@ public actor TouchUpEngine {
     /// So "evicted" means `isLightModelLoaded == false`, not `lightModel == nil`.
     private func evictModelsExcept(_ keep: TouchUpModelSelection) async {
         var evicted: [TouchUpModelSelection] = []
-        if keep != .yoozLight {
+        // NEVER evict a tier whose load is still in flight (engine#288):
+        // `unload(_:)` cancels the in-flight load task, which is what used
+        // to destroy a mid-download tier the moment the user switched to a
+        // faster one. A `.loading` tier holds no settled weights yet, so
+        // skipping it costs no memory; its own dispatch's superseded-
+        // completion path frees the memory copy if the user has moved on.
+        if keep != .yoozLight, loadStates[.yoozLight] != .loading {
             await unload(.yoozLight)
             evicted.append(.yoozLight)
         }
-        if keep != .yoozQuality {
+        if keep != .yoozQuality, loadStates[.yoozQuality] != .loading {
             await unload(.yoozQuality)
             evicted.append(.yoozQuality)
         }
@@ -1265,13 +1271,27 @@ public actor TouchUpEngine {
 
         guard preload else { return row }
 
-        // Supersede any previous background preload (PR #239 review): a
-        // rapid A→B picker double-switch cancels A's dispatch so its
-        // progress watcher stops promptly and its late completion skips
-        // eviction/eventing (checked via `Task.isCancelled` inside).
-        backgroundPreloadTask?.cancel()
-        backgroundPreloadTask = Task { await self.preloadActiveSelectionInBackground(selection) }
+        // Per-tier dispatches (engine#288): a switch must NEVER cancel
+        // another tier's in-flight dispatch — its download continues in the
+        // background and its progress watcher stays alive for the real
+        // duration. Same-tier re-requests dedupe onto the running dispatch
+        // (enqueueLoad already coalesces the underlying load). The
+        // superseded-completion guard inside the dispatch handles the
+        // "user moved on before I finished" case.
+        if backgroundPreloadTasks[selection] == nil {
+            backgroundPreloadTasks[selection] = Task {
+                await self.preloadActiveSelectionInBackground(selection)
+                await self.clearBackgroundPreload(selection)
+            }
+        }
         return row
+    }
+
+    /// Remove a finished dispatch's handle (actor-isolated bookkeeping for
+    /// `backgroundPreloadTasks`; called by the dispatch itself on the way
+    /// out so a later re-selection can start a fresh dispatch).
+    private func clearBackgroundPreload(_ selection: TouchUpModelSelection) {
+        backgroundPreloadTasks[selection] = nil
     }
 
     /// Background load + single-resident eviction for
@@ -1341,13 +1361,23 @@ public actor TouchUpEngine {
         }
 
         // Only reached on a successful load, and only while this dispatch
-        // is still the CURRENT one on both axes: `activeModel == selection`
-        // (a rapid A→B double-switch must not have A's late completion
-        // evict the tier the user has since switched to) and
-        // `!Task.isCancelled` (a superseded dispatch was cancelled by
-        // `setActiveModelAsync` and must not run eviction even if its load
-        // happened to finish).
-        guard await activeModel == selection, !Task.isCancelled else { return }
+        // is still the CURRENT one: `activeModel == selection` (a
+        // superseded tier's late completion must not evict the tier the
+        // user has since switched to). Superseded completion (engine#288):
+        // free the MEMORY copy but keep the downloaded weights on disk —
+        // the download is never lost, and switching back later loads from
+        // disk instantly. Publish the tier's settled row state (typically
+        // `.cached` now) so the picker reflects "downloaded, not resident".
+        guard await activeModel == selection, !Task.isCancelled else {
+            if let modelType = LLMModelType(rawValue: selection.rawValue) {
+                await unload(modelType)
+                let rows = await availableModels()
+                if let row = rows.first(where: { $0.id == selection.rawValue }) {
+                    await publishLoadStateChanged(selection, state: row.loadState)
+                }
+            }
+            return
+        }
         await evictModelsExcept(selection)
         await EngineEventBus.shared.publish(EngineEvent(
             kind: .residencyChanged, module: Self.selectionStoreModule, modelId: selection.rawValue
