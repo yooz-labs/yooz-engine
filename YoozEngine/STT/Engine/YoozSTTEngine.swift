@@ -212,6 +212,17 @@ public final class YoozSTTEngine: ObservableObject, @unchecked Sendable {
             return
         }
 
+        // Keep the hosting process alive for the whole download+load
+        // (engine#286) — same launchd idle-exit hazard as
+        // MLXLLMBackend.load(): a detached STT download in the nested-XPC
+        // service dies with the process once the consumer's event stream
+        // closes. Ended in the defer on every exit path.
+        let keepAlive = ProcessInfo.processInfo.beginActivity(
+            options: [.automaticTerminationDisabled, .suddenTerminationDisabled],
+            reason: "STT model download/load: \(language.rawValue)"
+        )
+        defer { ProcessInfo.processInfo.endActivity(keepAlive) }
+
         // If switching languages, stop first
         if model != nil && currentLanguage != language {
             NSLog("YoozSTTEngine: Switching language from %@ to %@", currentLanguage.rawValue, language.rawValue)
