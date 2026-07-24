@@ -117,6 +117,21 @@ actor MLXLLMBackend: LLMBackend {
         var candidates: [URL] = [
             EngineConfig.modelsDirectory.appendingPathComponent(id)
         ]
+        // Shared app-group models directory (engine#284): the production
+        // path for a sandboxed XPC service to see the consumer app's
+        // bundled model. The app seeds its bundled copy there on first
+        // launch (APFS clone); both processes carry the same
+        // `YoozAppGroupIdentifier` Info.plist key (the engine#227 weights
+        // wiring), so the probe works identically in-process and in the
+        // service.
+        if let groupID = Bundle.main.object(
+            forInfoDictionaryKey: "YoozAppGroupIdentifier"
+        ) as? String,
+            let sharedModels = AppGroupWeightsLocation.sharedModelsDirectory(
+                groupIdentifier: groupID
+            ) {
+            candidates.append(sharedModels.appendingPathComponent(id))
+        }
         if let resourcePath = Bundle.main.resourcePath {
             let resourceDir = URL(fileURLWithPath: resourcePath)
             candidates.append(
@@ -140,11 +155,16 @@ actor MLXLLMBackend: LLMBackend {
     /// (same order the in-process probes use), or `[]` when `bundleURL` is
     /// not under `Contents/XPCServices/` (in-process builds, the menu-bar
     /// app, tests). Pure + static: derivation is testable without a real
-    /// bundle. Fail-safe by construction — if the service's sandbox denies
-    /// reading the host app's Resources, the `config.json` probe in
-    /// `firstModelDirectory(containingConfigIn:)` fails and the caller
-    /// falls through to the HF path exactly as before this candidate
-    /// existed.
+    /// bundle.
+    ///
+    /// KNOWN LIMIT (verified live on a Release whisper build, engine#284):
+    /// a SANDBOXED service is silently denied file access to the host
+    /// app's Resources, so under the App Sandbox these candidates never
+    /// match and the app-group seed above is the mechanism that actually
+    /// fires. Kept because the probe is fail-safe by construction (a
+    /// denied read just fails the `config.json` check and the caller falls
+    /// through) and it makes UNSANDBOXED nested layouts — the dev
+    /// harnesses — resolve the bundle with no seed step.
     static func hostAppResourceCandidates(
         forNestedServiceAt bundleURL: URL, id: String
     ) -> [URL] {

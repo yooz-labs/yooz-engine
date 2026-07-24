@@ -52,6 +52,43 @@ public enum AppGroupWeightsLocation {
             .appendingPathComponent("hub", isDirectory: true)
     }
 
+    /// Pure path construction: the shared models directory inside an
+    /// already-resolved app-group container — the group-container twin of
+    /// `EngineConfig.modelsDirectory`, holding complete model snapshots
+    /// keyed by model id (engine#284). A consumer app SEEDS its bundled
+    /// zero-download model here on first launch (an APFS clone, no extra
+    /// disk), and the sandboxed XPC service — which can read neither the
+    /// host app's `Contents/Resources` (sandbox-denied, verified live) nor
+    /// the app's own container — resolves the SAME directory through its
+    /// matching group entitlement. Same `Application Support` (not Caches)
+    /// rationale as the hub cache above.
+    public static func modelsDirectoryURL(inContainer container: URL) -> URL {
+        container
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("YoozEngine", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+    }
+
+    /// Resolve the shared models directory for `groupIdentifier`, or `nil`
+    /// when the identifier is empty or the container doesn't resolve (no
+    /// entitlement / malformed id). Read-only convenience over
+    /// `modelsDirectoryURL(inContainer:)` — does NOT create anything: the
+    /// probe side (the XPC service) must never mint an empty directory tree
+    /// just by looking, and the seeding side creates what it needs when it
+    /// actually copies.
+    public static func sharedModelsDirectory(
+        groupIdentifier: String,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard !groupIdentifier.isEmpty,
+              let container = fileManager.containerURL(
+                  forSecurityApplicationGroupIdentifier: groupIdentifier
+              )
+        else { return nil }
+        return modelsDirectoryURL(inContainer: container)
+    }
+
     /// Resolve `groupIdentifier`'s shared container and point `HF_HUB_CACHE`
     /// at its hub-cache subdirectory, creating it if needed. Call this once,
     /// early in process startup, BEFORE any module touches the HF
