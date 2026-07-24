@@ -138,6 +138,14 @@ final class YoozEngineClientTests: XCTestCase {
         XCTAssertEqual(decoded.mode, .standard)
     }
 
+    func testTouchUpDownloadRequestRoundTrip() throws {
+        let request = TouchUpDownloadRequest(id: "yooz-quality-v3")
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(TouchUpDownloadRequest.self, from: data)
+        XCTAssertEqual(decoded, request)
+        XCTAssertEqual(decoded.id, "yooz-quality-v3")
+    }
+
     // MARK: - STT Types
 
     func testSTTLanguageAllCases() {

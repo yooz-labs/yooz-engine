@@ -27,6 +27,11 @@ public enum EndpointSpecs {
     // TouchUp picker family — handlers in `TouchUpEndpoints` (LLMModule).
     public static let touchUpModels = EndpointSpec(.get, "/v1/touchup/models")
     public static let touchUpSetModel = EndpointSpec(.post, "/v1/touchup/model")
+    // Explicit download / cancel, decoupled from the active selection
+    // (engine#288 slice 2): a consumer's Download button fetches weights
+    // without switching models; Cancel aborts an in-flight download.
+    public static let touchUpDownload = EndpointSpec(.post, "/v1/touchup/download")
+    public static let touchUpCancelDownload = EndpointSpec(.post, "/v1/touchup/download/cancel")
 
     // Model-management family — handlers in `ModelManagementEndpoints`
     // (LLMModule; the one STT-owned input is injected).
@@ -47,6 +52,7 @@ public enum EndpointSpecs {
     public static let converted: [EndpointSpec] = [
         sessionBegin, sessionEnd,
         touchUpModels, touchUpSetModel,
+        touchUpDownload, touchUpCancelDownload,
         modelsInventory, modelsDelete, modelsCleanup,
         engineState,
     ]

@@ -59,6 +59,29 @@ public struct TouchUpClient: Sendable {
         let data = try await engine.post("/v1/touchup/model", body: body)
         return try JSONDecoder().decode(TouchUpModelInfo.self, from: data)
     }
+
+    /// Explicitly download a model's weights WITHOUT changing the active
+    /// selection (engine#288 slice 2) — the "Download" button. Returns the
+    /// tier's current row immediately; progress and the terminal outcome
+    /// arrive via the event stream (`downloadProgress` /
+    /// `loadStateChanged`), exactly like a preloading `setModel`.
+    /// 400 (`invalid_model`) for non-downloadable ids (Apple Intelligence).
+    @discardableResult
+    public func downloadModel(id: String) async throws -> TouchUpModelInfo {
+        let body = try JSONEncoder().encode(TouchUpDownloadRequest(id: id))
+        let data = try await engine.post("/v1/touchup/download", body: body)
+        return try JSONDecoder().decode(TouchUpModelInfo.self, from: data)
+    }
+
+    /// Cancel an in-flight download — the "Cancel" button. No-op (returns
+    /// the current row) when the tier isn't downloading; never unloads a
+    /// resident model.
+    @discardableResult
+    public func cancelDownload(id: String) async throws -> TouchUpModelInfo {
+        let body = try JSONEncoder().encode(TouchUpDownloadRequest(id: id))
+        let data = try await engine.post("/v1/touchup/download/cancel", body: body)
+        return try JSONDecoder().decode(TouchUpModelInfo.self, from: data)
+    }
 }
 
 // MARK: - LLM model management

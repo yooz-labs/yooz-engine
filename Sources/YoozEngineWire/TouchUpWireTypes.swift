@@ -163,3 +163,17 @@ public struct TouchUpSetModelRequest: Codable, Sendable, Equatable {
         self.preload = preload
     }
 }
+
+/// Request body for `POST /v1/touchup/download` and
+/// `POST /v1/touchup/download/cancel` (engine#288 slice 2): fetch a
+/// model's weights (or abort the fetch) WITHOUT changing the active
+/// selection. Progress and the terminal outcome arrive via `/v1/events`
+/// (`downloadProgress` / `loadStateChanged`), same as a preloading
+/// picker switch.
+public struct TouchUpDownloadRequest: Codable, Sendable, Equatable {
+    public let id: String
+
+    public init(id: String) {
+        self.id = id
+    }
+}

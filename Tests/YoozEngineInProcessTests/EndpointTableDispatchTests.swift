@@ -63,6 +63,70 @@ final class EndpointTableDispatchTests: XCTestCase {
         )
     }
 
+    // MARK: - Download / cancel routes (engine#288 slice 2)
+
+    func testDownloadRejectsUndecodableBodyWithInvalidRequest() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post("/v1/touchup/download", body: Data("{}".utf8)),
+            status: 400, code: "invalid_request"
+        )
+    }
+
+    func testDownloadRejectsUnknownIdWithInvalidModel() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/touchup/download", body: Data(#"{"id":"no-such-model"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
+    /// FoundationModels is OS-resident — nothing to download. The shared
+    /// `downloadableSelection` validation rejects it with the picker's
+    /// 400 `invalid_model` convention on BOTH new routes.
+    func testDownloadRejectsFoundationModelsWithInvalidModel() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/touchup/download", body: Data(#"{"id":"foundation-models"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
+    func testCancelDownloadRejectsUnknownIdWithInvalidModel() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/touchup/download/cancel", body: Data(#"{"id":"no-such-model"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
+    func testCancelDownloadRejectsFoundationModelsWithInvalidModel() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/touchup/download/cancel", body: Data(#"{"id":"foundation-models"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
+    /// Cancel with no download in flight is a documented no-op: 200 with
+    /// the tier's current row, never an error.
+    func testCancelDownloadWithNothingInFlightReturnsCurrentRow() async throws {
+        let transport = try await makeTransport()
+        let data = try await transport.post(
+            "/v1/touchup/download/cancel", body: Data(#"{"id":"yooz-quality-v3"}"#.utf8)
+        )
+        let row = try JSONDecoder().decode(TouchUpModelInfo.self, from: data)
+        XCTAssertEqual(row.id, "yooz-quality-v3")
+    }
+
     /// In-process witness for the 501 `model_unavailable` picker code —
     /// the loopback side is pinned by
     /// `TouchUpPickerRouteTests.testPostModelWithFoundationModelsOn26MinusReturns501`;
