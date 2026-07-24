@@ -1461,6 +1461,17 @@ public actor TouchUpEngine {
             // downloader stages the one multi-GB weights file outside the hub
             // repo and moves it in at the end, so on-disk bytes sit flat at
             // ~0.6% for the entire transfer and then jump.
+            // Stop the moment the tier stops loading (PR #293 review):
+            // `markLoadSettled` flips `loadStates` from inside the load task,
+            // strictly BEFORE this watcher's `defer { cancel() }` runs (that
+            // waits on `awaitLoadTask` plus a `publishLoadStateChanged`
+            // await). A failed/cancelled load also leaves the backend's
+            // fraction at its last partial value, so without this guard the
+            // watcher could wake in that window and publish "still
+            // downloading" for a tier whose failed/available
+            // `loadStateChanged` is already in flight. Mirrors the same gate
+            // `inFlightDownloadFractions()` applies below.
+            guard loadStates[modelType] == .loading else { return }
             let fraction = await downloadProgress(for: modelType) ?? 0
             // Publish on a 0.5% move OR at least every ~2s (7 ticks) while a
             // fetch is in progress (engine#292). The old rule published only
@@ -1478,6 +1489,10 @@ public actor TouchUpEngine {
             // the signal for that, and the terminal truth stays
             // `loadStateChanged`.
             let moved = fraction - lastPublished >= 0.005
+            // DO NOT "optimize" this into dedupe-by-value: republishing an
+            // UNCHANGED fraction is the intended keep-alive, and flat
+            // stretches are the normal case (per-file granularity), so
+            // suppressing them reintroduces the frozen-bar bug this fixes.
             let overdue = fraction > 0 && ticksSincePublish >= 7
             if fraction > 0, fraction < 1, moved || overdue {
                 lastPublished = fraction
