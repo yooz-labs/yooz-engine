@@ -40,6 +40,11 @@ public struct STTBackendInfo: Codable, Sendable, Equatable {
     /// through this backend. Exactly one row per response has
     /// `isActive == true`.
     public let isActive: Bool
+    /// Fraction-completed [0, 1) while THIS backend's weights are being
+    /// fetched, else nil (engine#291). Lets a picker scope a progress row to
+    /// the right backend instead of reading an engine-wide value, matching
+    /// the touch-up picker's per-row `downloadProgress` (engine#292).
+    public let downloadProgress: Double?
     public let supportsBatch: Bool?
     public let supportsStreaming: Bool?
     public let supportedLanguages: [String]?
@@ -52,6 +57,7 @@ public struct STTBackendInfo: Codable, Sendable, Equatable {
         sizeBytes: Int64?,
         loadState: ModelLoadState,
         isActive: Bool,
+        downloadProgress: Double? = nil,
         supportsBatch: Bool? = nil,
         supportsStreaming: Bool? = nil,
         supportedLanguages: [String]? = nil
@@ -63,6 +69,7 @@ public struct STTBackendInfo: Codable, Sendable, Equatable {
         self.sizeBytes = sizeBytes
         self.loadState = loadState
         self.isActive = isActive
+        self.downloadProgress = downloadProgress
         self.supportsBatch = supportsBatch
         self.supportsStreaming = supportsStreaming
         self.supportedLanguages = supportedLanguages

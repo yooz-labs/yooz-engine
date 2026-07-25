@@ -1111,11 +1111,24 @@ final class APIServer: ObservableObject {
     nonisolated func sttBackendInfo(
         for backend: STTBackendID,
         active: STTBackendID,
-        activeLoaded: Bool
+        activeLoaded: Bool,
+        downloadedIds: Set<String> = [],
+        downloadFractions: [String: Double] = [:]
     ) -> STTBackendInfo {
         let isActive = backend == active
-        let loadState: ModelLoadState =
-            (isActive && activeLoaded) ? .loaded : .available
+        // `.cached` for a backend whose weights are on disk but which is not
+        // the loaded active one (engine#291). Before this, every non-active
+        // row reported `.available`, so a consumer could not tell "already
+        // downloaded" from "needs a multi-GB fetch" and would offer Download
+        // for models the user already has.
+        let loadState: ModelLoadState
+        if isActive, activeLoaded {
+            loadState = .loaded
+        } else if downloadedIds.contains(backend.rawValue) {
+            loadState = .cached
+        } else {
+            loadState = .available
+        }
         return STTBackendInfo(
             id: backend.rawValue,
             displayName: backend.displayName,
@@ -1125,6 +1138,7 @@ final class APIServer: ObservableObject {
                 .map { Int64($0) * 1_048_576 },
             loadState: loadState,
             isActive: isActive,
+            downloadProgress: downloadFractions[backend.rawValue],
             supportsBatch: backend.supportsBatch,
             supportsStreaming: backend.supportsStreaming,
             supportedLanguages: backend.supportedLanguages.map(\.rawValue)
@@ -2098,11 +2112,16 @@ final class APIServer: ObservableObject {
             #if canImport(STTModule)
             let active = sttEngine.currentBackend
             let activeLoaded = await sttEngine.isCurrentBackendLoaded()
+            let downloadedIds = await STTDownloadCoordinator.shared
+                .downloadedBackendIds(language: sttEngine.currentLanguage)
+            let fractions = await STTDownloadCoordinator.shared.inFlightFractions()
             let backends = STTBackendID.allCases.map { backend in
                 self.sttBackendInfo(
                     for: backend,
                     active: active,
-                    activeLoaded: activeLoaded
+                    activeLoaded: activeLoaded,
+                    downloadedIds: downloadedIds,
+                    downloadFractions: fractions
                 )
             }
             return STTBackendsResponse(

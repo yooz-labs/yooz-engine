@@ -71,6 +71,44 @@ public actor STTDownloadCoordinator {
         tasks[backend] != nil
     }
 
+    /// Wire ids whose weights are already complete on disk (engine#291).
+    ///
+    /// The picker row builders need this to distinguish "downloaded but not
+    /// active" from "not downloaded": before this, every non-active backend
+    /// reported `.available`, so a consumer's Download affordance would
+    /// appear for models the user already has. Kept here so both transports
+    /// share one definition of "downloaded" and it can't drift.
+    ///
+    /// Pure disk inspection, no network: Qwen3 checks the fetcher's own
+    /// integrity sentinel (`isModelDirReady` — required files plus the
+    /// post-validation marker, so a half-staged dir reads as missing), and
+    /// the MLX backends ask the HF cache for a local-only resolve.
+    public func downloadedBackendIds(language: STTLanguage) async -> Set<String> {
+        var downloaded: Set<String> = []
+        for backend in STTBackendID.allCases where backend.requiresDownload {
+            switch backend {
+            case .qwen3ASRPreview:
+                let fetcher = Qwen3ASRModelFetcher()
+                if await fetcher.isModelDirReady(Qwen3ASRModelFetcher.defaultModelDir) {
+                    downloaded.insert(backend.rawValue)
+                }
+            case .parakeet, .fastConformer:
+                let resolvable = backend.supportedLanguages.contains(language)
+                    ? language
+                    : backend.supportedLanguages.first
+                guard let probeLanguage = resolvable else { continue }
+                if (try? await STTModelHFDownloader.snapshot(
+                    for: probeLanguage, localFilesOnly: true
+                )) != nil {
+                    downloaded.insert(backend.rawValue)
+                }
+            case .appleSTT:
+                continue
+            }
+        }
+        return downloaded
+    }
+
     /// Start (or join) a download for `backend`. Returns immediately: the
     /// fetch runs detached, and progress/outcome arrive as `downloadProgress`
     /// / `loadStateChanged` events on the `stt` module. Backends that need no
