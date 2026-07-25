@@ -146,17 +146,29 @@ public struct STTClient: Sendable {
     /// `loadStateChanged` frames on the `stt` module, with `modelId` set to
     /// the backend id so a consumer can scope a progress row to that row.
     ///
-    /// `language` picks which repo a multilingual backend pulls (defaults to
-    /// English server-side). Throws 400 `invalid_model` for unknown ids,
-    /// Apple STT (OS-provided, nothing to fetch), or a language the backend
-    /// doesn't support.
+    /// `language` picks which repo a multilingual backend pulls and is
+    /// REQUIRED — deliberately not defaulted (PR #295 review). Unlike the
+    /// backend-implicit calls in this file (`transcribe`, `loadModel`,
+    /// `startStream`, which safely default to English because whatever
+    /// backend is active supports it), `id:` here can name ANY backend, and
+    /// FastConformer supports only `[ar, fa, he]`. A blanket English default
+    /// would make `downloadModel(id: "fast_conformer")` fail with a 400 for
+    /// no reason the caller could see. The SDK cannot pick a safe default on
+    /// the caller's behalf either: its `STTBackendID` mirror is a bare
+    /// rawValue enum by design, and copying the engine's per-backend language
+    /// table here is exactly the drift this codebase avoids. A picker already
+    /// has `STTBackendInfo.supportedLanguages` from `availableEngines()`
+    /// before it can render a Download button, so passing one is free.
+    ///
+    /// Throws 400 `invalid_model` for unknown ids, Apple STT (OS-provided,
+    /// nothing to fetch), or a language the backend doesn't support.
     @discardableResult
     public func downloadModel(
         id: String,
-        language: STTLanguage? = nil
+        language: STTLanguage
     ) async throws -> STTDownloadResponse {
         let body = try JSONEncoder().encode(
-            STTDownloadRequest(id: id, language: language?.rawValue)
+            STTDownloadRequest(id: id, language: language.rawValue)
         )
         let data = try await engine.post("/v1/stt/download", body: body)
         return try JSONDecoder().decode(STTDownloadResponse.self, from: data)
