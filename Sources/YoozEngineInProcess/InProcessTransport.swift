@@ -75,7 +75,19 @@ public final class InProcessTransport: EngineTransport {
                 activeSTTRepoDirName: { InProcessTransport.activeSTTRepoDirName() }
             )
             + EngineStateEndpoints.endpoints()
+            + sttDownloadEndpoints()
     )
+
+
+    /// STT download/cancel table entries (engine#291), gated on the STT
+    /// module being linked (the Lite variant ships without it).
+    private static func sttDownloadEndpoints() -> [Endpoint] {
+        #if canImport(STTModule)
+        return STTDownloadEndpoints.endpoints()
+        #else
+        return []
+        #endif
+    }
 
     public init(host: EngineInProcessHost = .shared) {
         self.host = host

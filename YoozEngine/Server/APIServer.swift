@@ -1354,9 +1354,22 @@ final class APIServer: ObservableObject {
                         activeSTTRepoDirName: { Self.activeSTTRepoDirName() }
                     )
                     + EngineStateEndpoints.endpoints()
+                    + sttDownloadEndpoints()
             ),
             on: router
         )
+
+
+    /// STT download/cancel table entries (engine#291), gated on the STT
+    /// module being linked: the Lite variant ships without it, and the
+    /// endpoint table must not reference symbols that aren't there.
+    private func sttDownloadEndpoints() -> [Endpoint] {
+        #if canImport(STTModule)
+        return STTDownloadEndpoints.endpoints()
+        #else
+        return []
+        #endif
+    }
 
         // LLM: Generate
         router.post("/v1/llm/generate") { [self] request, context in

@@ -63,6 +63,71 @@ final class EndpointTableDispatchTests: XCTestCase {
         )
     }
 
+    // MARK: - STT download / cancel routes (engine#291)
+
+    func testSTTDownloadRejectsUndecodableBodyWithInvalidRequest() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post("/v1/stt/download", body: Data("{}".utf8)),
+            status: 400, code: "invalid_request"
+        )
+    }
+
+    func testSTTDownloadRejectsUnknownBackendWithInvalidModel() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/stt/download", body: Data(#"{"id":"no-such-backend"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
+    /// Apple STT is OS-provided — there is nothing to download, so the
+    /// shared validation rejects it on both routes rather than starting a
+    /// no-op "download" the UI would render as in-flight.
+    func testSTTDownloadRejectsAppleSTTWithInvalidModel() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/stt/download", body: Data(#"{"id":"apple_stt"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+        await assertServerError(
+            try await transport.post(
+                "/v1/stt/download/cancel", body: Data(#"{"id":"apple_stt"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
+    /// A language the backend does not support is rejected rather than
+    /// silently downloading the wrong repo.
+    func testSTTDownloadRejectsUnsupportedLanguage() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/stt/download",
+                body: Data(#"{"id":"qwen3_asr_preview","language":"ja"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
+    /// Cancelling a backend with nothing in flight is a documented no-op:
+    /// 200 with `downloading: false`, never an error.
+    func testSTTCancelWithNothingInFlightIsANoOp() async throws {
+        let transport = try await makeTransport()
+        let data = try await transport.post(
+            "/v1/stt/download/cancel",
+            body: Data(#"{"id":"qwen3_asr_preview"}"#.utf8)
+        )
+        let response = try JSONDecoder().decode(STTDownloadResponse.self, from: data)
+        XCTAssertEqual(response.id, "qwen3_asr_preview")
+        XCTAssertFalse(response.downloading)
+    }
+
     // MARK: - Download / cancel routes (engine#288 slice 2)
 
     func testDownloadRejectsUndecodableBodyWithInvalidRequest() async throws {

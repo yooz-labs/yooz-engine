@@ -32,6 +32,12 @@ public enum EndpointSpecs {
     // without switching models; Cancel aborts an in-flight download.
     public static let touchUpDownload = EndpointSpec(.post, "/v1/touchup/download")
     public static let touchUpCancelDownload = EndpointSpec(.post, "/v1/touchup/download/cancel")
+    // STT explicit download / cancel (engine#291), the speech-side twin of
+    // the touch-up pair above. Table-registered so BOTH transports carry
+    // them — a hand-registered APIServer route would be loopback-only and
+    // silently missing in an XPC-packaged consumer app.
+    public static let sttDownload = EndpointSpec(.post, "/v1/stt/download")
+    public static let sttCancelDownload = EndpointSpec(.post, "/v1/stt/download/cancel")
 
     // Model-management family — handlers in `ModelManagementEndpoints`
     // (LLMModule; the one STT-owned input is injected).
@@ -53,6 +59,7 @@ public enum EndpointSpecs {
         sessionBegin, sessionEnd,
         touchUpModels, touchUpSetModel,
         touchUpDownload, touchUpCancelDownload,
+        sttDownload, sttCancelDownload,
         modelsInventory, modelsDelete, modelsCleanup,
         engineState,
     ]

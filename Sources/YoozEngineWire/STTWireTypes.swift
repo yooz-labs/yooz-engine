@@ -272,3 +272,31 @@ public struct TranscriptionResult: Codable, Sendable, Equatable {
         self.tokens = tokens
     }
 }
+
+/// Request body for `POST /v1/stt/download` and
+/// `POST /v1/stt/download/cancel` (engine#291): fetch a speech backend's
+/// weights (or abort the fetch) WITHOUT changing the active selection.
+/// `language` selects which repo a multilingual backend pulls; omitted means
+/// English. Progress and the terminal outcome arrive via `/v1/events` on the
+/// `stt` module with `modelId` set to the backend id.
+public struct STTDownloadRequest: Codable, Sendable, Equatable {
+    public let id: String
+    public let language: String?
+
+    public init(id: String, language: String? = nil) {
+        self.id = id
+        self.language = language
+    }
+}
+
+/// Response for the STT download/cancel pair: echoes the backend id and
+/// whether a fetch is now in flight for it.
+public struct STTDownloadResponse: Codable, Sendable, Equatable {
+    public let id: String
+    public let downloading: Bool
+
+    public init(id: String, downloading: Bool) {
+        self.id = id
+        self.downloading = downloading
+    }
+}
