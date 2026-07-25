@@ -93,6 +93,16 @@ public actor STTDownloadCoordinator {
                     downloaded.insert(backend.rawValue)
                 }
             case .parakeet, .fastConformer:
+                // Single-language probe, collapsed to a per-backend answer.
+                // Accurate today (PR #295 review verified): Parakeet resolves
+                // the SAME shared repo for all its languages, and
+                // FastConformer's `huggingFaceID` is nil for all three of its
+                // languages until engine#41 publishes MLX mirrors, so it
+                // always — correctly — reports not-cached. REVISIT WITH #41:
+                // if FastConformer ships PER-LANGUAGE repos, a snapshot
+                // cached under one language would be missed when the probe
+                // picks another, and this needs to become per-language state
+                // rather than a single row flag.
                 let resolvable = backend.supportedLanguages.contains(language)
                     ? language
                     : backend.supportedLanguages.first
@@ -113,10 +123,24 @@ public actor STTDownloadCoordinator {
     /// fetch runs detached, and progress/outcome arrive as `downloadProgress`
     /// / `loadStateChanged` events on the `stt` module. Backends that need no
     /// download (Apple STT) are a no-op.
-    public func requestDownload(_ backend: STTBackendID, language: STTLanguage) {
+    public func requestDownload(_ backend: STTBackendID, language: STTLanguage) async {
         guard backend.requiresDownload else {
             logger.info(
                 "requestDownload: \(backend.rawValue, privacy: .public) needs no download"
+            )
+            return
+        }
+        // Already complete on disk → nothing to fetch (PR #295 review),
+        // matching `TouchUpEngine.requestDownload`'s early return. Worth the
+        // probe: `STTModelHFDownloader.snapshot` always passes
+        // `revision: "main"`, and swift-huggingface's "already fully cached"
+        // fast path only triggers for a commit hash — so re-requesting a
+        // cached backend would do a real network manifest fetch before
+        // concluding there is nothing to do, and publish a redundant
+        // `.cached` event on the way out.
+        if await downloadedBackendIds(language: language).contains(backend.rawValue) {
+            logger.info(
+                "requestDownload: \(backend.rawValue, privacy: .public) already on disk"
             )
             return
         }
