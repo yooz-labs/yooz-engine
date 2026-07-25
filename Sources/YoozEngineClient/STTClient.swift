@@ -136,6 +136,55 @@ public struct STTClient: Sendable {
         return try JSONDecoder().decode(STTBackendInfo.self, from: data)
     }
 
+    // MARK: - Explicit download / cancel (engine#291)
+
+    /// Download a speech backend's weights WITHOUT changing the active
+    /// selection — the picker's "Download" button. Returns immediately; the
+    /// fetch runs detached in the engine and survives selection changes,
+    /// window closes, and tab switches. Progress and the terminal outcome
+    /// arrive on the event stream as `downloadProgress` /
+    /// `loadStateChanged` frames on the `stt` module, with `modelId` set to
+    /// the backend id so a consumer can scope a progress row to that row.
+    ///
+    /// `language` picks which repo a multilingual backend pulls and is
+    /// REQUIRED — deliberately not defaulted (PR #295 review). Unlike the
+    /// backend-implicit calls in this file (`transcribe`, `loadModel`,
+    /// `startStream`, which safely default to English because whatever
+    /// backend is active supports it), `id:` here can name ANY backend, and
+    /// FastConformer supports only `[ar, fa, he]`. A blanket English default
+    /// would make `downloadModel(id: "fast_conformer")` fail with a 400 for
+    /// no reason the caller could see. The SDK cannot pick a safe default on
+    /// the caller's behalf either: its `STTBackendID` mirror is a bare
+    /// rawValue enum by design, and copying the engine's per-backend language
+    /// table here is exactly the drift this codebase avoids. A picker already
+    /// has `STTBackendInfo.supportedLanguages` from `availableEngines()`
+    /// before it can render a Download button, so passing one is free.
+    ///
+    /// Throws 400 `invalid_model` for unknown ids, Apple STT (OS-provided,
+    /// nothing to fetch), or a language the backend doesn't support.
+    @discardableResult
+    public func downloadModel(
+        id: String,
+        language: STTLanguage
+    ) async throws -> STTDownloadResponse {
+        let body = try JSONEncoder().encode(
+            STTDownloadRequest(id: id, language: language.rawValue)
+        )
+        let data = try await engine.post("/v1/stt/download", body: body)
+        return try JSONDecoder().decode(STTDownloadResponse.self, from: data)
+    }
+
+    /// Cancel an in-flight download — the picker's "Cancel" button. No-op
+    /// (`downloading: false`) when that backend isn't downloading; never
+    /// disturbs a settled or loaded backend. Takes no language: cancellation
+    /// is keyed purely by backend.
+    @discardableResult
+    public func cancelDownload(id: String) async throws -> STTDownloadResponse {
+        let body = try JSONEncoder().encode(STTDownloadRequest(id: id))
+        let data = try await engine.post("/v1/stt/download/cancel", body: body)
+        return try JSONDecoder().decode(STTDownloadResponse.self, from: data)
+    }
+
     // MARK: - WebSocket Streaming
 
     /// Open a streaming STT session over WebSocket.

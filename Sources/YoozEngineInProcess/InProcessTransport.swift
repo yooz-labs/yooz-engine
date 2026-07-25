@@ -75,7 +75,19 @@ public final class InProcessTransport: EngineTransport {
                 activeSTTRepoDirName: { InProcessTransport.activeSTTRepoDirName() }
             )
             + EngineStateEndpoints.endpoints()
+            + sttDownloadEndpoints()
     )
+
+
+    /// STT download/cancel table entries (engine#291), gated on the STT
+    /// module being linked (the Lite variant ships without it).
+    private static func sttDownloadEndpoints() -> [Endpoint] {
+        #if canImport(STTModule)
+        return STTDownloadEndpoints.endpoints()
+        #else
+        return []
+        #endif
+    }
 
     public init(host: EngineInProcessHost = .shared) {
         self.host = host
@@ -742,8 +754,14 @@ public final class InProcessTransport: EngineTransport {
     private func handleSTTEngine() async throws -> Data {
         let active = YoozSTTEngine.shared.currentBackend
         let activeLoaded = await YoozSTTEngine.shared.isCurrentBackendLoaded()
+        let downloadedIds = await STTDownloadCoordinator.shared
+            .downloadedBackendIds(language: YoozSTTEngine.shared.currentLanguage)
+        let fractions = await STTDownloadCoordinator.shared.inFlightFractions()
         let backends = STTModule.STTBackendID.allCases.map {
-            sttBackendInfo($0, active: active, activeLoaded: activeLoaded)
+            sttBackendInfo(
+                $0, active: active, activeLoaded: activeLoaded,
+                downloadedIds: downloadedIds, downloadFractions: fractions
+            )
         }
         return try JSONEncoder().encode(
             STTBackendsResponse(backends: backends, activeId: active.rawValue)
@@ -767,17 +785,31 @@ public final class InProcessTransport: EngineTransport {
     private func sttBackendInfo(
         _ backend: STTModule.STTBackendID,
         active: STTModule.STTBackendID,
-        activeLoaded: Bool
+        activeLoaded: Bool,
+        downloadedIds: Set<String> = [],
+        downloadFractions: [String: Double] = [:]
     ) -> STTBackendInfo {
         let isActive = backend == active
+        // Same three-way state as the loopback builder (engine#291): a
+        // downloaded-but-inactive backend must read `.cached`, not
+        // `.available`, or a picker offers Download for what it already has.
+        let loadState: ModelLoadState
+        if isActive, activeLoaded {
+            loadState = .loaded
+        } else if downloadedIds.contains(backend.rawValue) {
+            loadState = .cached
+        } else {
+            loadState = .available
+        }
         return STTBackendInfo(
             id: backend.rawValue,
             displayName: backend.displayName,
             description: backend.pickerDescription,
             tier: ModelTier(rawValue: backend.pickerTier.rawValue) ?? .unknown,
             sizeBytes: backend.estimatedDownloadMB.map { Int64($0) * 1_000_000 },
-            loadState: (isActive && activeLoaded) ? .loaded : .available,
+            loadState: loadState,
             isActive: isActive,
+            downloadProgress: downloadFractions[backend.rawValue],
             supportsBatch: backend.supportsBatch,
             supportsStreaming: backend.supportsStreaming,
             supportedLanguages: backend.supportedLanguages.map(\.rawValue)

@@ -40,6 +40,11 @@ public struct STTBackendInfo: Codable, Sendable, Equatable {
     /// through this backend. Exactly one row per response has
     /// `isActive == true`.
     public let isActive: Bool
+    /// Fraction-completed [0, 1) while THIS backend's weights are being
+    /// fetched, else nil (engine#291). Lets a picker scope a progress row to
+    /// the right backend instead of reading an engine-wide value, matching
+    /// the touch-up picker's per-row `downloadProgress` (engine#292).
+    public let downloadProgress: Double?
     public let supportsBatch: Bool?
     public let supportsStreaming: Bool?
     public let supportedLanguages: [String]?
@@ -52,6 +57,7 @@ public struct STTBackendInfo: Codable, Sendable, Equatable {
         sizeBytes: Int64?,
         loadState: ModelLoadState,
         isActive: Bool,
+        downloadProgress: Double? = nil,
         supportsBatch: Bool? = nil,
         supportsStreaming: Bool? = nil,
         supportedLanguages: [String]? = nil
@@ -63,6 +69,7 @@ public struct STTBackendInfo: Codable, Sendable, Equatable {
         self.sizeBytes = sizeBytes
         self.loadState = loadState
         self.isActive = isActive
+        self.downloadProgress = downloadProgress
         self.supportsBatch = supportsBatch
         self.supportsStreaming = supportsStreaming
         self.supportedLanguages = supportedLanguages
@@ -270,5 +277,33 @@ public struct TranscriptionResult: Codable, Sendable, Equatable {
         self.draft = draft
         self.language = language
         self.tokens = tokens
+    }
+}
+
+/// Request body for `POST /v1/stt/download` and
+/// `POST /v1/stt/download/cancel` (engine#291): fetch a speech backend's
+/// weights (or abort the fetch) WITHOUT changing the active selection.
+/// `language` selects which repo a multilingual backend pulls; omitted means
+/// English. Progress and the terminal outcome arrive via `/v1/events` on the
+/// `stt` module with `modelId` set to the backend id.
+public struct STTDownloadRequest: Codable, Sendable, Equatable {
+    public let id: String
+    public let language: String?
+
+    public init(id: String, language: String? = nil) {
+        self.id = id
+        self.language = language
+    }
+}
+
+/// Response for the STT download/cancel pair: echoes the backend id and
+/// whether a fetch is now in flight for it.
+public struct STTDownloadResponse: Codable, Sendable, Equatable {
+    public let id: String
+    public let downloading: Bool
+
+    public init(id: String, downloading: Bool) {
+        self.id = id
+        self.downloading = downloading
     }
 }
