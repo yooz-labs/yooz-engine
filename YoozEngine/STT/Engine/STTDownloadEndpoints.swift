@@ -37,7 +37,14 @@ public enum STTDownloadEndpoints {
             // No-op (200, `downloading: false`) when it isn't downloading;
             // never disturbs a settled or loaded backend.
             Endpoint(EndpointSpecs.sttCancelDownload) { request in
-                let (backend, _) = try decodeRequest(request.body)
+                // Backend only — NO language validation on this path (PR #294
+                // review). Cancellation is keyed purely by backend in the
+                // coordinator, and running the download path's
+                // `supportedLanguages` check here made cancel unusable for
+                // FastConformer: it supports [ar, fa, he], so a client
+                // cancelling without a language (defaulting to English) got a
+                // 400 and the multi-GB fetch kept running.
+                let backend = try downloadableBackend(request.body)
                 await STTDownloadCoordinator.shared.cancelDownload(backend)
                 return try WireResponse.json(
                     STTDownloadResponse(id: backend.rawValue, downloading: false)
@@ -46,12 +53,11 @@ public enum STTDownloadEndpoints {
         ]
     }
 
-    /// Shared body validation: resolve the backend id and language, and
-    /// reject ids that cannot be downloaded (Apple STT is OS-provided) with
-    /// the same 400 `invalid_model` code the pickers already use.
-    private static func decodeRequest(
-        _ body: Data
-    ) throws -> (STTBackendID, STTLanguage) {
+    /// Backend-only validation, shared by both routes: decode the body and
+    /// resolve a DOWNLOADABLE backend id. Language is deliberately not
+    /// considered — cancellation doesn't need one, and the download path
+    /// layers its own language check on top (PR #294 review).
+    private static func downloadableBackend(_ body: Data) throws -> STTBackendID {
         let request: STTDownloadRequest
         do {
             request = try JSONDecoder().decode(STTDownloadRequest.self, from: body)
@@ -69,6 +75,22 @@ public enum STTDownloadEndpoints {
                 code: "invalid_model",
                 message: "'\(request.id)' is not a downloadable STT backend. Known: \(known)."
             )
+        }
+        return backend
+    }
+
+    /// Download-path validation: backend id plus the language whose repo the
+    /// fetch should pull. Only the download route needs this — see the cancel
+    /// handler for why cancellation must not enforce a language.
+    private static func decodeRequest(
+        _ body: Data
+    ) throws -> (STTBackendID, STTLanguage) {
+        let backend = try downloadableBackend(body)
+        let request: STTDownloadRequest
+        do {
+            request = try JSONDecoder().decode(STTDownloadRequest.self, from: body)
+        } catch {
+            throw WireError.invalidRequest(error)
         }
         // Language selects which repo a multilingual backend fetches;
         // default to English so a consumer that only knows the backend id

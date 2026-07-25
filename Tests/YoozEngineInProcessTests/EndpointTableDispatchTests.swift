@@ -128,6 +128,33 @@ final class EndpointTableDispatchTests: XCTestCase {
         XCTAssertFalse(response.downloading)
     }
 
+    /// Regression pin (PR #294 review): cancel must NOT enforce the
+    /// download path's language check. FastConformer supports [ar, fa, he],
+    /// so a client cancelling it without a language — which defaults to
+    /// English — used to get a 400 while the multi-GB fetch kept running.
+    func testSTTCancelDoesNotEnforceLanguageSupport() async throws {
+        let transport = try await makeTransport()
+        let data = try await transport.post(
+            "/v1/stt/download/cancel",
+            body: Data(#"{"id":"fast_conformer"}"#.utf8)
+        )
+        let response = try JSONDecoder().decode(STTDownloadResponse.self, from: data)
+        XCTAssertEqual(response.id, "fast_conformer")
+        XCTAssertFalse(response.downloading)
+    }
+
+    /// The DOWNLOAD path still enforces it, so a mismatched language can't
+    /// silently fetch the wrong repo.
+    func testSTTDownloadStillRejectsUnsupportedLanguageForFastConformer() async throws {
+        let transport = try await makeTransport()
+        await assertServerError(
+            try await transport.post(
+                "/v1/stt/download", body: Data(#"{"id":"fast_conformer"}"#.utf8)
+            ),
+            status: 400, code: "invalid_model"
+        )
+    }
+
     // MARK: - Download / cancel routes (engine#288 slice 2)
 
     func testDownloadRejectsUndecodableBodyWithInvalidRequest() async throws {

@@ -1097,6 +1097,17 @@ final class APIServer: ObservableObject {
         )
     }
 
+/// STT download/cancel table entries (engine#291), gated on the STT
+    /// module being linked: the Lite variant ships without it, and the
+    /// endpoint table must not reference symbols that aren't there.
+    private func sttDownloadEndpoints() -> [Endpoint] {
+        #if canImport(STTModule)
+        return STTDownloadEndpoints.endpoints()
+        #else
+        return []
+        #endif
+    }
+
     /// Build the canonical picker row for an STT backend. Mirrors
     /// `TouchUpEngine.row(for:loadState:)` so the two pickers
     /// produce identical wire shapes (modulo the STT-specific
@@ -1372,18 +1383,6 @@ final class APIServer: ObservableObject {
             ),
             on: router
         )
-
-
-    /// STT download/cancel table entries (engine#291), gated on the STT
-    /// module being linked: the Lite variant ships without it, and the
-    /// endpoint table must not reference symbols that aren't there.
-    private func sttDownloadEndpoints() -> [Endpoint] {
-        #if canImport(STTModule)
-        return STTDownloadEndpoints.endpoints()
-        #else
-        return []
-        #endif
-    }
 
         // LLM: Generate
         router.post("/v1/llm/generate") { [self] request, context in

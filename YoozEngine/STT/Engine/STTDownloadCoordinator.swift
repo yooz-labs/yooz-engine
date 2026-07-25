@@ -154,6 +154,14 @@ public actor STTDownloadCoordinator {
         // per-file BYTE counts (unlike the LLM path's per-file-only
         // granularity, engine#292), so this animates smoothly.
         let previous = fractions[backend] ?? -1
+        // Monotonic (PR #294 review): the Parakeet/FastConformer path must
+        // hand `STTModelHFDownloader.snapshot` a synchronous @MainActor
+        // closure, so each ~100ms sampling tick spawns its own unstructured
+        // Task into this actor — nothing orders them, and a stale smaller
+        // fraction landing after a larger one would publish a bar that walks
+        // backwards. Dropping a regressed sample costs nothing: the next tick
+        // carries the current value.
+        guard fraction >= previous else { return }
         fractions[backend] = fraction
         guard fraction > 0, fraction < 1, fraction - previous >= 0.005 else { return }
         await EngineEventBus.shared.publish(EngineEvent(
