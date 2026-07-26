@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # release-engine.sh — A6 (#30) orchestrator for the local-only release
-# pipeline. Runs the three build scripts (full, lite, whisper helper), zips
+# pipeline. Runs the four build scripts (full, lite, whisper helper, LLM), zips
 # each signed .app with `ditto` (preserves codesign on nested bundles),
 # computes per-artifact SHA256s, and emits a release manifest at
 # `dist/RELEASE.md` that operators paste into the GitHub release body.
@@ -50,7 +50,7 @@ CONFIG="${YOOZ_ENGINE_CONFIG:-Debug}"
 export YOOZ_HELPER_CONFIG="$CONFIG"
 
 # -----------------------------------------------------------------------------
-# 1. Run the three build scripts. Each is independent; fail fast on error.
+# 1. Run the four build scripts. Each is independent; fail fast on error.
 # -----------------------------------------------------------------------------
 run_build() {
     local name="$1" script="$2"
@@ -63,9 +63,10 @@ run_build() {
 run_build "whisper-helper" "build-whisper-helper.sh"
 run_build "engine-release" "build-engine-release.sh"
 run_build "engine-lite" "build-engine-lite.sh"
+run_build "engine-llm" "build-engine-llm.sh"
 
 # -----------------------------------------------------------------------------
-# 2. Declare the three artifacts. Keep bundle-name + binary-name aligned
+# 2. Declare the artifacts. Keep bundle-name + binary-name aligned
 #    with project.yml PRODUCT_NAME.
 # -----------------------------------------------------------------------------
 # Format: dist-name|binary-name-under-Contents/MacOS
@@ -73,6 +74,14 @@ ARTIFACTS=(
     "YoozEngine.app|Yooz Engine"
     "YoozEngineLite.app|Yooz Engine (Lite)"
     "YoozEngineWhisper.app|Yooz Engine (Whisper)"
+    # LLM-only variant (engine#297). Published because remi FETCHES it rather
+    # than bundling it: remi releases on every merge while the engine changes
+    # rarely, so bundling would re-ship an unchanged ~30 MB helper on every
+    # remi patch. Fetching the release asset also preserves this pipeline's
+    # signature and notarization byte-for-byte -- repacking a signed .app
+    # through another package format is exactly how Gatekeeper breakage gets
+    # introduced, and the failure presents as "the engine never answered".
+    "YoozEngineLLM.app|Yooz Engine (LLM)"
 )
 
 for spec in "${ARTIFACTS[@]}"; do
