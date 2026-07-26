@@ -338,7 +338,7 @@ final class TouchUpFidelityEvalTests: XCTestCase {
             "Set YOOZ_LLM_LOAD_MODELS=1 to run the Quality generation-fidelity eval"
         )
         let outcomes = try await Self.runFidelityHarness(
-            backend: MLXLLMBackend.createQuality(),
+            backend: MLXLLMBackend.create(for: .yoozQuality),
             fixtures: Self.qualityFixtures
         )
         Self.assertAndLog(outcomes, sectionName: "Quality / qualityFull")
@@ -352,7 +352,7 @@ final class TouchUpFidelityEvalTests: XCTestCase {
             "Set YOOZ_LLM_LOAD_MODELS=1 to run the Light generation-fidelity eval"
         )
         let outcomes = try await Self.runFidelityHarness(
-            backend: MLXLLMBackend.createLight(),
+            backend: MLXLLMBackend.create(for: .yoozLight),
             fixtures: Self.lightFixtures
         )
         Self.assertAndLog(outcomes, sectionName: "Light / lightFull")
@@ -402,7 +402,7 @@ final class TouchUpFidelityEvalTests: XCTestCase {
             return withContext
         }
         let outcomes = try await Self.runFidelityHarness(
-            backend: MLXLLMBackend.createQuality(),
+            backend: MLXLLMBackend.create(for: .yoozQuality),
             fixtures: fixturesWithContext
         )
         var options = XCTExpectedFailure.Options()
@@ -436,7 +436,7 @@ final class TouchUpFidelityEvalTests: XCTestCase {
             return withContext
         }
         let outcomes = try await Self.runFidelityHarness(
-            backend: MLXLLMBackend.createLight(),
+            backend: MLXLLMBackend.create(for: .yoozLight),
             fixtures: fixturesWithContext
         )
         Self.assertAndLog(outcomes, sectionName: "Light / lightFull + context block (eval gate)")
@@ -490,7 +490,7 @@ final class TouchUpFidelityEvalTests: XCTestCase {
             "Set YOOZ_LLM_LOAD_MODELS=1 to run the informational context-canonicalization probe"
         )
         let outcomes = try await Self.runFidelityHarness(
-            backend: MLXLLMBackend.createQuality(),
+            backend: MLXLLMBackend.create(for: .yoozQuality),
             fixtures: Self.informationalContextFixtures
         )
         print("=== TouchUpFidelityEvalTests informational: context canonicalization hints ===")

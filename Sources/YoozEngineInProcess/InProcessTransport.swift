@@ -826,22 +826,27 @@ public final class InProcessTransport: EngineTransport {
 
     // MARK: - LLM / TouchUp model management
 
+    /// Mirrors the loopback `APIServer.buildLLMModelsResponse()` (engine#303):
+    /// every catalogued model, not just the TouchUp picker's three rows —
+    /// `TouchUpEngine.availableModels()` is scoped to the picker
+    /// (yooz-light-v3 / yooz-quality-v3 / foundation-models) and would
+    /// silently drop any catalogue addition that is generate-only (e.g.
+    /// yooz-instruct-4b), which is exactly the class of model this route
+    /// exists to surface. `current` is the preferred-model flag
+    /// (`POST /v1/llm/model`), which is independent of the picker's active
+    /// selection — same source the loopback route reads.
     private func handleLLMModels() async throws -> Data {
-        let models = await TouchUpEngine.shared.availableModels()
-        let active = await TouchUpEngine.shared.activeModel
-        // `LLMModelInfo.loaded` is a Bool, so the engine's four-state lifecycle
-        // collapses here: `.cached` (on disk, not resident) reports `loaded:false`.
-        // This matches the SDK type; the full lifecycle is on the TouchUp picker
-        // (`/v1/touchup/models` -> `TouchUpModelInfo.loadState`).
-        let available = models.map {
+        let info = await TouchUpEngine.shared.getModelInfo()
+        let current = await TouchUpEngine.shared.preferredModel
+        let available = info.map {
             SDKLLMModelInfo(
-                id: $0.id, displayName: $0.displayName,
-                sizeBytes: $0.sizeBytes, loaded: $0.loadState == .loaded,
-                latencyHintMs: nil
+                id: $0.type.rawValue, displayName: $0.type.displayName,
+                sizeBytes: $0.type.estimatedSize, loaded: $0.isLoaded,
+                latencyHintMs: $0.type.latencyHintMs, purpose: $0.type.purpose
             )
         }
         return try JSONEncoder().encode(
-            LLMModelsResponse(current: active.rawValue, available: available)
+            LLMModelsResponse(current: current.rawValue, available: available)
         )
     }
 
@@ -993,21 +998,23 @@ public final class InProcessTransport: EngineTransport {
         return modelType
     }
 
-    /// Real post-operation model info for the preload/unload responses: re-query
-    /// `availableModels()` so `displayName` / `sizeBytes` / `loaded` reflect the
-    /// actual state rather than a fabricated row.
+    /// Real post-operation model info for the preload/unload responses.
+    /// Reads `getModelInfo()` (catalogue-wide, engine#303) for the live
+    /// `loaded` state rather than `TouchUpEngine.availableModels()`, whose
+    /// three rows are scoped to the TouchUp picker — that used to leave any
+    /// generate-only catalogue model (e.g. yooz-instruct-4b) falling through
+    /// to a fabricated `loaded: false` row even right after a successful
+    /// preload. `displayName` / `sizeBytes` / `latencyHintMs` come straight
+    /// from the catalogue, so there is no "row not found" case left: every
+    /// `LLMModelType` this is called with (always caller-resolved via
+    /// `resolveLLMModel`) is by construction a valid catalogue entry.
     private func llmModelInfo(_ modelType: LLMModelType) async -> SDKLLMModelInfo {
-        let models = await TouchUpEngine.shared.availableModels()
-        if let match = models.first(where: { $0.id == modelType.rawValue }) {
-            return SDKLLMModelInfo(
-                id: match.id, displayName: match.displayName,
-                sizeBytes: match.sizeBytes, loaded: match.loadState == .loaded,
-                latencyHintMs: nil
-            )
-        }
+        let info = await TouchUpEngine.shared.getModelInfo()
+        let isLoaded = info.first(where: { $0.type == modelType })?.isLoaded ?? false
         return SDKLLMModelInfo(
-            id: modelType.rawValue, displayName: modelType.rawValue,
-            sizeBytes: nil, loaded: false, latencyHintMs: nil
+            id: modelType.rawValue, displayName: modelType.displayName,
+            sizeBytes: modelType.estimatedSize, loaded: isLoaded,
+            latencyHintMs: modelType.latencyHintMs, purpose: modelType.purpose
         )
     }
 

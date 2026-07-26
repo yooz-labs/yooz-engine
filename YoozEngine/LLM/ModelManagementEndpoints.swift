@@ -157,16 +157,28 @@ public enum ModelManagementEndpoints {
     }
 
     /// LLM rows for the model-management inventory: the cache descriptors
-    /// paired with live display/loaded/active state from the TouchUp picker.
-    /// Single copy — both transports previously duplicated this assembly.
+    /// paired with live display/loaded/active state. Single copy — both
+    /// transports previously duplicated this assembly.
+    ///
+    /// `loaded` comes from `getModelInfo()` (catalogue-wide, engine#303),
+    /// not the TouchUp picker rows: the picker only ever names its three
+    /// selectable entries (yooz-light-v3 / yooz-quality-v3 /
+    /// foundation-models), so a generate-only catalogue model resident via
+    /// `/v1/llm/generate` or `/v1/llm/preload` would otherwise report
+    /// `loaded: false` here even while genuinely occupying memory.
+    /// `displayName` / `isActive` stay picker-sourced — `isActive` is
+    /// specifically "is this the TouchUp picker's active model", which is
+    /// correctly always `false` for a model the picker cannot select.
     static func llmInventoryInputs() async -> [ModelStore.LLMInventoryInput] {
         let picker = await TouchUpEngine.shared.availableModels()
+        let info = await TouchUpEngine.shared.getModelInfo()
         return LLMModelCatalog.cacheDescriptors().map { descriptor in
             let row = picker.first { $0.id == descriptor.id }
+            let loaded = info.first { $0.type.rawValue == descriptor.id }?.isLoaded ?? false
             return ModelStore.LLMInventoryInput(
                 descriptor: descriptor,
                 displayName: row?.displayName ?? descriptor.id,
-                loaded: row?.loadState == .loaded,
+                loaded: loaded,
                 isActive: row?.isActive ?? false
             )
         }

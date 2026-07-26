@@ -8,89 +8,107 @@ import Foundation
 
 // MARK: - Model Types
 
-/// Yooz LLM model types for touch-up processing.
+/// A servable Yooz LLM model, resolved against the engine's curated
+/// catalogue (`LLMModelCatalog`, engine#303).
 ///
-/// Identifiers are stable wire values; `/v1/llm/generate` accepts the raw
-/// value as the `model` field. Order of cases matches the public model
-/// lineup (light first, quality second).
+/// Catalogue-as-data, not identity-as-enum: the engine curates a list of
+/// models it is willing to serve — same shape as ollama's library — and
+/// this type is a typed handle onto one catalogue entry. `/v1/llm/generate`
+/// accepts any catalogued model's `rawValue` as the `model` field, not just
+/// a fixed pair of TouchUp proofreading tiers.
 ///
-/// Both tiers download from Hugging Face on first use via the
-/// `#huggingFaceLoadModelContainer` macro in `MLXLLMBackend`. There is no
-/// embedded / bundled model path — packaged builds and fresh installs
-/// behave identically. Cached snapshots land under
-/// `~/.cache/huggingface/hub/` per swift-transformers `Hub` defaults.
+/// `init?(rawValue:)` resolves against `LLMModelCatalog.entries` by EITHER
+/// the canonical wire id (e.g. `"yooz-light-v3"`) OR the model's full
+/// Hugging Face repo id (alias resolution) — a caller that names the HF
+/// repo directly keeps working without a repoint. Membership is curated,
+/// not a bare `YoozLabs/` prefix rule: not every repo under the org is an
+/// MLX causal LM this backend can serve (e.g. `YoozLabs/Qwen3-ASR-1.7B-8bit`
+/// is ASR, `YoozLabs/YoozTextCleanup` is an xcframework) — see
+/// `LLMModelCatalog` for the prefix invariant enforced on curated entries.
+///
+/// `yooz-light-v3` and `yooz-quality-v3` are STABLE wire ids; consumer SDKs
+/// depend on them — never rename.
+///
+/// `Hashable`/`Equatable` are BY `rawValue` ALONE: `TouchUpEngine` uses this
+/// type as a dictionary key (`loadStates`, `lastLoadErrors`,
+/// `inFlightLoadTasks`, and its per-tier backend cache), and every non-nil
+/// instance is catalogue-sourced (the memberwise fields cannot diverge from
+/// `rawValue` in practice), so rawValue equality is both sufficient and the
+/// deliberately narrow contract.
 ///
 /// `public` because `APIServer` (a different target on the modular
-/// build) consumes this enum directly via the picker routes.
-public enum LLMModelType: String, CaseIterable, Sendable {
-    /// Fast proofread tier. Yooz-Light v3, fused 6-bit on the KD
-    /// Qwen3.5-0.8B QAT base (yooz-benchmark#29).
-    case yoozLight = "yooz-light-v3"
-    /// High-quality rewrite tier. Yooz-Quality v3, fused 6-bit on the KD
-    /// Qwen3.5-4B QAT base. Replaces the former Qwen3.5-9B fallback.
-    case yoozQuality = "yooz-quality-v3"
-
-    public var displayName: String {
-        switch self {
-        case .yoozLight:
-            return "Yooz-Light"
-        case .yoozQuality:
-            return "Yooz-Quality"
-        }
-    }
-
-    public var description: String {
-        switch self {
-        case .yoozLight:
-            return "Fast proofreading (~300ms)"
-        case .yoozQuality:
-            return "High quality rewriting (~1s)"
-        }
-    }
-
-    /// Approximate on-disk size after HF download (used for picker UX
-    /// hints in consumer apps). Numbers are the published 4-bit MLX
-    /// snapshot sizes, not raw weights.
-    public var estimatedSize: Int64 {
-        switch self {
-        case .yoozLight:
-            return 605 * 1024 * 1024   // ~605 MB (Yooz-Light-v3 fused 6-bit)
-        case .yoozQuality:
-            return 3277 * 1024 * 1024  // ~3.2 GB (Yooz-Quality-v3 fused 6-bit)
-        }
-    }
-
-    /// Best-effort per-model latency baseline in milliseconds for
-    /// picker UX hints (`LLMModelInfo.latencyHintMs`). Single source of
-    /// truth: `APIServer.infoEntry` reads this; keep it consistent with
-    /// `description` above (yooz-benchmark research/issue-24 harness
-    /// measured 341 / 1,226 ms at batch 1).
-    public var latencyHintMs: Int {
-        switch self {
-        case .yoozLight:
-            return 300
-        case .yoozQuality:
-            return 1200
-        }
-    }
-
+/// build) consumes this type directly via the picker routes.
+public struct LLMModelType: RawRepresentable, Hashable, Sendable, CaseIterable {
+    public let rawValue: String
     /// Hugging Face model identifier. Pulled by
     /// `loadModelContainer(from: #hubDownloader(), …, configuration:)`
     /// on first load. `revision` defaults to `main`; pin a commit here
     /// only if a future upstream change breaks compatibility with our
     /// backend assumptions.
-    public var huggingFaceID: String {
-        switch self {
-        case .yoozLight:
-            return "YoozLabs/Yooz-Light-v3-Qwen3.5-0.8B"
-        case .yoozQuality:
-            // v3 publishes fused weights only (publish-gated: no adapter
-            // files or lora_* keys); the adapter-pollution loader crash
-            // history is regression-guarded by
-            // `testPreloadLoadsQualityModelV2`.
-            return "YoozLabs/Yooz-Quality-v3-Qwen3.5-4B"
-        }
+    public let huggingFaceID: String
+    public let displayName: String
+    public let description: String
+    /// Approximate on-disk size after HF download (used for picker UX
+    /// hints in consumer apps). Numbers are the published 4-bit MLX
+    /// snapshot sizes, not raw weights.
+    public let estimatedSize: Int64
+    /// Best-effort per-model latency baseline in milliseconds for picker
+    /// UX hints (`LLMModelInfo.latencyHintMs`); keep consistent with
+    /// `description` above.
+    public let latencyHintMs: Int
+    /// Proofreading head vs. general/classify base (engine#303) — the
+    /// whole point of catalogue-as-data: consumers can tell these apart
+    /// instead of every catalogued model implicitly being a TouchUp tier.
+    public let purpose: LLMModelPurpose
+
+    private init(entry: LLMCatalogEntry) {
+        self.rawValue = entry.id
+        self.huggingFaceID = entry.huggingFaceID
+        self.displayName = entry.displayName
+        self.description = entry.description
+        self.estimatedSize = entry.estimatedSize
+        self.latencyHintMs = entry.latencyHintMs
+        self.purpose = entry.purpose
     }
+
+    public init?(rawValue: String) {
+        guard let entry = LLMModelCatalog.entry(rawValue: rawValue) else { return nil }
+        self.init(entry: entry)
+    }
+
+    public static var allCases: [LLMModelType] {
+        LLMModelCatalog.entries.map(LLMModelType.init(entry:))
+    }
+
+    public static func == (lhs: LLMModelType, rhs: LLMModelType) -> Bool {
+        lhs.rawValue == rhs.rawValue
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(rawValue)
+    }
+
+    // MARK: - Known catalogue entries
+    //
+    // Static members so every existing `.yoozLight` / `LLMModelType.yoozLight`
+    // call site (dozens, across APIServer/TouchUpEngine/tests) keeps compiling
+    // unchanged even though this is now a struct, not an enum with cases.
+    // Force-unwrapped: each id is asserted present in `LLMModelCatalog.entries`
+    // by `LLMModelCatalogTests`, so a typo here is a build-time-adjacent test
+    // failure, not a runtime crash surface.
+
+    /// Fast proofread tier. Yooz-Light v3, fused 6-bit on the KD
+    /// Qwen3.5-0.8B QAT base (yooz-benchmark#29).
+    public static let yoozLight = LLMModelType(rawValue: "yooz-light-v3")!
+    /// High-quality rewrite tier. Yooz-Quality v3, fused 6-bit on the KD
+    /// Qwen3.5-4B QAT base. Replaces the former Qwen3.5-9B fallback.
+    public static let yoozQuality = LLMModelType(rawValue: "yooz-quality-v3")!
+    /// General instruct / classify base — untuned QAT-lean KD, same lineage
+    /// as the proofreading tiers but NOT a TouchUp head (`purpose == .general`).
+    /// First non-proofreading catalogue addition (engine#303); measured
+    /// 38/38 on remi's auto-approve permission grid with 0 unparsable
+    /// responses, vs. `yoozQuality`'s 6 silently-unparsable "passes".
+    public static let yoozInstruct4B = LLMModelType(rawValue: "yooz-instruct-4b")!
 }
 
 // MARK: - Errors

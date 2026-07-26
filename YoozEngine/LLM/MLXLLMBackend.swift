@@ -813,30 +813,15 @@ actor MLXLLMBackend: LLMBackend {
 // MARK: - Factory
 
 extension MLXLLMBackend {
+    /// Single factory for every catalogued model (engine#303) — the former
+    /// `createLight()` / `createQuality()` shortcuts collapsed into this,
+    /// since both did nothing beyond calling this with a fixed `type`.
     static func create(
         for type: LLMModelType,
         bundleIdentifier: String = "live.yooz.engine"
     ) -> MLXLLMBackend {
         return MLXLLMBackend(
             modelType: type,
-            bundleIdentifier: bundleIdentifier
-        )
-    }
-
-    static func createLight(
-        bundleIdentifier: String = "live.yooz.engine"
-    ) -> MLXLLMBackend {
-        return create(
-            for: .yoozLight,
-            bundleIdentifier: bundleIdentifier
-        )
-    }
-
-    static func createQuality(
-        bundleIdentifier: String = "live.yooz.engine"
-    ) -> MLXLLMBackend {
-        return create(
-            for: .yoozQuality,
             bundleIdentifier: bundleIdentifier
         )
     }

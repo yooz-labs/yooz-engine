@@ -3713,21 +3713,21 @@ extension APIServer {
             displayName: modelType.displayName,
             sizeBytes: modelType.estimatedSize,
             loaded: loaded,
-            latencyHintMs: modelType.latencyHintMs
+            latencyHintMs: modelType.latencyHintMs,
+            purpose: modelType.purpose
         )
     }
 
-    /// Build the full `GET /v1/llm/models` body. Async because the load
-    /// state + preferred-model flag live inside the TouchUpEngine actor.
+    /// Build the full `GET /v1/llm/models` body: one row per catalogued
+    /// model (engine#303), not a hardcoded light/quality pair — this is the
+    /// "what can I choose from" surface for consumer apps. Async because the
+    /// load state + preferred-model flag live inside the TouchUpEngine actor.
     nonisolated static func buildLLMModelsResponse() async -> LLMModelsResponse {
         let info = await TouchUpEngine.shared.getModelInfo()
         let current = await TouchUpEngine.shared.preferredModel.rawValue
         return LLMModelsResponse(
             current: current,
-            available: [
-                infoEntry(for: .yoozLight, loaded: info.light.isLoaded),
-                infoEntry(for: .yoozQuality, loaded: info.quality.isLoaded)
-            ]
+            available: info.map { infoEntry(for: $0.type, loaded: $0.isLoaded) }
         )
     }
     #endif
