@@ -42,10 +42,10 @@ git checkout -b release/vX.Y.Z
 # edit YoozEngine/Info.plist (CFBundleShortVersionString)
 git commit -am "chore: bump version to X.Y.Z"
 
-# 2. Build + sign the three artifacts locally.
+# 2. Build + sign the four artifacts locally.
 bash scripts/release-engine.sh
 
-# 3. Smoke-test. All three .apps must print ALIVE.
+# 3. Smoke-test. All four .apps must print ALIVE.
 bash scripts/smoke-test-release.sh
 
 # 4. Tag + push. The release-notes.yml workflow creates a draft release.
@@ -73,7 +73,7 @@ gh release edit vX.Y.Z --draft=false
   (Apple STT only; sub-GB bundle, no MLX).
 - `scripts/build-whisper-helper.sh` — A5 script; builds
   `dist/YoozEngineWhisper.app` for embedding into `Yooz Whisper.app`.
-- `scripts/release-engine.sh` — orchestrator; runs all three builds,
+- `scripts/release-engine.sh` — orchestrator; runs all four builds,
   zips each bundle with `ditto` (preserves codesign), computes SHA256 of
   binary and zip for every variant, and writes `dist/RELEASE.md`.
 - `scripts/smoke-test-release.sh` — launches each built `.app` serially
@@ -123,7 +123,7 @@ and deleted-session `404`.
 - **Debug default.** MLX transitive embeds fail in Release (see #38);
   `YOOZ_ENGINE_CONFIG=Release` can be tried once that lands, until then
   the scripts warn loudly and default to Debug.
-- **Shared port.** Smoke test launches are serial — the three variants
+- **Shared port.** Smoke test launches are serial — the four variants
   all bind port 19920, so parallel smoke-testing is not possible.
 - **Infinite full-variant only.** `/v1/infinite/*` is available in
   `YoozEngine.app`; Lite and Whisper return module-not-bundled `501` by
