@@ -57,7 +57,7 @@ final class GPUAdmissionContentionBenchTests: XCTestCase {
     func testBackgroundGenerationQueuesBehindBriefInteractiveSessionThenCompletes() async throws {
         try XCTSkipUnless(shouldRun, "Set GPU_CONTENTION_LIVE=1 to run the #263 contention bench")
 
-        let backend = MLXLLMBackend.createLight()
+        let backend = MLXLLMBackend.create(for: .yoozLight)
         let cached = await backend.isModelCached
         try XCTSkipUnless(
             cached,
@@ -154,7 +154,7 @@ final class GPUAdmissionContentionBenchTests: XCTestCase {
     func testBackgroundGenerationIsForceAdmittedAfterAgingCeiling() async throws {
         try XCTSkipUnless(shouldRun, "Set GPU_CONTENTION_LIVE=1 to run the #263 contention bench")
 
-        let backend = MLXLLMBackend.createLight()
+        let backend = MLXLLMBackend.create(for: .yoozLight)
         let cached = await backend.isModelCached
         try XCTSkipUnless(
             cached,

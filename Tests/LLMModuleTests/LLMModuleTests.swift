@@ -84,9 +84,11 @@ final class LLMModuleTests: XCTestCase {
     func testLLMModelTypeAllCases() {
         // APIServer enumerates allCases to report available models to /v1/models.
         // Any shrink of the list is a public-API break; lock it with equality.
+        // engine#303 added yooz-instruct-4b as the catalogue's first
+        // non-proofreading (general) entry.
         XCTAssertEqual(
             LLMModelType.allCases,
-            [.yoozLight, .yoozQuality],
+            [.yoozLight, .yoozQuality, .yoozInstruct4B],
             "LLMModelType.allCases drives /v1/models output; order matters"
         )
     }
@@ -131,6 +133,90 @@ final class LLMModuleTests: XCTestCase {
         XCTAssertFalse(LLMModelType.yoozLight.description.isEmpty)
         XCTAssertFalse(LLMModelType.yoozQuality.displayName.isEmpty)
         XCTAssertFalse(LLMModelType.yoozQuality.description.isEmpty)
+    }
+
+    // MARK: - LLMModelCatalog (engine#303, always runs)
+
+    func testCatalogueNewModelIsGeneralPurposeNotProofread() {
+        // The whole point of the catalogue refactor: a consumer can tell a
+        // TouchUp proofreading head apart from a general/classify base.
+        XCTAssertEqual(LLMModelType.yoozLight.purpose, .proofread)
+        XCTAssertEqual(LLMModelType.yoozQuality.purpose, .proofread)
+        XCTAssertEqual(LLMModelType.yoozInstruct4B.purpose, .general)
+    }
+
+    func testCatalogueNewModelRawValueAndHuggingFaceID() {
+        XCTAssertEqual(LLMModelType.yoozInstruct4B.rawValue, "yooz-instruct-4b")
+        XCTAssertEqual(
+            LLMModelType.yoozInstruct4B.huggingFaceID,
+            "YoozLabs/Qwen3.5-4B-qat-lean-4bit-mlx"
+        )
+        XCTAssertGreaterThan(LLMModelType.yoozInstruct4B.estimatedSize, 0)
+    }
+
+    func testCatalogueResolvesCanonicalWireID() {
+        // The stable wire id every consumer app should be sending.
+        XCTAssertEqual(LLMModelType(rawValue: "yooz-instruct-4b"), .yoozInstruct4B)
+    }
+
+    func testCatalogueResolvesHuggingFaceRepoIDAsAlias() {
+        // remi's shipped default config names the full HF repo path directly
+        // (yooz-labs/remi#811); that must keep resolving without remi having
+        // to repoint to the short wire id.
+        XCTAssertEqual(
+            LLMModelType(rawValue: "YoozLabs/Qwen3.5-4B-qat-lean-4bit-mlx"),
+            .yoozInstruct4B
+        )
+        XCTAssertEqual(
+            LLMModelType(rawValue: "YoozLabs/Yooz-Light-v3-Qwen3.5-0.8B"),
+            .yoozLight
+        )
+    }
+
+    func testCatalogueUnknownIDStillReturnsNil() {
+        // The gate stays: only its membership test changed from "is this
+        // one of two TouchUp tiers" to "is this in the curated catalogue".
+        XCTAssertNil(LLMModelType(rawValue: "YoozLabs/Qwen3-ASR-1.7B-8bit"),
+                     "an unrelated YoozLabs repo (ASR, not an MLX causal LM) must not resolve")
+        XCTAssertNil(LLMModelType(rawValue: "not-a-real-model"))
+        XCTAssertNil(LLMModelType(rawValue: ""))
+    }
+
+    func testCatalogueEveryHuggingFaceIDHasYoozLabsPrefix() {
+        // Curated, not a bare prefix rule: every entry we DO curate must
+        // still live under the org (cheap guardrail against a copy-paste
+        // mistake adding a non-Yooz repo to the catalogue).
+        for modelType in LLMModelType.allCases {
+            XCTAssertTrue(
+                modelType.huggingFaceID.hasPrefix("YoozLabs/"),
+                "\(modelType.rawValue) huggingFaceID '\(modelType.huggingFaceID)' " +
+                    "must start with 'YoozLabs/'"
+            )
+        }
+    }
+
+    func testCacheDescriptorsCoverEveryCatalogueEntry() {
+        // Disk hygiene (cleanup/dedupe/delete) must see every catalogued
+        // model, including new additions, with no separate list to update.
+        let descriptors = LLMModelCatalog.cacheDescriptors()
+        XCTAssertEqual(descriptors.count, LLMModelType.allCases.count)
+        XCTAssertTrue(descriptors.contains { $0.id == "yooz-instruct-4b" })
+        XCTAssertEqual(
+            Set(descriptors.map(\.id)),
+            Set(LLMModelType.allCases.map(\.rawValue))
+        )
+    }
+
+    func testCatalogueEquatableAndHashableAreByRawValueAlone() {
+        // TouchUpEngine uses LLMModelType as a dictionary key
+        // (`backends`, `loadStates`, `lastLoadErrors`, `inFlightLoadTasks`);
+        // two resolutions of the same id must collide.
+        let a = LLMModelType(rawValue: "yooz-light-v3")
+        let b = LLMModelType(rawValue: "YoozLabs/Yooz-Light-v3-Qwen3.5-0.8B")
+        XCTAssertEqual(a, b, "canonical id and HF-repo alias must resolve to an equal value")
+        var dict: [LLMModelType: Int] = [:]
+        dict[.yoozLight] = 1
+        XCTAssertEqual(dict[LLMModelType(rawValue: "yooz-light-v3")!], 1)
     }
 
     // MARK: - TouchUpMode (always runs)
@@ -342,7 +428,7 @@ final class LLMModuleTests: XCTestCase {
         try XCTSkipUnless(shouldLoadRealModels,
                           "Set YOOZ_LLM_LOAD_MODELS=1 to exercise the cross-call KV-cache bleed guard")
 
-        let backend = MLXLLMBackend.createLight()
+        let backend = MLXLLMBackend.create(for: .yoozLight)
         try await backend.load()
 
         let systemPrompt = """
