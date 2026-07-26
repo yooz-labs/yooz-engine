@@ -152,4 +152,57 @@ final class InProcessLiveModelTests: XCTestCase {
         let output = try await client.llm.generate(prompt: "Correct: i has a apple")
         XCTAssertFalse(output.isEmpty, "LLM generate should return non-empty text")
     }
+
+    // MARK: - LLM cache clearing (engine#299, real weights)
+
+    /// Clearing a resident tier's cache must leave the weights themselves
+    /// resident — the entire point of the endpoint versus `unloadModel`.
+    /// SDK -> InProcessTransport.handleLLMClearCache ->
+    /// TouchUpEngine.clearCache -> MLXLLMBackend.clearSession.
+    func testInProcessClearCacheDropsCacheButKeepsWeightsLoaded() async throws {
+        try XCTSkipUnless(llmEnabled,
+                          "Set YOOZ_LLM_LOAD_MODELS=1 to exercise the in-process LLM load path")
+        let client = makeClient()
+        try await client.connect()
+
+        // `/v1/llm/preload` (not the picker's `setModel`) so this doesn't
+        // depend on / disturb the single-resident active-tier invariant.
+        try await client.touchUp.preloadModel("yooz-light-v3")
+
+        let cleared = try await client.touchUp.clearCache("yooz-light-v3")
+        XCTAssertEqual(cleared, ["yooz-light-v3"], "the resident tier's cache must be reported cleared")
+
+        // `/v1/llm/status` reports the ACTIVE tier only; assert through the
+        // picker instead so this holds regardless of which tier is preferred.
+        let picker: LLMModelsResponse = try await client.touchUp.availableModels()
+        let light = picker.available.first { $0.id == "yooz-light-v3" }
+        XCTAssertEqual(light?.loaded, true, "weights must remain resident after a cache clear")
+    }
+
+    /// Omitting `model` with two resident tiers must clear both — the
+    /// "idle-policy sweep" shape a consumer actually calls.
+    func testInProcessClearCacheOmittedModelClearsEveryLoadedTier() async throws {
+        try XCTSkipUnless(llmEnabled,
+                          "Set YOOZ_LLM_LOAD_MODELS=1 to exercise the in-process LLM load path")
+        let client = makeClient()
+        try await client.connect()
+
+        // `/v1/llm/preload` for both tiers loads them side by side (no
+        // single-resident eviction — that only applies to the picker's
+        // `setModel`), so both are genuinely resident at once.
+        try await client.touchUp.preloadModel("yooz-light-v3")
+        try await client.touchUp.preloadModel("yooz-quality-v3")
+
+        let cleared = try await client.touchUp.clearCache()
+        XCTAssertEqual(
+            Set(cleared), ["yooz-light-v3", "yooz-quality-v3"],
+            "omitting model must clear every resident tier"
+        )
+
+        let picker: LLMModelsResponse = try await client.touchUp.availableModels()
+        let light = picker.available.first { $0.id == "yooz-light-v3" }
+        let quality = picker.available.first { $0.id == "yooz-quality-v3" }
+        XCTAssertEqual(light?.loaded, true, "Light weights must remain resident after clear")
+        XCTAssertEqual(quality?.loaded, true, "Quality weights must remain resident after clear")
+    }
 }

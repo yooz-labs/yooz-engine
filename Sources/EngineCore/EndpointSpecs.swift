@@ -79,6 +79,7 @@ public enum EndpointSpecs {
         EndpointSpec(.post, "/v1/llm/model"),
         EndpointSpec(.post, "/v1/llm/preload"),
         EndpointSpec(.post, "/v1/llm/unload"),
+        EndpointSpec(.post, "/v1/llm/clear-cache"),
 
         EndpointSpec(.get, "/v1/infinite/models"),
         EndpointSpec(.post, "/v1/infinite/model"),

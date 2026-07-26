@@ -92,6 +92,43 @@ final class InProcessTransportTests: XCTestCase {
         XCTAssertNotNil(status.modelId)
     }
 
+    // MARK: - LLM cache clearing (engine#299, no models required)
+
+    /// Omitting `model` when nothing is loaded must be a success no-op, not
+    /// an error — an idle-policy caller needs to invoke this
+    /// unconditionally without first checking per-tier load state.
+    func testInProcessClearCacheOmittedModelIsANoOpWhenNothingLoaded() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let cleared = try await client.touchUp.clearCache()
+        XCTAssertTrue(cleared.isEmpty, "clearing with nothing loaded must report no cleared tiers")
+    }
+
+    /// Same no-op contract, scoped to a specific (valid, but not resident)
+    /// tier: clearing an already-empty cache never throws.
+    func testInProcessClearCacheNamedModelIsANoOpWhenNotLoaded() async throws {
+        let client = makeClient()
+        try await client.connect()
+        let cleared = try await client.touchUp.clearCache("yooz-light-v3")
+        XCTAssertTrue(cleared.isEmpty, "clearing a not-loaded tier must report no cleared tiers")
+    }
+
+    /// Unknown model id -> 400 `invalid_model`, mirroring
+    /// `/v1/llm/preload` and `/v1/llm/unload`.
+    func testInProcessClearCacheUnknownModelThrows400() async throws {
+        let client = makeClient()
+        try await client.connect()
+        do {
+            _ = try await client.touchUp.clearCache("totally-unknown-model")
+            XCTFail("expected a 400 for an unknown model")
+        } catch let error as YoozEngineError {
+            guard case .serverError(let status, let code, _) = error,
+                  status == 400, code == "invalid_model" else {
+                return XCTFail("expected serverError 400 invalid_model, got \(error)")
+            }
+        }
+    }
+
     /// Streaming dispatch is wired (no longer `unsupportedOperation` wholesale):
     /// switching to the qwen3 preview backend — which the in-process streaming
     /// path intentionally does NOT support — and opening a stream must throw

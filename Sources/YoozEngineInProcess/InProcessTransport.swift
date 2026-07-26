@@ -21,7 +21,8 @@ import YoozEngineClient
 /// `GET /v1/modules`; STT `GET /v1/stt/{status,languages,engine}`,
 /// `POST /v1/stt/{batch,engine,load}`, and streaming via `openSTTStream`;
 /// `POST /v1/grammar/check`; `POST /v1/vad/detect`; LLM
-/// `GET /v1/llm/{status,models}`, `POST /v1/llm/{generate,model,preload,unload}`;
+/// `GET /v1/llm/{status,models}`,
+/// `POST /v1/llm/{generate,model,preload,unload,clear-cache}`;
 /// TouchUp `GET /v1/touchup/models`, `POST /v1/touchup{,/model}`;
 /// `POST /v1/session/{begin,end}` — the per-recording session-reset boundary
 /// (engine issue #114 / #222), fanned out via the shared
@@ -195,7 +196,12 @@ public final class InProcessTransport: EngineTransport {
     // `/v1/session/*`) DO run their real work on every test sweep, so they
     // must stay cheap and side-effect-safe in a bare test process — the test
     // additionally redirects the HF cache env vars so cleanup can never
-    // touch the machine's real model cache.
+    // touch the machine's real model cache. `/v1/llm/clear-cache`
+    // (engine#299) is the same shape for an EMPTY body specifically: an
+    // absent `model` is valid input (clear every loaded tier), not a
+    // validation failure, so RouteParityTests's empty-body probe also runs
+    // the real (but in-memory, side-effect-safe) clear path rather than
+    // failing fast on a decode error.
     public func post(_ path: String, body: Data) async throws -> Data {
         try await connect()
         if let tableResponse = try await dispatchViaTable(.post, path, body: body) {
@@ -220,6 +226,8 @@ public final class InProcessTransport: EngineTransport {
             return try await handleLLMPreload(body)
         case "/v1/llm/unload":
             return try await handleLLMUnload(body)
+        case "/v1/llm/clear-cache":
+            return try await handleLLMClearCache(body)
         case "/v1/touchup":
             return try await handleTouchUp(body)
         default:
@@ -856,6 +864,19 @@ public final class InProcessTransport: EngineTransport {
         let modelType = try resolveLLMModel(request.model)
         await TouchUpEngine.shared.unload(modelType)
         return try JSONEncoder().encode(await llmModelInfo(modelType))
+    }
+
+    /// `model` is optional (engine#299): an empty body — RouteParityTests's
+    /// probe, and a genuinely body-less POST from a real caller — means the
+    /// same thing as a decoded `{"model": null}`, so it is special-cased
+    /// ahead of the decode rather than surfacing as a decode failure.
+    private func handleLLMClearCache(_ body: Data) async throws -> Data {
+        let request: LLMClearCacheRequest = body.isEmpty
+            ? LLMClearCacheRequest(model: nil)
+            : try JSONDecoder().decode(LLMClearCacheRequest.self, from: body)
+        let modelType = try request.model.map(resolveLLMModel)
+        let cleared = await TouchUpEngine.shared.clearCache(modelType)
+        return try JSONEncoder().encode(LLMClearCacheResponse(cleared: cleared.map(\.rawValue)))
     }
 
     /// Resolve the optional GPU-admission class from its raw wire string

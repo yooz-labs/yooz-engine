@@ -115,6 +115,36 @@ public struct LLMModelSelection: Codable, Sendable, Equatable {
     }
 }
 
+/// Request body for `POST /v1/llm/clear-cache` (engine#299). Unlike
+/// `LLMModelSelection.model`, this `model` is OPTIONAL: naming a tier clears
+/// only that tier's prompt-KV cache, and omitting it (or posting an empty
+/// body — see `APIServer`'s route for why both mean the same thing) clears
+/// every currently-loaded tier. This is the LLM-scoped middle lever between
+/// `/v1/session/begin` (fans a KV-cache reset out to every module, STT
+/// included — too broad for a memory-reclaim call) and `/v1/llm/unload`
+/// (frees the cache AND the weights — too destructive when the caller only
+/// wants the ~GB-scale retained-KV delta back).
+public struct LLMClearCacheRequest: Codable, Sendable, Equatable {
+    public let model: String?
+
+    public init(model: String? = nil) {
+        self.model = model
+    }
+}
+
+/// Response body for `POST /v1/llm/clear-cache`. `cleared` carries the wire
+/// ids of the tiers that actually had a cache to drop. A tier that was not
+/// loaded (or, when `model` was omitted, no tiers loaded at all) is a
+/// success no-op and is simply absent from the list — never an error, since
+/// clearing an already-empty cache trivially succeeds.
+public struct LLMClearCacheResponse: Codable, Sendable, Equatable {
+    public let cleared: [String]
+
+    public init(cleared: [String]) {
+        self.cleared = cleared
+    }
+}
+
 /// Response body for `GET /v1/llm/status`. Shape parity with `STTStatus` so
 /// consumer apps can template a single progress-banner view-model over both
 /// endpoints.
