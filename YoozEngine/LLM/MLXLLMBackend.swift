@@ -371,6 +371,23 @@ actor MLXLLMBackend: LLMBackend {
         logger.info("Model \(self.modelType.rawValue) unloaded")
     }
 
+    /// Clear the cache ONLY if this backend is currently resident, reporting
+    /// whether it did.
+    ///
+    /// The two-step `isLoaded` check followed by `clearSession()` is not safe
+    /// from an actor's caller: each is a separate hop, and a concurrent
+    /// `unload()` landing between them makes the caller report "cache dropped,
+    /// weights still resident" for a tier that was in fact fully unloaded --
+    /// which is precisely the distinction `/v1/llm/clear-cache` exists to
+    /// make (engine#299). Both halves are synchronous, so doing them in one
+    /// hop closes the window entirely.
+    @discardableResult
+    func clearSessionIfLoaded() -> Bool {
+        guard isLoaded else { return false }
+        clearSession()
+        return true
+    }
+
     /// Clear the cached system prompt KV state, forcing re-computation on the next call.
     func clearSession() {
         #if canImport(MLXLMCommon)

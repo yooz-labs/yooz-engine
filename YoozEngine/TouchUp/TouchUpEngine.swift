@@ -355,6 +355,14 @@ public actor TouchUpEngine {
     /// caller can call this unconditionally without checking load state
     /// first.
     ///
+    /// Caveat on the "not resident implies nothing to clear" assumption: an
+    /// `unload()` that lands while a `generate()` is suspended can be followed
+    /// by that generate's tail repopulating the prompt cache, leaving a
+    /// backend that reports `isLoaded == false` while holding cache state.
+    /// Such a tier is skipped here. That race predates this method (see the
+    /// follow-up issue on `MLXLLMBackend.generate()`); it is called out rather
+    /// than silently assumed away.
+    ///
     /// - Returns: The tiers whose cache was actually dropped, in
     ///   `LLMModelType.allCases` order.
     @discardableResult
@@ -364,13 +372,12 @@ public actor TouchUpEngine {
         for tier in tiers {
             switch tier {
             case .yoozLight:
-                guard let light = lightModel, await light.isLoaded else { continue }
-                await light.clearSession()
-                cleared.append(.yoozLight)
+                guard let light = lightModel else { continue }
+                // One hop, not check-then-act: see `clearSessionIfLoaded`.
+                if await light.clearSessionIfLoaded() { cleared.append(.yoozLight) }
             case .yoozQuality:
-                guard let quality = qualityModel, await quality.isLoaded else { continue }
-                await quality.clearSession()
-                cleared.append(.yoozQuality)
+                guard let quality = qualityModel else { continue }
+                if await quality.clearSessionIfLoaded() { cleared.append(.yoozQuality) }
             }
         }
         return cleared
