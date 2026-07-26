@@ -338,6 +338,44 @@ public actor TouchUpEngine {
         }
     }
 
+    /// Drop the cached prompt-KV state for one LLM tier — or, when
+    /// `modelType` is nil, every currently-loaded tier — WITHOUT unloading
+    /// its weights (engine#299). This is the LLM-scoped twin of
+    /// `resetForNewSession()`: that method already does exactly this per
+    /// backend, but only reachable via `/v1/session/begin`, which fans the
+    /// reset out to every `SessionResettable` module (STT included) as a
+    /// per-recording boundary. A consumer that wants to reclaim the
+    /// retained-KV memory delta (measured ~1.5 GB after sustained
+    /// proofreading traffic) without evicting another module's state, and
+    /// without paying a full `unload(_:)` + cold-reload round trip, needs a
+    /// lever scoped to the LLM tiers alone — this is that lever.
+    ///
+    /// Skips any tier that is not currently resident: clearing an
+    /// already-empty cache is a no-op, never an error, so an idle-policy
+    /// caller can call this unconditionally without checking load state
+    /// first.
+    ///
+    /// - Returns: The tiers whose cache was actually dropped, in
+    ///   `LLMModelType.allCases` order.
+    @discardableResult
+    public func clearCache(_ modelType: LLMModelType? = nil) async -> [LLMModelType] {
+        let tiers = modelType.map { [$0] } ?? LLMModelType.allCases
+        var cleared: [LLMModelType] = []
+        for tier in tiers {
+            switch tier {
+            case .yoozLight:
+                guard let light = lightModel, await light.isLoaded else { continue }
+                await light.clearSession()
+                cleared.append(.yoozLight)
+            case .yoozQuality:
+                guard let quality = qualityModel, await quality.isLoaded else { continue }
+                await quality.clearSession()
+                cleared.append(.yoozQuality)
+            }
+        }
+        return cleared
+    }
+
     /// Strict single-resident policy: unload every tier except `keep`.
     ///
     /// Called after a successful `setActiveModel` switch so the engine never

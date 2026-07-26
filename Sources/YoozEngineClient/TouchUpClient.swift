@@ -154,4 +154,24 @@ extension TouchUpClient {
         let body = try JSONEncoder().encode(LLMModelSelection(model: id))
         _ = try await engine.post("/v1/llm/unload", body: body)
     }
+
+    /// Drop the cached prompt-KV state for one LLM tier — or, if `id` is
+    /// omitted, every currently-loaded tier — WITHOUT unloading weights
+    /// (engine#299). The middle lever between doing nothing and
+    /// `unloadModel(_:)`: reclaims the retained-KV memory delta a
+    /// steady-state proofreading workload builds up (measured ~1.5 GB after
+    /// sustained traffic) while leaving the model warm, so the next call
+    /// pays only prompt-recomputation cost, not a full cold reload. Also
+    /// scoped to the LLM tiers alone, unlike `/v1/session/begin`, which
+    /// resets every module (STT included) as a per-recording boundary.
+    ///
+    /// - Returns: The wire ids of the tiers actually cleared. Empty when
+    ///   nothing was loaded — clearing an already-empty cache is a success
+    ///   no-op, never a thrown error.
+    @discardableResult
+    public func clearCache(_ id: String? = nil) async throws -> [String] {
+        let body = try JSONEncoder().encode(LLMClearCacheRequest(model: id))
+        let data = try await engine.post("/v1/llm/clear-cache", body: body)
+        return try JSONDecoder().decode(LLMClearCacheResponse.self, from: data).cleared
+    }
 }

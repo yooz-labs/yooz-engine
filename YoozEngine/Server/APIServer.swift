@@ -1652,6 +1652,58 @@ final class APIServer: ObservableObject {
             return try jsonResponse(Self.infoEntry(for: modelType, loaded: false))
         }
 
+        router.post("/v1/llm/clear-cache") { [self] request, context in
+            guard await ModuleRegistry.shared.isBundled("llm") else {
+                return moduleNotBundled("llm")
+            }
+            // `model` is optional here, unlike every other `/v1/llm/*`
+            // body (engine#299) — omitting it clears every loaded tier.
+            // `request.decode` fails on a genuinely empty body (zero
+            // bytes is not valid JSON, even though `{}` decodes fine to
+            // `model: nil`), so the empty-body case is collected and
+            // special-cased to the same "no model" request `{}` already
+            // produces, rather than being rejected as `invalid_request`.
+            let buffer: ByteBuffer
+            do {
+                buffer = try await request.body.collect(upTo: context.maxUploadSize)
+            } catch {
+                return errorResponse(
+                    status: .badRequest,
+                    message: "Invalid request body: \(error.localizedDescription)",
+                    code: "invalid_request"
+                )
+            }
+            let body: LLMClearCacheRequest
+            if buffer.readableBytes == 0 {
+                body = LLMClearCacheRequest(model: nil)
+            } else {
+                do {
+                    body = try JSONDecoder().decode(LLMClearCacheRequest.self, from: Data(buffer: buffer))
+                } catch {
+                    return errorResponse(
+                        status: .badRequest,
+                        message: "Invalid request body: \(error.localizedDescription)",
+                        code: "invalid_request"
+                    )
+                }
+            }
+            let modelType: LLMModelType?
+            if let modelID = body.model {
+                guard let resolved = LLMModelType(rawValue: modelID) else {
+                    return errorResponse(
+                        status: .badRequest,
+                        message: "Unknown model: \(modelID). Available: \(LLMModelType.allCases.map(\.rawValue).joined(separator: ", "))",
+                        code: "invalid_model"
+                    )
+                }
+                modelType = resolved
+            } else {
+                modelType = nil
+            }
+            let cleared = await TouchUpEngine.shared.clearCache(modelType)
+            return try jsonResponse(LLMClearCacheResponse(cleared: cleared.map(\.rawValue)))
+        }
+
         #if canImport(InfiniteModule)
         // Infinite: List available long-context models/modes.
         // Follows the canonical picker shape from AGENTS.md:
