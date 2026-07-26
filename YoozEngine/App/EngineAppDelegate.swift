@@ -3,7 +3,9 @@ import AppKit
 import AppleSTTModule
 #endif
 import EngineCore
+#if canImport(GrammarModule)
 import GrammarModule
+#endif
 #if canImport(InfiniteModule)
 import InfiniteModule
 #endif

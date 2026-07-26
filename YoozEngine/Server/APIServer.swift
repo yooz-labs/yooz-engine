@@ -3,7 +3,9 @@ import AppleSTTModule
 #endif
 import EngineCore
 import Foundation
+#if canImport(GrammarModule)
 import GrammarModule
+#endif
 import HuggingFace
 import Hummingbird
 import HummingbirdWebSocket
@@ -1307,6 +1309,11 @@ final class APIServer: ObservableObject {
             let detail = await ModuleEagerLoader.shared.snapshot()
             let llmLoaded = await TouchUpEngine.shared.isLightModelLoaded
             let touchupReady = await TouchUpEngine.shared.isPreloaded
+            #if canImport(GrammarModule)
+            let grammarAvailable = GrammarEngine.shared.isAvailable
+            #else
+            let grammarAvailable = false
+            #endif
             #if canImport(VADModule)
             let vadLoaded = await VADEngine.shared.isLoaded
             #else
@@ -1340,7 +1347,7 @@ final class APIServer: ObservableObject {
                     touchup: isReady(.touchup, fallback: touchupReady),
                     grammar: isReady(
                         .grammar,
-                        fallback: GrammarEngine.shared.isAvailable
+                        fallback: grammarAvailable
                     ),
                     vad: isReady(.vad, fallback: vadLoaded),
                     tts: isReady(.tts, fallback: false),
@@ -2078,6 +2085,7 @@ final class APIServer: ObservableObject {
                 )
             }
 
+            #if canImport(GrammarModule)
             guard GrammarEngine.shared.isAvailable else {
                 return errorResponse(
                     status: .serviceUnavailable,
@@ -2097,6 +2105,13 @@ final class APIServer: ObservableObject {
                 correctionsApplied: result.correctionsApplied,
                 ruleCount: GrammarEngine.shared.ruleCount
             ))
+            #else
+            // Unreachable: the registry guard above returns before we get
+            // here in a variant that omits GrammarModule. Kept for
+            // exhaustive compilation in the slim variant (see the
+            // equivalent `/v1/vad/detect` comment).
+            return moduleNotBundled("grammar")
+            #endif
         }
 
         // VAD: Detect speech segments
