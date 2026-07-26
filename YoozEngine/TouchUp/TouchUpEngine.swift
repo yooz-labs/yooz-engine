@@ -54,12 +54,20 @@ public actor TouchUpEngine {
     /// return before the restore has fully settled.
     private var restoreTask: Task<Void, Never>?
 
-    /// In-flight background-preload dispatches from `setActiveModelAsync`,
-    /// keyed per tier (engine#288). A switch never cancels another tier's
-    /// dispatch — its download runs to completion in the background — and
-    /// same-tier re-requests dedupe onto the existing handle. Entries
-    /// remove themselves on completion via `clearBackgroundPreload`.
-    private var backgroundPreloadTasks: [TouchUpModelSelection: Task<Void, Never>] = [:]
+    /// In-flight background-preload dispatches from `setActiveModelAsync`
+    /// AND `requestDownload` (engine#288, generalized in engine#306), keyed
+    /// by model id rather than `TouchUpModelSelection`: `requestDownload`
+    /// takes an `LLMModelType`, which has no selection counterpart for a
+    /// catalogue-only model (e.g. `yooz-instruct-4b`), so the id string is
+    /// the only key both dispatch paths share. `TouchUpModelSelection.rawValue`
+    /// and `LLMModelType.rawValue` agree for every id both types can name,
+    /// so a picker switch to a model and an explicit download of the same
+    /// model still collapse onto one dispatch (the cross-path dedupe PR #290
+    /// relied on). A switch never cancels another dispatch's download — it
+    /// runs to completion in the background — and same-id re-requests
+    /// dedupe onto the existing handle. Entries remove themselves on
+    /// completion via `clearBackgroundPreload`.
+    private var backgroundPreloadTasks: [String: Task<Void, Never>] = [:]
 
     /// Per-tier MLX backend, created on demand (engine#303 — catalogue-backed
     /// `LLMModelType` replaces the fixed `lightModel`/`qualityModel` pair
@@ -415,7 +423,7 @@ public actor TouchUpEngine {
         let rows = await availableModels()
         for selection in evicted {
             guard let row = rows.first(where: { $0.id == selection.rawValue }) else { continue }
-            await publishLoadStateChanged(selection, state: row.loadState)
+            await publishLoadStateChanged(selection.rawValue, state: row.loadState)
         }
     }
 
@@ -1069,6 +1077,38 @@ public actor TouchUpEngine {
         return .available
     }
 
+    /// Build a `TouchUpModelInfo` row for any catalogued `LLMModelType`,
+    /// not just the three TouchUp picker selections (engine#306) —
+    /// `availableModels()`'s `row(for:loadState:)` only ever names its
+    /// fixed three, so a generate-only catalogue model (e.g.
+    /// `yooz-instruct-4b`) needs its own row builder to be addressable by
+    /// `requestDownload`/`cancelDownload`. `displayName` / `description` /
+    /// `sizeBytes` are catalogue-sourced and identical to what the picker
+    /// already reports for `.yoozLight`/`.yoozQuality` (both draw from
+    /// `LLMModelCatalog` underneath, see `TouchUpModelSelection`'s
+    /// matching values), so this is a strict generalization, not a
+    /// divergent source of truth. `tier` and `isActive` fall back to the
+    /// non-picker defaults (`.unknown`, `false`) for a model with no
+    /// `TouchUpModelSelection` counterpart, which is never the TouchUp
+    /// picker's active model by construction. MLX tiers are always
+    /// `isAvailable: true` — they download on first use, mirroring
+    /// `availableModels()`'s convention for the two picker tiers.
+    private func catalogRow(for modelType: LLMModelType) async -> TouchUpModelInfo {
+        let selection = TouchUpModelSelection(rawValue: modelType.rawValue)
+        let active = await activeModel
+        let isLoaded = await backends[modelType]?.isLoaded ?? false
+        let cached = await isCached(modelType)
+        return TouchUpModelInfo(
+            id: modelType.rawValue,
+            displayName: modelType.displayName,
+            description: modelType.description,
+            tier: selection?.tier ?? .unknown,
+            sizeBytes: modelType.estimatedSize,
+            loadState: loadState(isAvailable: true, isCached: cached, isLoaded: isLoaded),
+            isActive: selection.map { active == $0 } ?? false
+        )
+    }
+
     /// Set the active model and (optionally) preload it. Returns the
     /// info row for the new active model so the caller does not need
     /// a follow-up `availableModels()` round-trip.
@@ -1263,10 +1303,10 @@ public actor TouchUpEngine {
         // (enqueueLoad already coalesces the underlying load). The
         // superseded-completion guard inside the dispatch handles the
         // "user moved on before I finished" case.
-        if backgroundPreloadTasks[selection] == nil {
-            backgroundPreloadTasks[selection] = Task {
+        if backgroundPreloadTasks[selection.rawValue] == nil {
+            backgroundPreloadTasks[selection.rawValue] = Task {
                 await self.preloadActiveSelectionInBackground(selection)
-                await self.clearBackgroundPreload(selection)
+                await self.clearBackgroundPreload(selection.rawValue)
             }
         }
         return row
@@ -1274,27 +1314,32 @@ public actor TouchUpEngine {
 
     /// Remove a finished dispatch's handle (actor-isolated bookkeeping for
     /// `backgroundPreloadTasks`; called by the dispatch itself on the way
-    /// out so a later re-selection can start a fresh dispatch).
-    private func clearBackgroundPreload(_ selection: TouchUpModelSelection) {
-        backgroundPreloadTasks[selection] = nil
+    /// out so a later re-selection or re-download can start a fresh
+    /// dispatch).
+    private func clearBackgroundPreload(_ modelId: String) {
+        backgroundPreloadTasks[modelId] = nil
     }
 
     /// Explicit download, decoupled from the active selection (engine#288
-    /// slice 2): fetch `selection`'s weights without switching models.
-    /// Reuses the per-tier preload dispatch — if `selection` is NOT the
-    /// active model when the load settles, the superseded-completion path
-    /// frees the memory copy and the tier lands `.cached` on disk; if it
-    /// IS active, this is an ordinary preload. Dedupes onto any dispatch
-    /// already running for the tier. Progress/outcome arrive via events.
-    /// Returns the tier's current picker row (nil for an id with no row —
-    /// structurally unreachable for validated selections).
+    /// slice 2; generalized from the 3-case picker onto the full LLM
+    /// catalogue in engine#306): fetch `modelType`'s weights without
+    /// switching models. Reuses the per-model background-load dispatch
+    /// (`downloadModel`) — if `modelType` is NOT the TouchUp picker's
+    /// active selection when the load settles, the superseded-completion
+    /// path frees the memory copy and the model lands `.cached` on disk;
+    /// if it IS active, this is an ordinary preload. A catalogue model
+    /// with no `TouchUpModelSelection` counterpart (e.g. `yooz-instruct-4b`)
+    /// is never the active selection, so it always takes the
+    /// superseded-completion path. Dedupes onto any dispatch already
+    /// running for the model id, including a picker-switch dispatch for
+    /// the same id from `setActiveModelAsync`. Progress/outcome arrive via
+    /// events. Returns the model's current picker row (nil for an id with
+    /// no row — structurally unreachable, `catalogRow(for:)` is total for
+    /// every `LLMModelType`).
     public func requestDownload(
-        _ selection: TouchUpModelSelection
+        _ modelType: LLMModelType
     ) async -> TouchUpModelInfo? {
-        let rows = await availableModels()
-        guard let row = rows.first(where: { $0.id == selection.rawValue }) else {
-            return nil
-        }
+        let row = await catalogRow(for: modelType)
         // Nothing to fetch (PR #290 review): `.cached` is complete on
         // disk and `.loaded` is resident — dispatching anyway would
         // materialize weights into GPU memory only for the superseded-
@@ -1303,39 +1348,38 @@ public actor TouchUpEngine {
         if row.loadState == .cached || row.loadState == .loaded {
             return row
         }
-        if backgroundPreloadTasks[selection] == nil {
-            backgroundPreloadTasks[selection] = Task {
-                await self.preloadActiveSelectionInBackground(selection)
-                await self.clearBackgroundPreload(selection)
+        if backgroundPreloadTasks[modelType.rawValue] == nil {
+            backgroundPreloadTasks[modelType.rawValue] = Task {
+                await self.downloadModel(modelType)
+                await self.clearBackgroundPreload(modelType.rawValue)
             }
         }
         return row
     }
 
-    /// Cancel an in-flight download for `selection` (engine#288 slice 2).
-    /// Only acts when the tier is actually `.loading` — cancelling a
-    /// loaded/settled tier is a no-op (never unloads a resident model).
-    /// `unload(_:)` cancels the in-flight load task; the tier's dispatch
-    /// observes the cancellation and publishes the settled `.available`
-    /// row state itself (cooperative-cancel path, no error toast).
+    /// Cancel an in-flight download for `modelType` (engine#288 slice 2;
+    /// generalized in engine#306). Only acts when the model is actually
+    /// `.loading` — cancelling a loaded/settled model is a no-op (never
+    /// unloads a resident model). `unload(_:)` cancels the in-flight load
+    /// task; the model's dispatch observes the cancellation and publishes
+    /// the settled `.available` row state itself (cooperative-cancel path,
+    /// no error toast).
     public func cancelDownload(
-        _ selection: TouchUpModelSelection
+        _ modelType: LLMModelType
     ) async -> TouchUpModelInfo? {
-        if let modelType = LLMModelType(rawValue: selection.rawValue),
-           loadState(for: modelType) == .loading {
+        if loadState(for: modelType) == .loading {
             await unload(modelType)
             // Also cancel + clear the OUTER dispatch handle (PR #290
             // review): `unload` only cancels the inner load task, and
             // cancellation unwinds cooperatively — until the old dispatch
             // exits and self-clears, a rapid re-download/re-select of the
-            // same tier would dedupe onto the dying dispatch and silently
+            // same model would dedupe onto the dying dispatch and silently
             // no-op. Clearing here guarantees the next request always
             // starts fresh.
-            backgroundPreloadTasks[selection]?.cancel()
-            backgroundPreloadTasks[selection] = nil
+            backgroundPreloadTasks[modelType.rawValue]?.cancel()
+            backgroundPreloadTasks[modelType.rawValue] = nil
         }
-        let rows = await availableModels()
-        return rows.first(where: { $0.id == selection.rawValue })
+        return await catalogRow(for: modelType)
     }
 
     /// Background load + single-resident eviction for
@@ -1355,13 +1399,26 @@ public actor TouchUpEngine {
                     try await backend.load()
                 }
                 foundationModelsBackend = backend
-                await publishLoadStateChanged(selection, state: .loaded)
+                await publishLoadStateChanged(selection.rawValue, state: .loaded)
             } catch {
                 await publishLoadStateChanged(
-                    selection, state: .available, message: error.localizedDescription
+                    selection.rawValue, state: .available, message: error.localizedDescription
                 )
                 return
             }
+            // Only reached on a successful load, and only while this
+            // dispatch is still the CURRENT one: `activeModel == selection`
+            // (a superseded late completion must not evict the model the
+            // user has since switched to). `LLMModelType(rawValue:
+            // "foundation-models")` is structurally nil (not a catalogue
+            // entry), so unlike the MLX case below there is no settled row
+            // to unload/republish on the superseded branch here — Apple
+            // Intelligence has no weights to evict in the first place.
+            guard await activeModel == selection, !Task.isCancelled else { return }
+            await evictModelsExcept(selection)
+            await EngineEventBus.shared.publish(EngineEvent(
+                kind: .residencyChanged, module: Self.selectionStoreModule, modelId: selection.rawValue
+            ))
         case .yoozLight, .yoozQuality:
             guard let modelType = LLMModelType(rawValue: selection.rawValue) else {
                 // Structurally unreachable today (the two MLX selections'
@@ -1375,56 +1432,69 @@ public actor TouchUpEngine {
                     "TouchUp background preload: no LLMModelType for selection \(selection.rawValue, privacy: .public)"
                 )
                 await publishLoadStateChanged(
-                    selection, state: .available,
+                    selection.rawValue, state: .available,
                     message: "internal: no LLM backend maps to '\(selection.rawValue)'"
                 )
                 return
             }
-            let task = enqueueLoad(modelType)
-            let progressWatcher = Task { await self.watchDownloadProgress(modelType, selection: selection) }
-            defer { progressWatcher.cancel() }
-            do {
-                // Bounded (PR #239 review): `Task.value` on the unstructured
-                // load handle ignores the awaiting task's cancellation, so
-                // without a deadline a wedged download would pin this task +
-                // its progress watcher forever. Same deadline the blocking
-                // `setActiveModel` path applies.
-                try await awaitLoadTask(
-                    task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
-                )
-                await publishLoadStateChanged(selection, state: .loaded)
-            } catch {
-                // A cooperative cancellation (e.g. a rapid picker
-                // double-switch cancelling this tier's in-flight load via
-                // `unload`) is not a user-facing failure — omit `message`
-                // so the picker UI doesn't render a spurious error toast.
-                let message = error is CancellationError ? nil : error.localizedDescription
-                await publishLoadStateChanged(selection, state: .available, message: message)
-                return
-            }
+            await downloadModel(modelType)
         }
+    }
 
-        // Only reached on a successful load, and only while this dispatch
-        // is still the CURRENT one: `activeModel == selection` (a
-        // superseded tier's late completion must not evict the tier the
-        // user has since switched to). Superseded completion (engine#288):
-        // free the MEMORY copy but keep the downloaded weights on disk —
-        // the download is never lost, and switching back later loads from
-        // disk instantly. Publish the tier's settled row state (typically
-        // `.cached` now) so the picker reflects "downloaded, not resident".
-        guard await activeModel == selection, !Task.isCancelled else {
-            if let modelType = LLMModelType(rawValue: selection.rawValue) {
-                await unload(modelType)
-                let rows = await availableModels()
-                if let row = rows.first(where: { $0.id == selection.rawValue }) {
-                    await publishLoadStateChanged(selection, state: row.loadState)
-                }
-            }
+    /// Background load for one catalogued LLM model (engine#306): the
+    /// shared core of the picker-switch dispatch
+    /// (`preloadActiveSelectionInBackground`'s MLX case) and the
+    /// explicit-download dispatch (`requestDownload`), which generalized
+    /// this from `TouchUpModelSelection` onto the full `LLMModelType`
+    /// catalogue. Runs disconnected from the request that triggered it;
+    /// every observable outcome goes through `EngineEventBus`, keyed by
+    /// `modelType.rawValue`.
+    ///
+    /// On success, evicts every OTHER tier ONLY while this dispatch is
+    /// still the CURRENT one: the TouchUp picker's active selection still
+    /// names this model (a superseded model's late completion must not
+    /// evict the model the user has since switched to). Superseded
+    /// completion (engine#288): free the MEMORY copy but keep the
+    /// downloaded weights on disk. A catalogue model with no
+    /// `TouchUpModelSelection` counterpart (e.g. `yooz-instruct-4b`) can
+    /// never be the active selection, so it always takes the superseded
+    /// branch and lands `.cached` on disk rather than staying resident —
+    /// the "an explicit download never makes a non-picker model resident"
+    /// contract engine#306 requires.
+    private func downloadModel(_ modelType: LLMModelType) async {
+        let task = enqueueLoad(modelType)
+        let progressWatcher = Task { await self.watchDownloadProgress(modelType) }
+        defer { progressWatcher.cancel() }
+        do {
+            // Bounded (PR #239 review): `Task.value` on the unstructured
+            // load handle ignores the awaiting task's cancellation, so
+            // without a deadline a wedged download would pin this task +
+            // its progress watcher forever. Same deadline the blocking
+            // `setActiveModel` path applies.
+            try await awaitLoadTask(
+                task, deadlineSeconds: EngineConfig.modelLoadDeadlineSeconds
+            )
+            await publishLoadStateChanged(modelType.rawValue, state: .loaded)
+        } catch {
+            // A cooperative cancellation (e.g. a rapid picker
+            // double-switch cancelling this model's in-flight load via
+            // `unload`) is not a user-facing failure — omit `message`
+            // so the picker UI doesn't render a spurious error toast.
+            let message = error is CancellationError ? nil : error.localizedDescription
+            await publishLoadStateChanged(modelType.rawValue, state: .available, message: message)
             return
         }
-        await evictModelsExcept(selection)
+
+        let activeSelection = await activeModel
+        guard activeSelection.rawValue == modelType.rawValue, !Task.isCancelled else {
+            await unload(modelType)
+            let row = await catalogRow(for: modelType)
+            await publishLoadStateChanged(modelType.rawValue, state: row.loadState)
+            return
+        }
+        await evictModelsExcept(activeSelection)
         await EngineEventBus.shared.publish(EngineEvent(
-            kind: .residencyChanged, module: Self.selectionStoreModule, modelId: selection.rawValue
+            kind: .residencyChanged, module: Self.selectionStoreModule, modelId: modelType.rawValue
         ))
     }
 
@@ -1435,9 +1505,7 @@ public actor TouchUpEngine {
     /// contained to `TouchUpEngine` — `MLXLLMBackend` already exposes the
     /// live fraction via `downloadProgress(for:)` (used by `/v1/llm/status`
     /// today), so no new callback plumbing is needed.
-    private func watchDownloadProgress(
-        _ modelType: LLMModelType, selection: TouchUpModelSelection
-    ) async {
+    private func watchDownloadProgress(_ modelType: LLMModelType) async {
         var lastPublished: Double = -1
         var ticksSincePublish = 0
         while !Task.isCancelled {
@@ -1484,7 +1552,7 @@ public actor TouchUpEngine {
                 ticksSincePublish = 0
                 await EngineEventBus.shared.publish(EngineEvent(
                     kind: .downloadProgress, module: Self.selectionStoreModule,
-                    modelId: selection.rawValue, progress: fraction
+                    modelId: modelType.rawValue, progress: fraction
                 ))
             } else {
                 ticksSincePublish += 1
@@ -1510,11 +1578,11 @@ public actor TouchUpEngine {
     }
 
     private func publishLoadStateChanged(
-        _ selection: TouchUpModelSelection, state: ModelLoadState, message: String? = nil
+        _ modelId: String, state: ModelLoadState, message: String? = nil
     ) async {
         await EngineEventBus.shared.publish(EngineEvent(
             kind: .loadStateChanged, module: Self.selectionStoreModule,
-            modelId: selection.rawValue, loadState: state, message: message
+            modelId: modelId, loadState: state, message: message
         ))
     }
 
