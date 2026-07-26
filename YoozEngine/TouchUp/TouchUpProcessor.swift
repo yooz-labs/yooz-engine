@@ -208,7 +208,9 @@ public enum TouchUpProcessor {
                 let response = try await lightModel.generate(
                     prompt: processedText,
                     systemPrompt: proofreadPrompt,
-                    workloadClass: workloadClass
+                    workloadClass: workloadClass,
+                    // Proofreading: the salvage pass belongs here (engine#312).
+                    postProcess: true
                 )
 
                 let (resultText, success) = parseProofreadResponse(response, fallback: processedText)
@@ -280,7 +282,9 @@ public enum TouchUpProcessor {
                 let response = try await qualityModel.generate(
                     prompt: prompt,
                     systemPrompt: TouchUpPrompts.validateAndProofread,
-                    workloadClass: workloadClass
+                    workloadClass: workloadClass,
+                    // Proofreading: the salvage pass belongs here (engine#312).
+                    postProcess: true
                 )
 
                 let (resultText, keepDecisions, success) = parseValidateResponse(
