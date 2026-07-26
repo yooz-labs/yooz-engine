@@ -92,28 +92,32 @@ public enum TouchUpEndpoints {
                 }
             },
             // `POST /v1/touchup/download` — explicit download, decoupled
-            // from the active selection (engine#288 slice 2). Returns the
-            // tier's current row immediately; progress + terminal outcome
-            // arrive via `/v1/events`, exactly like a preloading switch.
+            // from the active selection (engine#288 slice 2; generalized
+            // from the 3-case picker onto the full LLM catalogue in
+            // engine#306, so e.g. `yooz-instruct-4b` and its HuggingFace
+            // alias are downloadable too, not just the two TouchUp picker
+            // tiers). Returns the model's current row immediately; progress
+            // + terminal outcome arrive via `/v1/events`, exactly like a
+            // preloading switch.
             Endpoint(EndpointSpecs.touchUpDownload) { request in
-                let selection = try Self.downloadableSelection(from: request.body)
-                guard let row = await TouchUpEngine.shared.requestDownload(selection) else {
+                let modelType = try Self.downloadableModel(from: request.body)
+                guard let row = await TouchUpEngine.shared.requestDownload(modelType) else {
                     throw WireError(
                         status: 500, code: "model_set_failed",
-                        message: "no picker row for '\(selection.rawValue)'"
+                        message: "no picker row for '\(modelType.rawValue)'"
                     )
                 }
                 return try WireResponse.json(row)
             },
             // `POST /v1/touchup/download/cancel` — abort an in-flight
-            // download. No-op (200 with the current row) when the tier
+            // download. No-op (200 with the current row) when the model
             // isn't downloading; never unloads a resident model.
             Endpoint(EndpointSpecs.touchUpCancelDownload) { request in
-                let selection = try Self.downloadableSelection(from: request.body)
-                guard let row = await TouchUpEngine.shared.cancelDownload(selection) else {
+                let modelType = try Self.downloadableModel(from: request.body)
+                guard let row = await TouchUpEngine.shared.cancelDownload(modelType) else {
                     throw WireError(
                         status: 500, code: "model_set_failed",
-                        message: "no picker row for '\(selection.rawValue)'"
+                        message: "no picker row for '\(modelType.rawValue)'"
                     )
                 }
                 return try WireResponse.json(row)
@@ -122,30 +126,38 @@ public enum TouchUpEndpoints {
     }
 
     /// Shared body validation for the download/cancel pair: decode
-    /// `TouchUpDownloadRequest`, resolve the selection, and reject
-    /// FoundationModels (OS-resident, nothing to download) with the same
-    /// 400 wire code the picker uses for unknown ids.
-    private static func downloadableSelection(
+    /// `TouchUpDownloadRequest` and resolve `id` against the full LLM
+    /// catalogue (engine#306) rather than the 3-case TouchUp picker.
+    /// `LLMModelType(rawValue:)` accepts both the canonical wire id and
+    /// the model's HuggingFace repo alias, so a caller naming either one
+    /// keeps working. `foundation-models` IS a real TouchUp picker id, so
+    /// it is rejected explicitly with a message that names why (OS-resident,
+    /// nothing to fetch) rather than falling through to the generic
+    /// unknown-id message below.
+    private static func downloadableModel(
         from body: Data
-    ) throws -> TouchUpModelSelection {
+    ) throws -> LLMModelType {
         let request: TouchUpDownloadRequest
         do {
             request = try JSONDecoder().decode(TouchUpDownloadRequest.self, from: body)
         } catch {
             throw WireError.invalidRequest(error)
         }
-        guard let selection = TouchUpModelSelection(rawValue: request.id),
-              selection != .foundationModels
-        else {
-            let known = TouchUpModelSelection.allCases
-                .filter { $0 != .foundationModels }
-                .map(\.rawValue).joined(separator: ", ")
+        guard request.id != TouchUpModelSelection.foundationModels.rawValue else {
+            throw WireError(
+                status: 400,
+                code: "invalid_model",
+                message: "'\(request.id)' is not a downloadable model id: Apple Intelligence is OS-resident and has no weights to fetch."
+            )
+        }
+        guard let modelType = LLMModelType(rawValue: request.id) else {
+            let known = LLMModelType.allCases.map(\.rawValue).joined(separator: ", ")
             throw WireError(
                 status: 400,
                 code: "invalid_model",
                 message: "'\(request.id)' is not a downloadable model id. Known: \(known)."
             )
         }
-        return selection
+        return modelType
     }
 }
