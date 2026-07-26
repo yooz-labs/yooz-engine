@@ -710,6 +710,25 @@ final class APIServer: ObservableObject {
         return false
     }
 
+    /// STT download/cancel table entries (engine#291), gated on the STT
+    /// module being linked: the Lite variant ships without it, and the
+    /// endpoint table must not reference symbols that aren't there.
+    ///
+    /// Deliberately OUTSIDE the `#if canImport(STTModule)` region below. It
+    /// used to live inside it, which meant the whole function disappeared on a
+    /// variant without STT — so its own `#else return []` branch, the entire
+    /// point of the helper, was unreachable dead code and the endpoint-table
+    /// call site failed to compile with `cannot find 'sttDownloadEndpoints' in
+    /// scope`. A gate-inside-a-gate reads as belt-and-braces and is in fact the
+    /// opposite: the inner one only runs when the outer one already passed.
+    private func sttDownloadEndpoints() -> [Endpoint] {
+        #if canImport(STTModule)
+        return STTDownloadEndpoints.endpoints()
+        #else
+        return []
+        #endif
+    }
+
     #if canImport(STTModule)
     /// Map a Qwen3-ASR backend error to the right HTTP error
     /// response. Mirrors the parakeet/fast_conformer error mapping
@@ -1097,17 +1116,6 @@ final class APIServer: ObservableObject {
         )
     }
 
-/// STT download/cancel table entries (engine#291), gated on the STT
-    /// module being linked: the Lite variant ships without it, and the
-    /// endpoint table must not reference symbols that aren't there.
-    private func sttDownloadEndpoints() -> [Endpoint] {
-        #if canImport(STTModule)
-        return STTDownloadEndpoints.endpoints()
-        #else
-        return []
-        #endif
-    }
-
     /// Build the canonical picker row for an STT backend. Mirrors
     /// `TouchUpEngine.row(for:loadState:)` so the two pickers
     /// produce identical wire shapes (modulo the STT-specific
@@ -1371,18 +1379,25 @@ final class APIServer: ObservableObject {
         // by the generic adapter in `register(_:on:)`. Route identity comes
         // from `EndpointSpecs`; the hand-written registrations these replace
         // are gone, so a converted route cannot drift between transports.
-        register(
-            EndpointTable.trusted(
-                SessionEndpoints.endpoints()
-                    + TouchUpEndpoints.pickerEndpoints()
-                    + ModelManagementEndpoints.endpoints(
-                        activeSTTRepoDirName: { Self.activeSTTRepoDirName() }
-                    )
-                    + EngineStateEndpoints.endpoints()
-                    + sttDownloadEndpoints()
-            ),
-            on: router
+        // Accumulated with explicitly-typed `+=` steps rather than one `+`
+        // chain. The chained form made the Swift type-checker give up
+        // ("unable to type-check this expression in reasonable time"), and its
+        // second, misleading symptom was `cannot find 'sttDownloadEndpoints' in
+        // scope` — a downstream artifact of abandoning the whole expression,
+        // not a real symbol problem. It reproduced only on variants that omit
+        // a module (`YoozEngineLite`), because the `#if`-gated member makes the
+        // expression's shape differ per variant, so the merge gate's
+        // build-all-variants rule was failing on a formatting property of one
+        // expression. Keeping the type annotated and each step separate makes
+        // it cheap to check and stops the cost growing as variants are added.
+        var trustedEndpoints: [Endpoint] = SessionEndpoints.endpoints()
+        trustedEndpoints += TouchUpEndpoints.pickerEndpoints()
+        trustedEndpoints += ModelManagementEndpoints.endpoints(
+            activeSTTRepoDirName: { Self.activeSTTRepoDirName() }
         )
+        trustedEndpoints += EngineStateEndpoints.endpoints()
+        trustedEndpoints += sttDownloadEndpoints()
+        register(EndpointTable.trusted(trustedEndpoints), on: router)
 
         // LLM: Generate
         router.post("/v1/llm/generate") { [self] request, context in
