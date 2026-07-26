@@ -218,6 +218,16 @@ public actor ModuleEagerLoader {
         } else {
             states[ModuleID.vad.rawValue] = ModuleDetail(state: .notLoaded)
         }
+        // Grammar — `unavailable` on `.llm`, the first variant to drop it.
+        // Same reset pattern as STT/VAD.
+        if !variant.includesGrammar {
+            states[ModuleID.grammar.rawValue] = ModuleDetail(
+                state: .unavailable,
+                detail: "Grammar not compiled into the \(variant.rawValue) variant"
+            )
+        } else {
+            states[ModuleID.grammar.rawValue] = ModuleDetail(state: .notLoaded)
+        }
         // TTS isn't shipped on any variant yet (Phase 7). Always
         // `unavailable` regardless of variant.
         states[ModuleID.tts.rawValue] = ModuleDetail(
@@ -238,9 +248,13 @@ public actor ModuleEagerLoader {
         await withTaskGroup(of: Void.self) { group in
             // Grammar — already loaded on first reference to
             // `GrammarEngine.shared` (FFI in init). We just probe and
-            // record.
-            group.addTask { [weak self] in
-                await self?.loadGrammar()
+            // record. Only spawned when the variant actually links
+            // GrammarModule (`.llm` drops it, see `applyVariantGating`
+            // above, which has already marked it `.unavailable`).
+            if variant.includesGrammar {
+                group.addTask { [weak self] in
+                    await self?.loadGrammar()
+                }
             }
 
             if variant.includesLLM {
@@ -289,6 +303,7 @@ public actor ModuleEagerLoader {
     // MARK: - Per-module load paths
 
     private func loadGrammar() async {
+        #if canImport(GrammarModule)
         // GrammarEngine loads its rule counts in `init`. Touching the
         // singleton triggers it. `isAvailable` is `nonisolated` so we
         // can read it directly.
@@ -301,6 +316,12 @@ public actor ModuleEagerLoader {
                 detail: "Grammar FFI loaded but no rules present"
             )
         }
+        #else
+        // Variant doesn't bundle Grammar (e.g. YoozEngineLLM). The
+        // variant-gating pass already marked .grammar as .unavailable;
+        // skip the load attempt so we don't fault the readiness map.
+        setState(.grammar, .unavailable, detail: "Grammar module not bundled")
+        #endif
     }
 
     private func loadLLM() async {

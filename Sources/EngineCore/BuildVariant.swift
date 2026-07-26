@@ -26,6 +26,7 @@ public enum BuildVariant: String, Sendable, Codable {
     case full
     case whisper
     case lite
+    case llm
 
     /// Info.plist key written by `project.yml` per app target.
     public static let infoPlistKey = "YoozBuildVariant"
@@ -50,32 +51,48 @@ public enum BuildVariant: String, Sendable, Codable {
     }
 
     /// Whether MLX-based STT (Parakeet / FastConformer / Qwen3) is bundled
-    /// into this variant. `.lite` drops it entirely and relies on Apple STT
-    /// for transcription.
+    /// into this variant. `.lite` and `.llm` drop it entirely; `.llm` has no
+    /// speech backend of any kind (see `includesAppleSTT`).
     public var includesMLXSTT: Bool {
         switch self {
         case .full, .whisper: return true
-        case .lite: return false
+        case .lite, .llm: return false
+        }
+    }
+
+    /// Whether Apple's on-device Speech framework is bundled as a fallback
+    /// STT backend. Every prior variant links it; `.llm` is the first to
+    /// drop it too — it ships no speech stack of any kind.
+    public var includesAppleSTT: Bool {
+        switch self {
+        case .full, .whisper, .lite: return true
+        case .llm: return false
         }
     }
 
     /// Whether the CoreML VAD model (`silero-vad-unified-v6.0.0`) is bundled
     /// into this variant. `.whisper` hosts its own embedded VAD because the
-    /// ~64ms call rate makes an HTTP round-trip non-viable; `.lite` has no
-    /// need for VAD on its hot path.
+    /// ~64ms call rate makes an HTTP round-trip non-viable; `.lite` and
+    /// `.llm` have no need for VAD on their hot path.
     public var includesVAD: Bool {
         switch self {
         case .full: return true
-        case .whisper, .lite: return false
+        case .whisper, .lite, .llm: return false
         }
     }
 
     /// Whether the LLM stack (MLX-Swift backends + Apple Intelligence when
-    /// available) is bundled. All three variants ship LLM — it is the
+    /// available) is bundled. All four variants ship LLM — it is the
     /// engine's primary value-add over native OS APIs.
     public var includesLLM: Bool { true }
 
-    /// Grammar (`YoozTextCleanup` xcframework) is always linked. The Rust
-    /// FFI loads on first reference; engine-side cost is ~0.
-    public var includesGrammar: Bool { true }
+    /// Whether Grammar (`YoozTextCleanup` xcframework, rule-based text
+    /// correction) is linked. `.llm` is the first variant to drop it: it
+    /// ships generation/classification only, no grammar-check pipeline.
+    public var includesGrammar: Bool {
+        switch self {
+        case .full, .whisper, .lite: return true
+        case .llm: return false
+        }
+    }
 }
