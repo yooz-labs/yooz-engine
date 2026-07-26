@@ -21,7 +21,7 @@ final class BuildVariantTests: XCTestCase {
     /// carrying each known variant value, plus an unknown value to verify
     /// the fallback path. No mocking — real Bundle, real disk.
     func testResolvedFromBundleReadsInfoPlistKey() throws {
-        for raw in ["full", "whisper", "lite"] {
+        for raw in ["full", "whisper", "lite", "llm"] {
             let bundle = try makeBundle(withVariant: raw)
             XCTAssertEqual(
                 BuildVariant.resolved(from: bundle).rawValue,
@@ -45,13 +45,14 @@ final class BuildVariantTests: XCTestCase {
         XCTAssertEqual(BuildVariant(rawValue: "full"), .full)
         XCTAssertEqual(BuildVariant(rawValue: "whisper"), .whisper)
         XCTAssertEqual(BuildVariant(rawValue: "lite"), .lite)
+        XCTAssertEqual(BuildVariant(rawValue: "llm"), .llm)
         XCTAssertNil(BuildVariant(rawValue: "made-up"))
     }
 
     func testAllCasesCodable() throws {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
-        for variant in [BuildVariant.full, .whisper, .lite] {
+        for variant in [BuildVariant.full, .whisper, .lite, .llm] {
             let data = try encoder.encode(variant)
             let decoded = try decoder.decode(BuildVariant.self, from: data)
             XCTAssertEqual(decoded, variant)
@@ -68,11 +69,15 @@ final class BuildVariantTests: XCTestCase {
     ///
     /// Lite drops both MLX STT and VAD; it ships only Apple STT, Grammar,
     /// and LLM, per the Phase 5 epic (`Apple STT + Lite Variant` section).
+    /// LLM (engine#297) drops Apple STT and Grammar on top of that — it
+    /// ships generation/classification only, nothing speech- or
+    /// grammar-related.
     func testExpectedModulesPerVariant() {
         let expected: [BuildVariant: Set<String>] = [
             .full: ["stt", "apple_stt", "grammar", "llm", "vad"],
             .whisper: ["stt", "apple_stt", "grammar", "llm"],  // VAD embedded in whisper client
-            .lite: ["apple_stt", "grammar", "llm"]  // no MLX, no VAD
+            .lite: ["apple_stt", "grammar", "llm"],  // no MLX, no VAD
+            .llm: ["llm"]  // no speech stack, no grammar
         ]
         // Whisper's module set is a strict subset of full.
         XCTAssertTrue(expected[.whisper]!.isSubset(of: expected[.full]!))
@@ -87,6 +92,13 @@ final class BuildVariantTests: XCTestCase {
             expected[.whisper]!.subtracting(expected[.lite]!),
             ["stt"],
             "Lite drops the MLX STT module — Apple STT is the only speech backend."
+        )
+        // LLM is a strict subset of lite (drops Apple STT + Grammar on top).
+        XCTAssertTrue(expected[.llm]!.isSubset(of: expected[.lite]!))
+        XCTAssertEqual(
+            expected[.lite]!.subtracting(expected[.llm]!),
+            ["apple_stt", "grammar"],
+            "LLM drops Apple STT and Grammar — generation/classification only."
         )
     }
 

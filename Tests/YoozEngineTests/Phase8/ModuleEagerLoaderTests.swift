@@ -93,6 +93,40 @@ final class ModuleEagerLoaderTests: XCTestCase {
         )
     }
 
+    func testLLMVariantMarksSTTVADAndGrammarUnavailable() async throws {
+        // `.llm` (engine#297) is the first variant to drop Grammar on
+        // top of the existing Lite exclusions (MLX STT + VAD) — it
+        // also has no Apple STT, but AppleSTT isn't tracked in
+        // `ModuleID` (it registers as `apple_stt` in `ModuleRegistry`,
+        // not through the eager loader).
+        let loader = ModuleEagerLoader()
+        await loader.markVariantUnavailableModules(variant: .llm)
+
+        let snapshot = await loader.snapshot()
+
+        XCTAssertEqual(
+            snapshot[ModuleID.stt.rawValue]?.state, .unavailable
+        )
+        XCTAssertEqual(
+            snapshot[ModuleID.vad.rawValue]?.state, .unavailable
+        )
+        XCTAssertEqual(
+            snapshot[ModuleID.grammar.rawValue]?.state, .unavailable,
+            "Grammar should be `unavailable` on the llm variant"
+        )
+        let detail = snapshot[ModuleID.grammar.rawValue]?.detail ?? ""
+        XCTAssertTrue(
+            detail.contains("llm"),
+            "Grammar detail should mention the excluding variant; got `\(detail)`"
+        )
+
+        // LLM is the one module this variant exists to serve —
+        // pre-kickoff it stays `notLoaded`.
+        XCTAssertEqual(
+            snapshot[ModuleID.llm.rawValue]?.state, .notLoaded
+        )
+    }
+
     // MARK: - Idempotency + reset
 
     func testMarkVariantUnavailableModulesReGates() async throws {
@@ -170,14 +204,24 @@ final class ModuleEagerLoaderTests: XCTestCase {
         XCTAssertTrue(BuildVariant.full.includesVAD)
         XCTAssertFalse(BuildVariant.whisper.includesVAD)
         XCTAssertFalse(BuildVariant.lite.includesVAD)
+        XCTAssertFalse(BuildVariant.llm.includesVAD)
 
-        // LLM + Grammar are universal today.
-        for variant: BuildVariant in [.full, .whisper, .lite] {
+        // LLM is universal; Grammar and Apple STT are not — `.llm` is
+        // the first variant to drop both.
+        for variant: BuildVariant in [.full, .whisper, .lite, .llm] {
             XCTAssertTrue(variant.includesLLM, "\(variant) should include LLM")
+        }
+        for variant: BuildVariant in [.full, .whisper, .lite] {
             XCTAssertTrue(
                 variant.includesGrammar, "\(variant) should include Grammar"
             )
+            XCTAssertTrue(
+                variant.includesAppleSTT, "\(variant) should include Apple STT"
+            )
         }
+        XCTAssertFalse(BuildVariant.llm.includesGrammar)
+        XCTAssertFalse(BuildVariant.llm.includesAppleSTT)
+        XCTAssertFalse(BuildVariant.llm.includesMLXSTT)
     }
 
     // MARK: - Pre-kickoff state
@@ -226,7 +270,7 @@ final class ModuleEagerLoaderTests: XCTestCase {
         // variants. Default (no flag) is `.full`.
         let variant = EngineConfig.variant
         XCTAssertTrue(
-            [.full, .whisper, .lite].contains(variant),
+            [.full, .whisper, .lite, .llm].contains(variant),
             "EngineConfig.variant should be a known BuildVariant; got \(variant)"
         )
     }
