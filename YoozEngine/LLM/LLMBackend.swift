@@ -159,9 +159,15 @@ protocol LLMBackend: Actor {
     /// `TouchUpProcessor.process`). No default here — the one existential
     /// call site (`TouchUpProcessor.process`) passes it explicitly so the
     /// classification is never accidentally implicit.
+    /// `postProcess` selects the PROOFREADING salvage pass (engine#312).
+    /// True for touch-up, where returning the original text when the model
+    /// chatters is the desired "nothing to correct" behaviour. False for raw
+    /// generation, where that same rule turns a refusal or an empty completion
+    /// into a verbatim echo of the caller's prompt.
     func generate(
         prompt: String,
         systemPrompt: String,
-        workloadClass: MLXWorkloadClass
+        workloadClass: MLXWorkloadClass,
+        postProcess: Bool
     ) async throws -> String
 }

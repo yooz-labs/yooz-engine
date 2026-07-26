@@ -561,8 +561,12 @@ public actor TouchUpEngine {
     ) async throws -> String {
         try await ensureLoaded(modelType)
         let model = backend(for: modelType)
+        // No proofreading salvage on the raw path: this serves
+        // `/v1/llm/generate`, whose callers want the model's actual output
+        // (engine#312). `process()` below keeps it, where it belongs.
         return try await model.generate(
-            prompt: prompt, systemPrompt: systemPrompt, workloadClass: workloadClass
+            prompt: prompt, systemPrompt: systemPrompt, workloadClass: workloadClass,
+            postProcess: false
         )
     }
 

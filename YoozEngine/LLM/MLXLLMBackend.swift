@@ -403,6 +403,21 @@ actor MLXLLMBackend: LLMBackend {
     /// Greedy decoding (ArgMaxSampler, see Evaluate.swift:148-160): deterministic
     /// output for identical dictation is a feature here, and it removes sampling
     /// variance as a corruption source.
+    /// Variables handed to the tokenizer's chat template (engine#312).
+    ///
+    /// `enable_thinking: false` is the load-bearing one. It is a TEMPLATE
+    /// variable, not a prompt convention — Qwen3.5-family templates read it to
+    /// decide whether to append a `<think>` generation prompt, and default it to
+    /// TRUE when it is undefined. Leaving it unset therefore put every such
+    /// model into thinking mode, which a `/no_think` prefix in the prompt text
+    /// cannot undo: that is text the model reads, not a variable the template
+    /// branches on.
+    ///
+    /// Applies to every model served here. Reasoning is pure latency for this
+    /// engine's workloads — a proofread or a short structured verdict — and the
+    /// consumer-side timeout budget assumes it is off.
+    static let templateContext: [String: any Sendable] = ["enable_thinking": false]
+
     static let touchUpTemperature: Float = 0
 
     /// Mild on purpose: the repetition-penalty ring buffer is prompt-seeded, so
@@ -435,7 +450,8 @@ actor MLXLLMBackend: LLMBackend {
     func generate(
         prompt: String,
         systemPrompt: String,
-        workloadClass: MLXWorkloadClass = .background
+        workloadClass: MLXWorkloadClass = .background,
+        postProcess: Bool = true
     ) async throws -> String {
         guard isLoaded else {
             throw LLMError.notLoaded
@@ -479,7 +495,13 @@ actor MLXLLMBackend: LLMBackend {
                 .system(systemPrompt),
                 .user(prompt)
             ]
-            let userInput = UserInput(chat: messages)
+            // `enable_thinking` is a CHAT-TEMPLATE variable, not a prompt
+            // convention: Qwen3.5 templates read it to decide whether to append a
+            // `<think>` generation prompt, and default it to TRUE when undefined.
+            // Never setting it left the render in thinking mode for every model
+            // whose template supports it (engine#312) -- a `/no_think` text prefix
+            // cannot undo that, because it is text, not a template variable.
+            let userInput = UserInput(chat: messages, additionalContext: Self.templateContext)
             let fullInput = try await container.prepare(input: userInput)
 
             let savedKVState = cachedPromptKVState
@@ -495,7 +517,11 @@ actor MLXLLMBackend: LLMBackend {
                     .system(systemPrompt),
                     .user("_")
                 ]
-                let probeInput = UserInput(chat: probeMessages)
+                // MUST match the real input's context: this probe exists to find
+                // the system-prompt token boundary by common prefix, and a
+                // different template rendering would make that boundary wrong.
+                let probeInput = UserInput(
+                    chat: probeMessages, additionalContext: Self.templateContext)
                 let probeLMInput = try await container.prepare(input: probeInput)
 
                 let fullTokens = fullInput.text.tokens
@@ -665,6 +691,18 @@ actor MLXLLMBackend: LLMBackend {
             }
 
             logger.debug("Generation complete, got \(result.text.count) chars")
+            // `postProcess` is PROOFREADING salvage, and it is wrong for any
+            // other workload (engine#312). Its commentary branch treats a reply
+            // opening with "i'm sorry"/"i apologize" as chatter and, failing to
+            // extract prose from it, returns the ORIGINAL INPUT -- which is
+            // right for touch-up ("nothing to correct here") and catastrophic
+            // for a structured verdict: a model politely declining a fork bomb
+            // came back to the caller as an exact echo of the command, so a
+            // refusal was indistinguishable from an answer.
+            //
+            // Raw `/v1/llm/generate` therefore opts out and receives what the
+            // model actually produced, including nothing at all.
+            guard postProcess else { return result.text }
             return postProcessResponse(result.text, originalInput: prompt)
         } catch is CancellationError {
             // Task cancellation (client disconnect, caller teardown) is not a
