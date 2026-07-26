@@ -520,6 +520,62 @@ targets:
       - framework: Vendor/YoozTextCleanup/YoozTextCleanup.xcframework
         embed: false
 
+  # LLM-only build variant (engine#297) for remi-class consumers that want
+  # generation/classification without any speech stack. Deliberately omits
+  # AppleSTTModule, GrammarModule, STTModule, VADModule, and InfiniteModule —
+  # the first variant to drop AppleSTT + Grammar (every prior variant links
+  # both). No YoozTextCleanup xcframework dependency: verified nothing outside
+  # GrammarModule references it (`YoozEngine/TouchUp` and `YoozEngine/LLM`
+  # have zero references to Grammar types), so linking the framework here
+  # would add dead weight with no call site. `VARIANT_LLM` compile condition
+  # toggles `BuildVariant.current`; MLX-STT/VAD/AppleSTT/Grammar code paths
+  # are gated by `#if canImport(...)` in APIServer + EngineAppDelegate +
+  # ModuleEagerLoader (engine#297 added the previously-missing Grammar gates).
+  YoozEngineLLM:
+    type: application
+    platform: macOS
+    sources:
+      - path: YoozEngine
+        excludes:
+          - AppleSTT/**
+          - Grammar/**
+          - Infinite/**
+          - LLM/**
+          - STT/**
+          - TouchUp/**
+          - VAD/**
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.yooz.engine.llm
+        PRODUCT_NAME: Yooz Engine (LLM)
+        INFOPLIST_FILE: YoozEngine/Info.plist
+        # Runtime variant dispatch — see the equivalent comment on the full
+        # variant target.
+        YOOZ_BUILD_VARIANT: llm
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: YoozEngine/YoozEngine.entitlements
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        ENABLE_HARDENED_RUNTIME: true
+        LSUIElement: true
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "VARIANT_LLM"
+    dependencies:
+      - target: EngineCore
+      - target: YoozEngineWire
+      - target: LLMModule
+      - package: hummingbird
+        product: Hummingbird
+      - package: hummingbird-websocket
+        product: HummingbirdWebSocket
+      # APIServer.swift has an unconditional (not `#if canImport`-gated)
+      # `import HuggingFace` — unlike `mapSTTLoadError`'s HubCacheError
+      # casting, which is STT-only and compiles out of this variant
+      # entirely, that top-level import needs the product resolvable
+      # regardless. LLMModule's own HF weight downloads for the
+      # classify/quality/light tiers need it too.
+      - package: swift-huggingface
+        product: HuggingFace
+
   # Sandboxed XPC service (engine#227): the App Store standalone packaging
   # `../yooz/docs/engine-app-packaging.md` calls "preferred" — hosts
   # `XPCServiceHandler(transport: InProcessTransport())` behind
