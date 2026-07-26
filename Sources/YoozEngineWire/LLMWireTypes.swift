@@ -58,14 +58,25 @@ public struct LLMGenerateResponse: Codable, Sendable, Equatable {
 
 // MARK: - Model management
 
+/// Coarse capability label for a catalogued LLM model (engine#303): a
+/// TouchUp proofreading head rewrites/corrects text it is handed, while a
+/// general model is suited to classification, structured output, or other
+/// non-proofreading instruct use. Lets `GET /v1/llm/models` consumers (e.g.
+/// remi's auto-approve classifier) pick sensibly instead of guessing from
+/// `displayName`, and lets a picker UI group by capability.
+public enum LLMModelPurpose: String, Codable, Sendable, CaseIterable, Equatable {
+    case proofread
+    case general
+}
+
 /// Describes one LLM model known to the engine. Returned by
 /// `GET /v1/llm/models` and consumed by thin-client UI (e.g. whisper's
 /// "Touch-up Model" dropdown).
 ///
-/// The field set is intentionally forward-compatible: `sizeBytes` and
-/// `latencyHintMs` are optional so future backends (Apple Intelligence,
-/// remote) can omit them without breaking decoders. `id` is the stable
-/// wire value (`LLMModelType.rawValue` on the server side, e.g.
+/// The field set is intentionally forward-compatible: `sizeBytes`,
+/// `latencyHintMs`, and `purpose` are optional so future backends (Apple
+/// Intelligence, remote) can omit them without breaking decoders. `id` is
+/// the stable wire value (`LLMModelType.rawValue` on the server side, e.g.
 /// `"yooz-light-v3"`); `displayName` is user-facing ("Yooz-Light").
 public struct LLMModelInfo: Codable, Sendable, Equatable {
     public let id: String
@@ -73,19 +84,22 @@ public struct LLMModelInfo: Codable, Sendable, Equatable {
     public let sizeBytes: Int64?
     public let loaded: Bool
     public let latencyHintMs: Int?
+    public let purpose: LLMModelPurpose?
 
     public init(
         id: String,
         displayName: String,
         sizeBytes: Int64? = nil,
         loaded: Bool = false,
-        latencyHintMs: Int? = nil
+        latencyHintMs: Int? = nil,
+        purpose: LLMModelPurpose? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.sizeBytes = sizeBytes
         self.loaded = loaded
         self.latencyHintMs = latencyHintMs
+        self.purpose = purpose
     }
 }
 
