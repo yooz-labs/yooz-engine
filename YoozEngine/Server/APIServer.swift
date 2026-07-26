@@ -1116,7 +1116,6 @@ final class APIServer: ObservableObject {
         )
     }
 
-
     /// Build the canonical picker row for an STT backend. Mirrors
     /// `TouchUpEngine.row(for:loadState:)` so the two pickers
     /// produce identical wire shapes (modulo the STT-specific
