@@ -165,10 +165,15 @@ UNSIGNED_VARIANTS=()
     # emits a newline. To emit a literal `\` (shell line-continuation)
     # followed by a real newline, we need four backslashes in the source:
     # bash strips to two (`\\`), printf emits one backslash + newline.
+    # Every variant this script builds, or the release ships without one.
+    # YoozEngineLLM was added in #311 but not here, so the copy-pasteable
+    # command silently omitted the artifact remi downloads (yooz-labs/remi#834)
+    # — a release that looks complete and is not.
     printf "gh release upload v%s \\\\\n" "$VERSION"
     printf "  dist/YoozEngine.app.zip \\\\\n"
     printf "  dist/YoozEngineLite.app.zip \\\\\n"
     printf "  dist/YoozEngineWhisper.app.zip \\\\\n"
+    printf "  dist/YoozEngineLLM.app.zip \\\\\n"
     printf "  dist/RELEASE.md\n"
     printf '```\n'
     printf "\n"
