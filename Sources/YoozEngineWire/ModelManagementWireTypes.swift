@@ -31,6 +31,15 @@ public struct ManagedModelInfo: Codable, Sendable, Equatable {
     /// Whether the app may delete it (has a reclaimable footprint and isn't
     /// active).
     public let deletable: Bool
+    /// The model's registered HuggingFace repo id, when it has one and the
+    /// engine knows it (engine#308). Set for catalogued models; `nil` for a
+    /// disk-swept hub directory, whose repo id cannot be recovered from the
+    /// directory name unambiguously (`models--a--b--c` is a genuine
+    /// ambiguity), and `nil` for bundled models with no upstream repo.
+    ///
+    /// Same purpose as on `LLMModelInfo`: let a consumer match a row against
+    /// a configured id that may be written either way.
+    public let huggingFaceID: String?
 
     public init(
         id: String,
@@ -40,7 +49,8 @@ public struct ManagedModelInfo: Codable, Sendable, Equatable {
         cached: Bool,
         loaded: Bool,
         isActive: Bool,
-        deletable: Bool
+        deletable: Bool,
+        huggingFaceID: String? = nil
     ) {
         self.id = id
         self.module = module
@@ -50,6 +60,7 @@ public struct ManagedModelInfo: Codable, Sendable, Equatable {
         self.loaded = loaded
         self.isActive = isActive
         self.deletable = deletable
+        self.huggingFaceID = huggingFaceID
     }
 }
 

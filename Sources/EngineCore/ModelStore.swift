@@ -23,19 +23,30 @@ public struct ModelCacheDescriptor: Sendable, Equatable {
     public let hfRepoDirName: String?
     public let modelsDirSubdir: String?
     public let isBundled: Bool
+    /// The registered HuggingFace repo id this model comes from, when the
+    /// owning module knows it (engine#308). Carried through to the inventory
+    /// row so a consumer can correlate a configured alias to a row.
+    ///
+    /// Distinct from `hfRepoDirName`, which is the flattened CACHE DIRECTORY
+    /// name (`models--ns--repo`) used for sizing and deletion. That mapping is
+    /// deliberately one-way: `models--a--b--c` could have come from `a/b--c`
+    /// or `a--b/c`, so this is stored rather than derived.
+    public let huggingFaceID: String?
 
     public init(
         id: String,
         module: String,
         hfRepoDirName: String?,
         modelsDirSubdir: String?,
-        isBundled: Bool
+        isBundled: Bool,
+        huggingFaceID: String? = nil
     ) {
         self.id = id
         self.module = module
         self.hfRepoDirName = hfRepoDirName
         self.modelsDirSubdir = modelsDirSubdir
         self.isBundled = isBundled
+        self.huggingFaceID = huggingFaceID
     }
 
     /// Hub directory name for a HuggingFace id (`namespace/repo` ->
@@ -143,6 +154,10 @@ public actor ModelStore {
         public let loaded: Bool
         public let isActive: Bool
         public let deletable: Bool
+        /// Registered HuggingFace repo id, when the owning module supplied one
+        /// (engine#308). `nil` for disk-swept rows: their id is the flattened
+        /// cache directory name, which cannot be un-flattened unambiguously.
+        public var huggingFaceID: String?
     }
 
     /// Build the model-management inventory: a friendly row per known LLM model
@@ -174,7 +189,8 @@ public actor ModelStore {
                 cached: cached,
                 loaded: input.loaded,
                 isActive: input.isActive,
-                deletable: size > 0 && !input.isActive
+                deletable: size > 0 && !input.isActive,
+                huggingFaceID: descriptor.huggingFaceID
             ))
         }
 

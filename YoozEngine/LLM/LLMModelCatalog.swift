@@ -110,7 +110,10 @@ public enum LLMModelCatalog {
                 // The LLM resolver probes `modelsDirectory/<rawValue>` (see
                 // `MLXLLMBackend.bundledModelDirectory`).
                 modelsDirSubdir: type.rawValue,
-                isBundled: MLXLLMBackend.isBundled(type)
+                isBundled: MLXLLMBackend.isBundled(type),
+                // Carried so `GET /v1/models` can name the registered repo
+                // alongside the canonical id (engine#308).
+                huggingFaceID: type.huggingFaceID
             )
         }
     }

@@ -430,6 +430,56 @@ final class ModelStoreTests: XCTestCase {
         XCTAssertTrue(second.perRepo.isEmpty)
     }
 
+    // MARK: - Inventory: HuggingFace alias (engine#308)
+
+    /// A catalogued model's registered repo id reaches the inventory row, and a
+    /// disk-swept repo's does not.
+    ///
+    /// The asymmetry is the point. A consumer configured with the repo id
+    /// (`YoozLabs/...`) has to be able to match it against a row; before this
+    /// the mapping existed only on input, so a present, working model looked
+    /// absent. The swept half pins the honest gap: `models--a--b--c` cannot be
+    /// un-flattened without guessing where the namespace ends, so those rows
+    /// report nothing rather than a plausible-looking wrong repo id.
+    func testInventoryCarriesHuggingFaceIDForCataloguedModelsOnly() async throws {
+        let catalogued = hub.appendingPathComponent("models--YoozLabs--Instruct")
+        try writeBlob(repo: catalogued, name: "w", byteCount: 32_768)
+        try materialize(repo: catalogued, commit: "c1", configBlob: "w", weightsBlob: "w")
+        try writeRef(repo: catalogued, ref: "main", commit: "c1")
+
+        // Present on disk but absent from the LLM catalogue: the sweep picks it
+        // up by directory name alone and knows no repo id for it.
+        let swept = hub.appendingPathComponent("models--mlx-community--parakeet")
+        try writeBlob(repo: swept, name: "w", byteCount: 16_384)
+        try materialize(repo: swept, commit: "c1", configBlob: "w", weightsBlob: "w")
+        try writeRef(repo: swept, ref: "main", commit: "c1")
+
+        let store = makeStore()
+        let rows = await store.inventory(
+            llm: [ModelStore.LLMInventoryInput(
+                descriptor: ModelCacheDescriptor(
+                    id: "yooz-instruct-4b", module: "llm",
+                    hfRepoDirName: "models--YoozLabs--Instruct",
+                    modelsDirSubdir: "yooz-instruct-4b", isBundled: false,
+                    huggingFaceID: "YoozLabs/Instruct"
+                ),
+                displayName: "Yooz-Instruct-4B",
+                loaded: false,
+                isActive: false
+            )],
+            activeSTTRepoDirName: nil
+        )
+
+        let llm = try XCTUnwrap(rows.first { $0.id == "yooz-instruct-4b" })
+        XCTAssertEqual(llm.huggingFaceID, "YoozLabs/Instruct")
+
+        let sweptRow = try XCTUnwrap(rows.first { $0.id == "models--mlx-community--parakeet" })
+        XCTAssertNil(
+            sweptRow.huggingFaceID,
+            "a swept directory name must not be reverse-engineered into a repo id"
+        )
+    }
+
     // MARK: - Independent size oracle
 
     private func allocated(_ url: URL) -> Int64 {
