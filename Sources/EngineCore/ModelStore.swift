@@ -157,6 +157,13 @@ public actor ModelStore {
         /// Registered HuggingFace repo id, when the owning module supplied one
         /// (engine#308). `nil` for disk-swept rows: their id is the flattened
         /// cache directory name, which cannot be un-flattened unambiguously.
+        ///
+        /// `var`, alone among these fields, only so the synthesized memberwise
+        /// init gives it a `nil` default — a `let` optional with no explicit
+        /// initializer does not get one, and the disk-sweep construction site
+        /// would then have to pass `huggingFaceID: nil` explicitly. Not
+        /// intended to be mutated. (Changing it back to `let` is caught at
+        /// compile time by that call site, not silently.)
         public var huggingFaceID: String?
     }
 
