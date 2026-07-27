@@ -85,6 +85,19 @@ public struct LLMModelInfo: Codable, Sendable, Equatable {
     public let loaded: Bool
     public let latencyHintMs: Int?
     public let purpose: LLMModelPurpose?
+    /// The model's registered HuggingFace repo id (e.g.
+    /// `YoozLabs/Qwen3.5-4B-qat-lean-4bit-mlx`), which the catalogue also
+    /// accepts as an ALIAS wherever a model id is taken (engine#308).
+    ///
+    /// Present so a consumer can correlate its own configuration to a row.
+    /// Without it the mapping was input-only: a client configured with the
+    /// repo id — the natural thing to write, and remi's shipped default —
+    /// found no row matching it and could not distinguish "this engine does
+    /// not serve my model" from "it serves it under its canonical id".
+    ///
+    /// Optional because non-catalogue backends (Apple Intelligence, remote)
+    /// have no HuggingFace repo behind them.
+    public let huggingFaceID: String?
 
     public init(
         id: String,
@@ -92,7 +105,8 @@ public struct LLMModelInfo: Codable, Sendable, Equatable {
         sizeBytes: Int64? = nil,
         loaded: Bool = false,
         latencyHintMs: Int? = nil,
-        purpose: LLMModelPurpose? = nil
+        purpose: LLMModelPurpose? = nil,
+        huggingFaceID: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -100,6 +114,7 @@ public struct LLMModelInfo: Codable, Sendable, Equatable {
         self.loaded = loaded
         self.latencyHintMs = latencyHintMs
         self.purpose = purpose
+        self.huggingFaceID = huggingFaceID
     }
 }
 

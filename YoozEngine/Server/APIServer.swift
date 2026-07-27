@@ -3744,7 +3744,10 @@ extension APIServer {
             sizeBytes: modelType.estimatedSize,
             loaded: loaded,
             latencyHintMs: modelType.latencyHintMs,
-            purpose: modelType.purpose
+            purpose: modelType.purpose,
+            // engine#308: the alias the catalogue already accepts on input,
+            // now visible on output so a consumer can match its own config.
+            huggingFaceID: modelType.huggingFaceID
         )
     }
 

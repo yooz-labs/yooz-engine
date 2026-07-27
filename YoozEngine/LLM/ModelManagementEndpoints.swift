@@ -46,7 +46,8 @@ public enum ModelManagementEndpoints {
                     ManagedModelInfo(
                         id: $0.id, module: $0.module, displayName: $0.displayName,
                         sizeBytes: $0.sizeBytes, cached: $0.cached, loaded: $0.loaded,
-                        isActive: $0.isActive, deletable: $0.deletable
+                        isActive: $0.isActive, deletable: $0.deletable,
+                        huggingFaceID: $0.huggingFaceID
                     )
                 }
                 return try WireResponse.json(ManagedModelsResponse(models: models))

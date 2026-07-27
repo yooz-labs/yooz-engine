@@ -842,7 +842,8 @@ public final class InProcessTransport: EngineTransport {
             SDKLLMModelInfo(
                 id: $0.type.rawValue, displayName: $0.type.displayName,
                 sizeBytes: $0.type.estimatedSize, loaded: $0.isLoaded,
-                latencyHintMs: $0.type.latencyHintMs, purpose: $0.type.purpose
+                latencyHintMs: $0.type.latencyHintMs, purpose: $0.type.purpose,
+                huggingFaceID: $0.type.huggingFaceID
             )
         }
         return try JSONEncoder().encode(
@@ -1014,7 +1015,8 @@ public final class InProcessTransport: EngineTransport {
         return SDKLLMModelInfo(
             id: modelType.rawValue, displayName: modelType.displayName,
             sizeBytes: modelType.estimatedSize, loaded: isLoaded,
-            latencyHintMs: modelType.latencyHintMs, purpose: modelType.purpose
+            latencyHintMs: modelType.latencyHintMs, purpose: modelType.purpose,
+            huggingFaceID: modelType.huggingFaceID
         )
     }
 
